@@ -1,0 +1,28 @@
+# File types
+*.csv
+*.log
+*.err
+*.jpg
+*.png
+*.pt
+chk*
+
+# Directories
+.vscode/
+.ipynb_checkpoints/
+__pycache__/
+chk/
+trash/
+
+# Test dir
+tests
+tests/
+tests/**
+
+# Systems dir is too heavy
+systems
+systems/
+systems/**
+
+
+
