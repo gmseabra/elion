@@ -7,6 +7,10 @@
 *.pt
 chk*
 
+# Model checkpoint files
+elion/generators/release/checkpoints/
+elion/generators/release/data/
+
 # Directories
 .vscode/
 .ipynb_checkpoints/
