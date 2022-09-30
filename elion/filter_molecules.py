@@ -17,6 +17,10 @@ def filter_smiles(smiles_file, admet_predictions_file, output_stem):
                                      'scaffold_match':float,
                                      'synthetic_accessibility':float,
                                      'drug_likeness':float})
+    smiles_data['Name'] = smiles_data['Name'].str.strip()
+    print(f"Read {len(smiles_data)} molecules from file: {smiles_file}.")
+
+    # Reads file with ADMET predictions
     admet_data  = pd.read_csv(admet_predictions_file, sep='\t',
                               usecols=['Name','MUT_Risk','TOX_Risk','ADMET_Risk','%Fb_hum-100.0'],
                               dtype={'Name':str,
@@ -25,6 +29,9 @@ def filter_smiles(smiles_file, admet_predictions_file, output_stem):
                                      'TOX_Risk':float,
                                      'ADMET_Risk':float,
                                      '%Fb_hum-100.0':float})
+    admet_data['Name'] = admet_data['Name'].str.strip()
+    print(f"Read {len(admet_data)} molecules from file: {admet_predictions_file}.")
+    
     data = smiles_data.merge(admet_data, on=['Name'])
 
     data = data[(data['scaffold_match'] > 0.95 ) &
