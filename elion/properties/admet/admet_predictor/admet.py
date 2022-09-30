@@ -23,15 +23,19 @@ def convert_smiles(smiles_file, output_stem, name_prefix="Lig", ):
         this_cpd = 0
         new_file = []
         header_line = infile.readline().split(',')
-        header_line = [x.upper() for x in header_line]
+        header_line = [x.strip().upper() for x in header_line]
+
+        print("Found columns:", header_line)
 
         if 'SMILES' in header_line:
             smiles_col = header_line.index('SMILES')
         else:
             smiles_col = 0
             infile.seek(0)
+        print('SMILES columns: ', smiles_col)
         
         name_col = header_line.index('NAME') if 'NAME' in header_line else -1
+        print("Name column: ", name_col)
         for line in infile:
             tokens = line.split(',')
             this_cpd += 1
