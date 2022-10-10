@@ -24,8 +24,7 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 
 # Local 
 from utils import get_fingerprint_from_smiles
-import preamble
-import properties_and_rewards
+from properties import properties_and_rewards
 import input_reader
 
 #-------------------------------------------
@@ -91,11 +90,6 @@ if __name__ == "__main__":
     smiles_file = args.out
     sdf_file = args.sdf
     debug = args.debug
-    #-------------------------------------------
-
-    preamble.print_preamble(__file__,__description__,args)
-
-    #-------------------------------------------
 
     # Read input file
     cfg = input_reader.read_input_file(input_file)
@@ -111,11 +105,27 @@ if __name__ == "__main__":
     print("Done.")
 
     # Activity Predictor
-    if 'prob_active' in reward_properties.keys():
-        model_file = reward_properties['prob_active']['model_file']
-        print(f"\nLoading Model from file {model_file} ... ", end='')
-        reward_properties['prob_active']['predictor'] = load(model_file)
+    # Docking Score Predictor
+    model_type = reward_properties['prob_active']['model_type']
+    model_file = reward_properties['prob_active']['model_file']
+
+    if  model_type == "scikit-learn":
+        # Model created with Scikit-Learn, e.g. a random-forest
+        from sklearn.ensemble import RandomForestClassifier
+        from joblib import load
+        print(f"\nInitializing RF Model from file {model_file} ... ", end='')
+        activity_model = load(model_file).set_params(n_jobs=1)
         print("Done.")
+
+    elif model_type == "CHEMBERT":
+        # CHEMBERT model
+        from properties.activity.CHEMBERT.chembert import chembert_model
+
+        print(f"\nInitializiing CHEMBERT with state from file {model_file} ... ", end='')
+        activity_model = chembert_model(model_file)
+        print("Done.")
+
+    reward_properties['prob_active']['predictor'] = activity_model
 
     # Scaffold
     if 'scaffold_match' in reward_properties.keys():
@@ -142,7 +152,7 @@ if __name__ == "__main__":
     results_df["SMILES"] = generated
 
     # Gets properties
-    properties = properties_and_rewards.estimate_properties_batch(generated, reward_properties)
+    properties = properties_and_rewards.estimate_properties_parallel(generated, reward_properties)
 
     for prop, value in properties.items():
         results_df[prop] = value

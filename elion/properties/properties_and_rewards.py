@@ -11,9 +11,7 @@ import rdkit
 from rdkit import Chem
 from rdkit.Chem import rdFMCS
 from rdkit.Chem import QED
-#from rdkit.Chem.AllChem import GetMorganFingerprintAsBitVect
 from rdkit.Chem.rdmolops import RDKFingerprint
-#from torch import threshold
 
 # Local 
 from .SA_Score.sascore import SA_Scorer
@@ -92,38 +90,6 @@ def estimate_properties_parallel(molecules:List[str], properties_to_estimate:Dic
 
 def auxiliary_prop_calc(prop, mol, kwargs):
     return prop(mol, **kwargs)
-
-def estimate_properties_batch(molecules:List[str], properties_to_estimate:Dict) -> Dict: 
-    """Estimates all properties for a batch of molecules
-
-    Args:
-        molecules (List[str]): List of SMILES strings to calculate rewards
-        properties_to_estimate (Dict): The dictionary with the definitions and
-                                       parameters for the properties to be estimated
-
-    Returns:
-        Dict: Dictionary where each 'key' is a property name, and the 'values' are
-              lists of the respective property values.
-    """
-
-    # Create the dictionary for properties    
-    properties = {}
-    for prop_name in properties_to_estimate.keys():
-        properties[prop_name] = []
-
-    for smi in molecules:
-        # Each 'molecule' is a SMILES string    
-        mol = Chem.MolFromSmiles(smi, sanitize=True)
-
-        for prop_name, params in properties_to_estimate.items():
-
-            # Dynamically create the function name to be called
-            prop = getattr(sys.modules[__name__], prop_name)
-
-            this_prop = (prop(mol,**params))
-            properties[prop_name].append(this_prop)
-
-    return properties
 
 def estimate_rewards_batch(properties:Dict,reward_params:Dict) -> Dict:
     """Estimates all the rewards for a batch of molecules
