@@ -359,6 +359,9 @@ def prob_active(query_mol:rdkit.Chem.Mol, **kwargs) -> float:
 #
 # ---------------------------------------------------------------------
 class CompareQueryAtoms(rdFMCS.MCSAtomCompare):
+    """This class defines a custom atom comparison to be used. It is called by
+        FindMCS when the two molecules are compared.
+    """
     def __call__(self, p, mol1, atom1, mol2, atom2):
         a1 = mol1.GetAtomWithIdx(atom1)
         a2 = mol2.GetAtomWithIdx(atom2)
@@ -389,12 +392,27 @@ def scaffold_match(query_mol:rdkit.Chem.Mol, **kwargs) -> float:
         float: The percent scaffold match [0,1].
     """
     params = rdFMCS.MCSParameters()
-    params.AtomCompareParameters.RingMatchesRingOnly = True
-    params.BondCompareParameters.RingMatchesRingOnly = True
+    
     params.AtomCompareParameters.CompleteRingsOnly   = True
+    params.AtomCompareParameters.RingMatchesRingOnly = True
+    params.AtomCompareParameters.MatchChiralTag      = False
+    params.AtomCompareParameters.MatchFormalCharge   = False
+    params.AtomCompareParameters.MatchIsotope        = False
+    params.AtomCompareParameters.MatchValences       = False
+
+    params.BondCompareParameters.RingMatchesRingOnly = True
     params.BondCompareParameters.CompleteRingsOnly   = True
-    params.BondTyper = rdFMCS.BondCompare.CompareAny
+    params.BondCompareParameters.MatchFusedRings       = False
+    params.BondCompareParameters.MatchFusedRingsStrict = False
+    params.BondCompareParameters.MatchStereo           = False
+    
+    # Requests the use of the `CompareQueryAtoms` class (defined above) to compare atoms
     params.AtomTyper = CompareQueryAtoms()
+
+    # No custom matching set for bonds. It will just use the `CompareAny`, which allows
+    # bonds of any order to be compared.
+    params.BondTyper = rdFMCS.BondCompare.CompareAny
+
     scaffold = kwargs['scaffold']
     match = 0.0
     if query_mol is not None:
