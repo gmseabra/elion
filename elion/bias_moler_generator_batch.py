@@ -108,17 +108,19 @@ def bias_generator(cfg:Dict):
     best_rewards_total = []
     best_predictions = {}
 
+
     # Keep a history per iteration
     history = {}
     for prop in reward_properties.keys():
-        history[f'{prop}_thresh'] = []
-        history[prop] = []
-
+        history[f"{prop}_thr"] = []
+        history[f"{prop}_avg"] = []
+    
     # Prepares a file for dumping partial stats
     sep = ','
     if not cfg['control']['restart']:
         with open("biasing_history.csv",'w') as f:
             f.write("Iteration" + sep + sep.join(history.keys()) + '\n')
+
     else:
         # If it is a restart, try to figure the next step number
         # ctrl_opts['restart'] == True:
@@ -164,8 +166,8 @@ def bias_generator(cfg:Dict):
 
     # Save history
     for prop in reward_properties.keys():
-        history[f'{prop}_thresh'].append(reward_properties[prop]["threshold"])
-        history[prop].append(np.average(predictions_unbiased[prop]))
+        history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
+        history[f"{prop}_avg"].append(np.average(predictions[prop]))
 
     # Dump history
     with open("biasing_history.csv",'a') as f:
@@ -495,8 +497,8 @@ def bias_generator(cfg:Dict):
 
         # Save history
         for prop in reward_properties.keys():
-            history[f'{prop}_thresh'].append(reward_properties[prop]["threshold"])
-            history[prop].append(np.average(best_predictions[prop]))
+            history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
+            history[f"{prop}_avg"].append(np.average(predictions[prop]))
 
         # Dump history
         with open("biasing_history.csv",'a') as f:
