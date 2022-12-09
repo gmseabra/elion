@@ -119,6 +119,22 @@ def bias_generator(cfg:Dict):
     if not cfg['control']['restart']:
         with open("biasing_history.csv",'w') as f:
             f.write("Iteration" + sep + sep.join(history.keys()) + '\n')
+    else:
+        # If it is a restart, try to figure the next step number
+        # ctrl_opts['restart'] == True:
+        # Tries to find the info from the biasing_history file
+        history_file = Path('biasing_history.csv')
+        assert history_file.is_file(), f"File {history_file} does not exist !!"
+        with open('biasing_history.csv','r') as f:
+
+            # Finds the last line
+            last_line = ""
+            for line in f:
+                last_line = line
+            last_iteration = last_line.split(',')[0]
+            gen_start  = int(last_iteration) + 1
+
+        print("RESTARTING JOB FROM ITERATION", gen_start)
 
     # ---------------------------------------------------------------
     # INITIAL (UNBIASED) BATCH
