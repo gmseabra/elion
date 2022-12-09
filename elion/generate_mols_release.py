@@ -91,6 +91,11 @@ if __name__ == "__main__":
     sdf_file = args.sdf
     debug = args.debug
 
+    # Check that the user gave some output file!
+    if smiles_file == None and sdf_file == None:
+        print("No output file determined. Will output results to 'generated.smi'")
+        smiles_file = 'generated.smi'
+        
     # Read input file
     cfg = input_reader.read_input_file(input_file)
 
