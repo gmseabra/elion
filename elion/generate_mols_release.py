@@ -95,7 +95,7 @@ if __name__ == "__main__":
     if smiles_file == None and sdf_file == None:
         print("No output file determined. Will output results to 'generated.smi'")
         smiles_file = 'generated.smi'
-        
+
     # Read input file
     cfg = input_reader.read_input_file(input_file)
 
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     # Generator
     generator = release_smiles_generator()
     initial_state = cfg['generator']['initial_state']
-    print(f"\nLoading unbiased generator from file {initial_state} ... ", end='')
+    print(f"\nLoading generator from file {initial_state} ... ", end='')
     generator.load_model(initial_state)
     print("Done.")
 
