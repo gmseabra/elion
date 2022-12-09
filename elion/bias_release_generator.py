@@ -121,14 +121,26 @@ def bias_generator(generator:release_smiles_generator,
                    n_to_generate:int=200, n_policy:int=15, n_iterations:int=100,
                    n_gen0:int=100):
 
+    # Rewards to use:
+    reward_properties = config_opts['reward_properties']
+    predictor = reward_properties['prob_active']['predictor']
+
     # General options
-    verbosity = 1
     ctrl_opts = config_opts['control']
+    verbosity = ctrl_opts['verbosity']
     seed_generator = 'seed_smi' in config_opts['generator'].keys()
     if seed_generator:
         seed_smi = config_opts['generator']['seed_smi'] 
         print("Will use the seed to bias the generator:")
         print("<"+seed_smi+">")
+
+        # predict seed properties
+        predictions_seed = properties_and_rewards.estimate_properties_parallel([seed_smi],reward_properties)
+        rewards_seed = properties_and_rewards.estimate_capped_rewards_batch(predictions_seed,reward_properties)
+
+        # Print the predctions for the seed:
+        print("\nSeed properties:")
+        print_progress_table(reward_properties, predictions_seed, rewards_seed)
 
     # If it is a restart, try to figure the next step number
     if ctrl_opts['restart'] == True:
@@ -146,10 +158,6 @@ def bias_generator(generator:release_smiles_generator,
             gen_start  = int(last_iteration) + 1
 
         print("RESTARTING JOB FROM ITERATION", gen_start)
-
-    # Rewards to use:
-    reward_properties = config_opts['reward_properties']
-    predictor = reward_properties['prob_active']['predictor']
    
     # Checkpoints dir
     chk_dir = Path("./chk")
@@ -227,9 +235,11 @@ def bias_generator(generator:release_smiles_generator,
 
     # Keep a history per iteration
     history = {}
-    history['sco_thresh'] = []
+    #history['sco_thresh'] = []
     for prop in reward_properties.keys():
-        history[prop] = []
+        history[f"{prop}_thr"] = []
+        history[f"{prop}_avg"] = []
+        #history[prop] = []
 
     # Prepares a file for dumping partial stats
     sep = ','
@@ -238,7 +248,6 @@ def bias_generator(generator:release_smiles_generator,
             f.write("Iteration" + sep + sep.join(history.keys()) + '\n')
 
     reinforcement_iteration = 0
-    #best_smiles, best_predictions = [] , []
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore")
         RL_start_time = time.time()
@@ -277,6 +286,7 @@ def bias_generator(generator:release_smiles_generator,
                 prob_actives_cur = np.array(predictions_cur['prob_active'])
 
                 print("PROPERTIES  ", *[str(x) for x in predictions_cur])
+                # Statistics on the predicitons
                 if verbosity > 1:
                     # ----- (DEBUG) Print predictions -------------------------------------------------------
                     print(f"\n(DEBUG): PREDICTIONS  ({len(smiles_cur)})")
@@ -285,6 +295,15 @@ def bias_generator(generator:release_smiles_generator,
                     for smi, *pred in zip(smiles_cur, *[predictions_cur[x] for x in predictions_cur]):
                         print(f"(DEBUG): {i:3d} {smi:<100s}", ' '.join([f"{x:6.2f}" for x in pred]))
                         i+=1
+                pred_np = np.array([x for x in predictions_cur.values()])
+                pred_avg = np.average(pred_np,1)
+                pred_std = np.std(pred_np,1)
+                print(f"PREDICTIONS: {'AVERAGES >':>99s} ", ' '.join([f"{x:6.2f}" for x in pred_avg]))
+                print(f"             {'STANDARD DEVIATIONS >':>99s} ", ' '.join([f"{x:6.2f}" for x in pred_std]), flush=True)
+
+
+                # Statistics on the rewards
+                if verbosity > 1:
                     print(f"(DEBUG): {'LENGTH':<104s}", ' '.join([f"{len(predictions_cur[x]):6d}" for x in predictions_cur]))
                     # ----- (DEBUG) Print rewards ----------------------------------------------------------
                     print(f"\n(DEBUG): REWARDS  ({len(smiles_cur)})")
@@ -294,19 +313,11 @@ def bias_generator(generator:release_smiles_generator,
                         print(f"(DEBUG): {i:3d} {smi:<100s}", ' '.join([f"{x:6.2f}" for x in rewd]))
                         i+=1
                     print(f"(DEBUG): {'LENGTH':<104s}", ' '.join([f"{len(rewards_cur[x]):6d}" for x in rewards_cur]))
-                # Statistics on the predicitons
-                pred_np = np.array([x for x in predictions_cur.values()])
-                pred_avg = np.average(pred_np,1)
-                pred_std = np.std(pred_np,1)
-                print(f"PREDICTIONS: {'AVERAGES >':>103s} ", ' '.join([f"{x:6.2f}" for x in pred_avg]))
-                print(f"             {'STANDARD DEVIATIONS >':>103s} ", ' '.join([f"{x:6.2f}" for x in pred_std]), flush=True)
-
-                # Statistics on the rewards
                 rew_np = np.array([x for x in rewards_cur.values()])
                 rew_avg = np.average(rew_np,1)
                 rew_std = np.std(rew_np,1)
-                print(f"REWARDS    : {'AVERAGES >':>103s} ", ' '.join([f"{x:6.2f}" for x in rew_avg]))
-                print(f"             {'STANDARD DEVIATIONS >':>103s} ", ' '.join([f"{x:6.2f}" for x in rew_std]), flush=True)
+                print(f"REWARDS    : {'AVERAGES >':>99s} ", ' '.join([f"{x:6.2f}" for x in rew_avg]))
+                print(f"             {'STANDARD DEVIATIONS >':>99s} ", ' '.join([f"{x:6.2f}" for x in rew_std]), flush=True)
 
                 # 3. Adjusting the goal
                 # ---------------------
@@ -405,10 +416,14 @@ def bias_generator(generator:release_smiles_generator,
             print(f"|--> Average time (all iterations) = {iteration_accumulated_time/(reinforcement_iteration+1):0.3f} sec./it")
 
             # Save history
-            history['sco_thresh'].append(reward_properties['prob_active']["threshold"])
-
             for prop in reward_properties.keys():
-                history[prop].append(np.average(predictions[prop]))
+                history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
+                history[f"{prop}_avg"].append(np.average(predictions[prop]))
+
+            #history['sco_thresh'].append(reward_properties['prob_active']["threshold"])
+
+            #for prop in reward_properties.keys():
+            #    history[prop].append(np.average(predictions[prop]))
 
             # Dump history
             with open("biasing_history.csv",'a') as f:
