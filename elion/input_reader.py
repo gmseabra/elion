@@ -72,11 +72,14 @@ def read_input_file(input_file_name:str)-> Dict:
     # ----------------
 
     # Defaults
+    if 'control' not in cfg.keys():
+        cfg['control'] = {}
+        
     if 'gen_start' not in cfg['control']:
         cfg['control']['gen_start'] = 0
 
     if 'restart' not in cfg['control']:
-        cfg['control']['restart'] == False
+        cfg['control']['restart'] = False
 
     if 'verbosity' not in cfg['control']:
         cfg['control']['verbosity'] = 0
