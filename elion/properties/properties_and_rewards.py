@@ -289,13 +289,10 @@ def estimate_capped_rewards_one(properties:Dict,reward_params:Dict) -> Dict:
         In addtion, the "TOTAL" column here is capped so that the total reward is
         either 1 or 15.
 
-        To get a reward of 15 the molecule must meet the prob_active requirements,
-        plus the requirements for one extra property chosen at random with probabilities
-        equal to the property weight.
+        To get a reward of 15 the molecule must meet the `prob_active` and 
+        `scaffold_match` requirements, plus the requirements for one extra property
+        chosen at random with probabilities equal to the property weight.
         
-        Note that this random choice *includes* prob_active. In this case, only the 
-        docking score would be considered.
-
     Args:
         properties (Dict): The calculated properties
         reward_params (Dict): parameters for reward calculation
@@ -306,8 +303,12 @@ def estimate_capped_rewards_one(properties:Dict,reward_params:Dict) -> Dict:
 
 
     probabilities = []
+
+    # This sets the list pr properties that will be considered beyond
+    # prob_active ad scaffold match. So, we will need to remove those
+    # two from the list.
     props = list(properties.keys())
-    props.remove('prob_active')
+    props.remove('prob_active')    # MANDATORY
     props.remove('scaffold_match') # MANDATORY
 
     # This will get the weight of all the other properties and
@@ -323,7 +324,6 @@ def estimate_capped_rewards_one(properties:Dict,reward_params:Dict) -> Dict:
     rewards['TOTAL'] = 1
     if rewards['prob_active'] == 15 and rewards['scaffold_match'] == 15:
         prop_to_consider = props[np.random.choice(len(props),p=probabilities)]
-        #prop_to_consider = props[np.random.choice(len(props))]
         if rewards[prop_to_consider] == 15 or rng.random() >= 0.99:
             rewards['TOTAL'] = 15
     return rewards
@@ -440,7 +440,10 @@ def synthetic_accessibility(query_mol:rdkit.Chem.Mol, **kwargs) -> float:
     """
     sa_score = 10.0
     if query_mol is not None:
-        sa_score = sascorer.predict([query_mol])[0] 
+        try:
+            sa_score = sascorer.predict([query_mol])[0] 
+        except:
+            pass
     return sa_score
 
 def drug_likeness(query_mol:rdkit.Chem.Mol, **kwargs) -> float:
@@ -462,7 +465,12 @@ def drug_likeness(query_mol:rdkit.Chem.Mol, **kwargs) -> float:
     """
     qed_score = 0.0
     if query_mol is not None:
-        qed_score = QED.qed(query_mol)
+        try:
+            qed_score = QED.qed(query_mol)
+        except:
+            # RDKit gives exception when the molecules are weird. 
+            # Here we just ignore them and pass a score of zero.
+            pass
     return qed_score
 
 # =============================================================================
@@ -570,14 +578,20 @@ def check_and_adjust_thresholds(predictions_cur:Dict, rewards_cur:Dict, reward_p
     props = list(predictions_cur.keys())
     props.remove('prob_active')
     props.remove('scaffold_match') # MANDATORY
-
+    print("Total Rewards:")
+    total_rew_np = np.array(rewards_cur['TOTAL'])
+    print(f"There were {np.sum(total_rew_np >= 15)} molecules approved from a total of {len(total_rew_np)} generated.")
     for ind, rew in enumerate(rewards_cur['TOTAL']):
         if rew < 15.0:
+            # A TOTAL reward < 15 means the molecule was not approved.
+            # We don't want those molecules to influence the learning, so we set
+            # their properties to the base (worst) value before proceeding:
             for prop_name in props:
                 # Dynamically create the function name to be called.
                 prop = getattr(sys.modules[__name__], prop_name)
 
                 # Sets the property to the base value
+                # (The value given to an invalid molecule)
                 this_prop = (prop(None,**reward_properties[prop_name]))
                 predictions_cur[prop_name][ind] = this_prop
 
@@ -718,12 +732,27 @@ def check_and_adjust_synthetic_accessibility_threshold(sa_scores:List, reward_pr
         #reward_properties["threshold"] = max(thresh_limit,new_thr)
 
         # Changes the threshold to the 25% percentile
-        reward_properties["threshold"] = max(thresh_limit, min(threshold, np.percentile(pred,25,interpolation='higher')))
+        reward_properties["threshold"] = max(thresh_limit, 
+                                             min(threshold, 
+                                                 np.percentile(pred,25,interpolation='higher')))
 
         print((f"    --> ADJUSTING SA_SCORES THRESHOLD TO " 
                     f"{reward_properties['threshold']:5.2f}, " 
                     f"BEGINNING NEXT ITERATION."))
         moved_threshold = True
+    elif below_thr_percent <= 0.01 and threshold > thresh_limit:
+        # The threshold is too tight, resulting in NO molecules getting accepted.
+        # Try to adjust to rescue the 'least bad' molecule.
+        print(f"    --> SAScore threshold is too tight. Adjusting it to rescue some molecules.")
+        reward_properties["threshold"] = min(threshold + reward_properties["threshold_step"],
+                                             10)
+        moved_threshold = True
+    
+    if moved_threshold:
+        print((f"    --> ADJUSTING SASCore THRESHOLD TO " 
+                    f"{reward_properties['threshold']:5.2f}, " 
+                    f"BEGINNING NEXT ITERATION."))
+
     reward_properties['moved_threshold'] = moved_threshold
     return
 
@@ -746,11 +775,11 @@ def check_and_adjust_drug_likeness_threshold(qedscores:List, reward_properties:D
     print(f"    --> Threshold    : {threshold:6.2f}")
     print(f"    --> n_mols ABOVE : {above_thr} ({above_thr_percent:4.1%})")
 
-    # Adjust the threshold
-    # If enough predictions are above the threshold, 
-    # adjust threshold for the next round
-
+    # Adjust the threshold. Use only approved molecules in the
+    # calculation of the next values.
+    pred_approved = pred[ pred >= threshold ]
     moved_threshold = False
+
     if above_thr_percent >= 0.3 and threshold < thresh_limit:
         # LARGER IS BETTER
 
@@ -760,14 +789,21 @@ def check_and_adjust_drug_likeness_threshold(qedscores:List, reward_properties:D
 
         # Moves the threshold by big jumps
         # Changes the threshold to the 75% percentile
-        reward_properties["threshold"] = min(thresh_limit, max(threshold, np.percentile(pred,75,interpolation='lower')))
+
+        # We also include the step size here to make sure 
+        # the threshold is never lower than the step size.
+        reward_properties["threshold"] = min(thresh_limit, 
+                                             max(threshold, 
+                                                 np.percentile(pred_approved,75,interpolation='lower'), 
+                                                 reward_properties["threshold_step"]))
         moved_threshold = True
 
     elif above_thr_percent <= 0.01 and threshold < thresh_limit:
         # The threshold is too tight, resulting in NO molecules getting accepted.
         # Try to adjust to rescue the 'least bad' molecule.
         print(f"    --> Drug likeness threshold is too tight. Adjusting it down to rescue some molecules.")
-        reward_properties["threshold"] = np.percentile(pred,99,interpolation='lower')
+        reward_properties["threshold"] = max(threshold - reward_properties["threshold_step"],
+                                             reward_properties["threshold_step"])
         moved_threshold = True
     
     if moved_threshold:
