@@ -167,7 +167,7 @@ def bias_generator(cfg:Dict):
     # Save history
     for prop in reward_properties.keys():
         history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
-        history[f"{prop}_avg"].append(np.average(predictions[prop]))
+        history[f"{prop}_avg"].append(np.average(predictions_unbiased[prop]))
 
     # Dump history
     with open("biasing_history.csv",'a') as f:
@@ -498,7 +498,7 @@ def bias_generator(cfg:Dict):
         # Save history
         for prop in reward_properties.keys():
             history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
-            history[f"{prop}_avg"].append(np.average(predictions[prop]))
+            history[f"{prop}_avg"].append(np.average(best_predictions[prop]))
 
         # Dump history
         with open("biasing_history.csv",'a') as f:
