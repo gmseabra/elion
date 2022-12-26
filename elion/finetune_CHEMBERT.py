@@ -440,7 +440,7 @@ def finetune_model(smiles_file,
         plt.ylabel('True Positive Rate')
         plt.title('Receiver operating characteristic')
         plt.legend(loc='lower right')
-        plt.savefig(f'chembert/test-score_model-{best_step}.png')
+        plt.savefig(f'chembert/test-score_model-{best_step+1}.png')
 
     else:
         output_json['metric'] = 'RMSE'
