@@ -1,7 +1,9 @@
 """
 Scans a database using a CHEM-BERT model
 """
-from CHEMBERT.chembert import chembert_model, SMILES_Dataset_from_file
+#import pandas as pd
+import pandas as pd
+from CHEMBERT.chembert import chembert_model, SMILES_Dataset
 from pathlib import Path
 module_dir = Path(__file__).parent
 
@@ -17,13 +19,43 @@ class activity_predictor:
             
     def predict(self, dataset):
         return self.model.predict(dataset)
-        
+
+def read_smiles_file(smiles_file, smiles_col='SMILES'):
+    """
+    Reads SMILES form a file and returns a DataFrame object.
+    This checks if the file has a header before reading, and
+    makes sure there will be a column named "SMILES" for processing.
+    
+    If the header is not present, assume the SMILES column to be 
+    the first column.
+    """
+    header = None
+    with open(smiles_file,'r') as smi_file:
+        line1 = smi_file.readline().upper()
+        if "SMILES" in line1:
+            header = 0
+            print("Header found: ", line1)
+        else:
+            print("WARNING: Header not found. Assuming SMILES in 1st column.")
+        smi_file.seek(0)
+
+    data_df = pd.read_csv(smiles_file, header=header)
+    
+    if header == None: 
+        data_df.rename(columns={0:"SMILES"}, inplace=True)
+    else:
+        data_df.rename(columns={smiles_col:"SMILES"}, inplace=True)
+
+    # Bring SMILES column to first
+    smiles = data_df.pop('SMILES')
+    data_df.insert(0,'SMILES',smiles)
+    print(f"Read {len(data_df)} molecules from file {smiles_file}:")
+    print(data_df.head(5))
+    return data_df
+       
 if __name__ == '__main__':
     import time
-    import pandas as pd
     import numpy as np
-    import matplotlib.pyplot as plt
-    from pathlib import Path
     import argparse
     
     #-- Command line arguments
@@ -40,16 +72,16 @@ if __name__ == '__main__':
                         help='Name of column containing SMILES',
                         default='SMILES')
 
-    parser.add_argument('-l', '--labels_col',
-                        help='Name of column containing labels',
-                        default='LABELS')
+    parser.add_argument('-p', '--plot_results',
+                        help='If present, make histplots of the results.',
+                        action='store_true')
 
     args = parser.parse_args()
     
     smiles_file   = Path(args.smiles_file)
     trained_model = Path(args.model)
     smiles_col    = args.smiles_col
-    labels_col    = args.labels_col
+    plot_results  = args.plot_results
 
     #---
     output_name = f'{smiles_file.stem}_{trained_model.stem}'
@@ -60,32 +92,45 @@ if __name__ == '__main__':
     start_time = time.time()
     predictor = activity_predictor(properties)
 
-    dataset = SMILES_Dataset_from_file(smiles_file, smiles_col=smiles_col, labels_col=labels_col)
-    labels = dataset.label.flatten()
-    smiles = dataset.adj_dataset
+    data   = read_smiles_file(smiles_file, smiles_col=smiles_col)
 
-    assert len(labels) == len(smiles), "Length of SMILES and LABELS column mismatch!!!" 
-
-    # Do the predictions:
-    predictions = predictor.predict(dataset)
-
-    results = pd.DataFrame({"Prediction":predictions})
-    if len(labels) == len(predictions):
-        results[labels_col] = labels
-        results[smiles_col] = smiles
-        results = results[[labels_col,smiles_col,"Prediction"]]
-        results = results.sort_values(by=["Prediction",labels_col])
+    # Removes duplicate SMILES strings.
+    initial_size = len(data)
+    data.drop_duplicates(subset=['SMILES'], inplace=True, ignore_index=True)
+    final_size = len(data)
+    if final_size != initial_size:
+        print(f"WARNING: Dropped {initial_size - final_size} duplicate SMILES.")
+        print(f"         The final results will have only {final_size} points.")
+    
+    dataset = SMILES_Dataset(np.asarray(data['SMILES'].values))
+    results = pd.DataFrame({"Prediction":predictor.predict(dataset)})
+    if len(results) == len(data):
+        results = data.merge(results, left_index=True, right_index=True)
+        results = results.sort_values(by=["Prediction"])
     else:
         print("Danger Will Robinson! Molecules lost is space!!")
+        print(f"results: {len(results)}, data:{len(data)}.")
 
     results.to_csv(f'{output_name}.csv', float_format='%.2f', index=None)
 
     elapsed = time.time() - start_time
-    print(F"ELAPSED TIME: {elapsed:.5f} seconds ({elapsed/len(labels):.5f} sec/molecule.)")
+    print(F"ELAPSED TIME: {elapsed:.5f} seconds ({elapsed/len(data):.5f} sec/molecule.)")
 
     # Plot the results
-    plt.figure(3)
-    plt.hist(predictions)
-    plt.savefig(f'{output_name}.png')
+    if plot_results:
+        start_time = time.time()
+
+        print("Preparing histogram plot.... ", end="", flush=True)
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        fig, ax = plt.subplots()
+        #plt.hist(results.Prediction)
+        ax=sns.histplot(data=results, x="Prediction", kde=True)
+        fig.suptitle(f"Predicted Vina Scores for file \"{smiles_file}\"")
+        fig.tight_layout()
+        fig.savefig(f'{output_name}.png')
+        elapsed = time.time() - start_time
+        print(f"Done.\nPLOTTING TIME: {elapsed:.5f} seconds.")
 
     print("Have a nice day!")
