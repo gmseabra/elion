@@ -413,14 +413,14 @@ def finetune_model(smiles_file,
     output_csv['Train_loss']  = train_loss_list
     output_csv['Valid_loss']  = valid_loss_list
     output_csv['Valid_score'] = valid_score_list
-    output_csv.to_csv('chembert/result.csv')
+    output_csv.to_csv('chembert/result.csv', index_label='Epoch')
 
     # roc curve or r2
     # These next plots are saved only for the model with the best validation loss
     best_step = np.argmin(valid_loss_list)
     best_score = test_score_list[best_step]
 
-    print(f"The lowest validation loss is from Epoch {best_step + 1}.")
+    print(f"The lowest validation loss is from Epoch {best_step}.")
     print(f"Score in Testing Set: {best_score}")
 
     output_json = params
@@ -440,7 +440,7 @@ def finetune_model(smiles_file,
         plt.ylabel('True Positive Rate')
         plt.title('Receiver operating characteristic')
         plt.legend(loc='lower right')
-        plt.savefig(f'chembert/test-score_model-{best_step+1}.png')
+        plt.savefig(f'chembert/test-score_model-{best_step}.png')
 
     else:
         output_json['metric'] = 'RMSE'
