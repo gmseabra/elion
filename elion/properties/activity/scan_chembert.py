@@ -1,7 +1,8 @@
 """
 Scans a database using a CHEM-BERT model
 """
-#import pandas as pd
+import time
+import numpy as np
 import pandas as pd
 from CHEMBERT.chembert import chembert_model, SMILES_Dataset
 from pathlib import Path
@@ -27,7 +28,8 @@ def read_smiles_file(smiles_file, smiles_col='SMILES'):
     makes sure there will be a column named "SMILES" for processing.
     
     If the header is not present, assume the SMILES column to be 
-    the first column.
+    the first column. otherwise, we locate the SMILES column and move
+    it to the first.
     """
     header = None
     with open(smiles_file,'r') as smi_file:
@@ -54,15 +56,13 @@ def read_smiles_file(smiles_file, smiles_col='SMILES'):
     return data_df
        
 if __name__ == '__main__':
-    import time
-    import numpy as np
     import argparse
     
     #-- Command line arguments
     parser = argparse.ArgumentParser(description='''Tests a CHEMBERT model''')
 
     parser.add_argument('smiles_file',
-                        help='Path to the input SMILES file. Must have 2 columns: SMILES, data')
+                        help='Path to the input SMILES file. Must have at least a SMILES column')
 
     parser.add_argument('-m', '--model',
                         help='trained model',
@@ -95,15 +95,21 @@ if __name__ == '__main__':
     data   = read_smiles_file(smiles_file, smiles_col=smiles_col)
 
     # Removes duplicate SMILES strings.
+    start_time_cleandb = time.time()
     initial_size = len(data)
     data.drop_duplicates(subset=['SMILES'], inplace=True, ignore_index=True)
     final_size = len(data)
     if final_size != initial_size:
         print(f"WARNING: Dropped {initial_size - final_size} duplicate SMILES.")
         print(f"         The final results will have only {final_size} points.")
-    
+    elapsed_cleandb = time.time() - start_time_cleandb
+    print(f"ELAPSED TIME (Filtering DB): {elapsed_cleandb:.5f} seconds)")
+
+    # Calculates the predictions
+    start_time_calc = time.time()
     dataset = SMILES_Dataset(np.asarray(data['SMILES'].values))
     results = pd.DataFrame({"Prediction":predictor.predict(dataset)})
+
     if len(results) == len(data):
         results = data.merge(results, left_index=True, right_index=True)
         results = results.sort_values(by=["Prediction"])
@@ -113,24 +119,25 @@ if __name__ == '__main__':
 
     results.to_csv(f'{output_name}.csv', float_format='%.2f', index=None)
 
-    elapsed = time.time() - start_time
-    print(F"ELAPSED TIME: {elapsed:.5f} seconds ({elapsed/len(data):.5f} sec/molecule.)")
+    elapsed_calc = time.time() - start_time_calc
+    print(F"ELAPSED TIME (Predictions) : {elapsed_calc:.5f} seconds ({elapsed_calc/len(data):.5f} sec/molecule.)")
 
     # Plot the results
     if plot_results:
-        start_time = time.time()
+        start_time_plot = time.time()
 
         print("Preparing histogram plot.... ", end="", flush=True)
         import matplotlib.pyplot as plt
         import seaborn as sns
 
         fig, ax = plt.subplots()
-        #plt.hist(results.Prediction)
         ax=sns.histplot(data=results, x="Prediction", kde=True)
         fig.suptitle(f"Predicted Vina Scores for file \"{smiles_file}\"")
         fig.tight_layout()
         fig.savefig(f'{output_name}.png')
-        elapsed = time.time() - start_time
-        print(f"Done.\nPLOTTING TIME: {elapsed:.5f} seconds.")
+        elapsed_plot = time.time() - start_time_plot
+        print(f"Done.\nELAPSED TIME (Plotting)    : {elapsed_plot:.5f} seconds.")
 
+    elapsed_total = time.time() - start_time
+    print(f"ELAPSED TIME (TOTAL)       : {elapsed_calc:.5f} seconds")
     print("Have a nice day!")
