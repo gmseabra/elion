@@ -143,7 +143,7 @@ class FinetuningDataset(Dataset):
 
 def finetune_model(smiles_file,
                    pretrained_model=f'{module_dir}/properties/activity/CHEMBERT/model/pretrained_model.pt',
-                   task='regression',split_ratio=0.8,max_time=720,
+                   task='regression',split_ratio=0.8,max_time=720, max_epochs=15,
                    cpu_threads=24):
 
 
@@ -164,7 +164,7 @@ def finetune_model(smiles_file,
     # Pre-trained model parameters
     # Those are the parameters used for training CHEMBERT.
     params = {'model':'Transformer',
-              'optimizer':'Adam', 'epochs':15, 'batch_size':64,
+              'optimizer':'Adam', 'batch_size':64,
               'dropout':0, 'learning_rate':0.00001}
 
     Smiles_vocab = Vocab()
@@ -265,10 +265,10 @@ def finetune_model(smiles_file,
     print(f"\n{'='*35}")
     print(f"{'FINETUNING MODEL':^35s}")
     print("="*35)
-    print(f"Attempting up to {params['epochs']}, or {max_time} minutes.")
-    for epoch in range(1,params['epochs']+1):
+    print(f"Attempting up to {max_epochs} epochs, or {max_time} minutes.")
+    for epoch in range(1,max_epochs+1):
         epoch_start = time.time()
-        print(f"\nEpoch {epoch} of a maximum of {params['epochs']}.")
+        print(f"\nEpoch {epoch} of a maximum of {max_epochs}.")
         avg_loss = 0
         valid_avg_loss = 0
         valid_rmse = []
@@ -340,7 +340,7 @@ def finetune_model(smiles_file,
                 print(f"Validation RMSE = {valid_rmse}")
 
             # If validation loss is reduced, save the new model
-            if (epoch > 0) and (valid_avg_loss < min_valid_loss):
+            if valid_avg_loss < min_valid_loss:
                 save_path = f"chembert/Finetuned_model_{epoch}.pt"
                 print(f"Validation loss improved, saving new model to: \n{save_path}")
                 torch.save(model.state_dict(), save_path)
@@ -399,7 +399,7 @@ def finetune_model(smiles_file,
     
     # plot the graph & return best score
     plt.figure(1)
-    x_len = np.arange(len(train_loss_list))
+    x_len = np.arange(1,len(train_loss_list)+1) # epochs count from 1.
     plt.plot(x_len, train_loss_list, marker='.', c='blue', label="Train loss")
     plt.plot(x_len, valid_loss_list, marker='.', c='red' , label="Validation loss")
     plt.legend(loc='upper right')
@@ -418,9 +418,10 @@ def finetune_model(smiles_file,
     # roc curve or r2
     # These next plots are saved only for the model with the best validation loss
     best_step = np.argmin(valid_loss_list)
+    best_epoch = best_step +1
     best_score = test_score_list[best_step]
 
-    print(f"The lowest validation loss is from Epoch {best_step}.")
+    print(f"The lowest validation loss is from Epoch {best_epoch}.")
     print(f"Score in Testing Set: {best_score}")
 
     output_json = params
@@ -440,7 +441,7 @@ def finetune_model(smiles_file,
         plt.ylabel('True Positive Rate')
         plt.title('Receiver operating characteristic')
         plt.legend(loc='lower right')
-        plt.savefig(f'chembert/test-score_model-{best_step}.png')
+        plt.savefig(f'chembert/test-score_model-{best_epoch}.png')
 
     else:
         output_json['metric'] = 'RMSE'
@@ -464,9 +465,9 @@ def finetune_model(smiles_file,
 
         plt.xlabel('Actual')
         plt.ylabel('Predicted')
-        plt.title(f'Test set results for model {best_step}')
+        plt.title(f'Test set results for model from epoch {best_epoch}')
         plt.legend(loc='lower right')
-        plt.savefig(f'chembert/test-score_model-{best_step}.png')
+        plt.savefig(f'chembert/test-score_model-{best_epoch}.png')
 
     with open('chembert/dm.json', 'w') as f:
         json.dump(output_json, f)
