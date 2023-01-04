@@ -338,14 +338,6 @@ def finetune_model(smiles_file,
                 valid_rmse = sum(valid_rmse) / len(valid_rmse)
                 valid_score_list.append(valid_rmse[0])
                 print(f"Validation RMSE = {valid_rmse}")
-
-            # If validation loss is reduced, save the new model
-            if valid_avg_loss < min_valid_loss:
-                save_path = f"chembert/Finetuned_model_{epoch}.pt"
-                print(f"Validation loss improved, saving new model to: \n{save_path}")
-                torch.save(model.state_dict(), save_path)
-                model.to(device)
-                min_valid_loss = valid_avg_loss
             #-->End predictions on vallidation set 
 
 
@@ -383,6 +375,14 @@ def finetune_model(smiles_file,
                 print(f"Testing RMSE    = {test_rmse}")
                 test_score_list.append(test_rmse[0])
             #-->End predictions on test set
+
+            # If validation loss is reduced, save the new model
+            if valid_avg_loss < min_valid_loss:
+                save_path = f"chembert/Finetuned_model_{epoch}.pt"
+                print(f"Validation loss improved, saving new model to: {save_path}")
+                torch.save(model.state_dict(), save_path)
+                model.to(device)
+                min_valid_loss = valid_avg_loss
 
         epoch_time   = time.time() - epoch_start
         elapsed_time = time.time() - start_time
