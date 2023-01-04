@@ -484,7 +484,7 @@ if __name__ == "__main__":
                         help='Pre-trained model',
                         default=f'{module_dir}/properties/activity/CHEMBERT/model/pretrained_model.pt')
 
-    parser.add_argument('-t', '--max_time',
+    parser.add_argument('-t', '--max_time', type=int,
                         help='Maximum time to train (minutes)',
                         default=720)
 
