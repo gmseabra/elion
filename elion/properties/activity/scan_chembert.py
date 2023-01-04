@@ -103,7 +103,7 @@ if __name__ == '__main__':
         print(f"WARNING: Dropped {initial_size - final_size} duplicate SMILES.")
         print(f"         The final results will have only {final_size} points.")
     elapsed_cleandb = time.time() - start_time_cleandb
-    print(f"ELAPSED TIME (Filtering DB): {elapsed_cleandb:.5f} seconds)")
+    print(f"ELAPSED TIME (Filtering DB): {elapsed_cleandb:.5f} seconds.")
 
     # Calculates the predictions
     start_time_calc = time.time()
@@ -126,7 +126,6 @@ if __name__ == '__main__':
     if plot_results:
         start_time_plot = time.time()
 
-        print("Preparing histogram plot.... ", end="", flush=True)
         import matplotlib.pyplot as plt
         import seaborn as sns
 
@@ -136,8 +135,8 @@ if __name__ == '__main__':
         fig.tight_layout()
         fig.savefig(f'{output_name}.png')
         elapsed_plot = time.time() - start_time_plot
-        print(f"Done.\nELAPSED TIME (Plotting)    : {elapsed_plot:.5f} seconds.")
+        print(f"ELAPSED TIME (Plotting)    : {elapsed_plot:.5f} seconds.")
 
     elapsed_total = time.time() - start_time
-    print(f"ELAPSED TIME (TOTAL)       : {elapsed_calc:.5f} seconds")
+    print(f"ELAPSED TIME (TOTAL)       : {elapsed_total:.5f} seconds")
     print("Have a nice day!")
