@@ -340,9 +340,9 @@ def finetune_model(smiles_file,
                 print(f"Validation RMSE = {valid_rmse}")
 
             # If validation loss is reduced, save the new model
-            if valid_avg_loss < min_valid_loss:
+            if (epoch > 0) and (valid_avg_loss < min_valid_loss):
                 save_path = f"chembert/Finetuned_model_{epoch}.pt"
-                print(f"Saving model to {save_path}")
+                print(f"Validation loss improved, saving new model to: \n{save_path}")
                 torch.save(model.state_dict(), save_path)
                 model.to(device)
                 min_valid_loss = valid_avg_loss
@@ -484,10 +484,15 @@ if __name__ == "__main__":
                         help='Pre-trained model',
                         default=f'{module_dir}/properties/activity/CHEMBERT/model/pretrained_model.pt')
 
+    parser.add_argument('-t', '--max_time',
+                        help='Maximum time to train (minutes)',
+                        default=720)
+
     args = parser.parse_args()
     
     smiles_file = args.smiles_file
     pretrained_model = args.model
+    max_time = args.max_time
     #----------------------
     Path('chembert').mkdir(exist_ok=True)
-    finetune_model(smiles_file)
+    finetune_model(smiles_file, max_time=max_time)
