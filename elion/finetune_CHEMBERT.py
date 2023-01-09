@@ -1,7 +1,6 @@
 import re
 import time
 import json
-import csv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -55,7 +54,7 @@ class FinetuningDataset(Dataset):
 
         has_header = False
         with open(datapath,'r') as smi_file:
-            has_header = csv.Sniffer().has_header(smi_file.read(1024))
+            has_header = 'SMILES' in smi_file.readline().upper()
             smi_file.seek(0)
 
         text = pd.DataFrame()
