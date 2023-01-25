@@ -95,15 +95,15 @@ if __name__ == '__main__':
     data   = read_smiles_file(smiles_file, smiles_col=smiles_col)
 
     # Removes duplicate SMILES strings.
-    #start_time_cleandb = time.time()
-    #initial_size = len(data)
-    #data.drop_duplicates(subset=['SMILES'], inplace=True, ignore_index=True)
-    #final_size = len(data)
-    #if final_size != initial_size:
-    #    print(f"WARNING: Dropped {initial_size - final_size} duplicate SMILES.")
-    #    print(f"         The final results will have only {final_size} points.")
-    #elapsed_cleandb = time.time() - start_time_cleandb
-    #print(f"ELAPSED TIME (Filtering DB): {elapsed_cleandb:.5f} seconds.")
+    start_time_cleandb = time.time()
+    initial_size = len(data)
+    data.drop_duplicates(subset=['SMILES'], inplace=True, ignore_index=True)
+    final_size = len(data)
+    if final_size != initial_size:
+        print(f"WARNING: Dropped {initial_size - final_size} duplicate SMILES.")
+        print(f"         The final results will have only {final_size} points.")
+    elapsed_cleandb = time.time() - start_time_cleandb
+    print(f"ELAPSED TIME (Filtering DB): {elapsed_cleandb:.5f} seconds.")
 
     # Calculates the predictions
     start_time_calc = time.time()
