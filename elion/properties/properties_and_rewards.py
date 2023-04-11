@@ -581,19 +581,19 @@ def check_and_adjust_thresholds(predictions_cur:Dict, rewards_cur:Dict, reward_p
     print("Total Rewards:")
     total_rew_np = np.array(rewards_cur['TOTAL'])
     print(f"There were {np.sum(total_rew_np >= 15)} molecules approved from a total of {len(total_rew_np)} generated.")
-    for ind, rew in enumerate(rewards_cur['TOTAL']):
-        if rew < 15.0:
-            # A TOTAL reward < 15 means the molecule was not approved.
-            # We don't want those molecules to influence the learning, so we set
-            # their properties to the base (worst) value before proceeding:
-            for prop_name in props:
-                # Dynamically create the function name to be called.
-                prop = getattr(sys.modules[__name__], prop_name)
+    #for ind, rew in enumerate(rewards_cur['TOTAL']):
+    #     if rew < 15.0:
+    #         # A TOTAL reward < 15 means the molecule was not approved.
+    #         # We don't want those molecules to influence the learning, so we set
+    #         # their properties to the base (worst) value before proceeding:
+    #         for prop_name in props:
+    #             # Dynamically create the function name to be called.
+    #             prop = getattr(sys.modules[__name__], prop_name)
 
-                # Sets the property to the base value
-                # (The value given to an invalid molecule)
-                this_prop = (prop(None,**reward_properties[prop_name]))
-                predictions_cur[prop_name][ind] = this_prop
+    #             # Sets the property to the base value
+    #             # (The value given to an invalid molecule)
+    #             this_prop = (prop(None,**reward_properties[prop_name]))
+    #             predictions_cur[prop_name][ind] = this_prop
 
     for prop in reward_properties.keys():
         if reward_properties[prop]['adjust_threshold'] == True:
