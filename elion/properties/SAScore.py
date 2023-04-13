@@ -8,7 +8,6 @@ from properties.Property import Property
 
 # Local 
 from .SA_Score.sascore import SA_Scorer
-sascorer = SA_Scorer()
 
 class SAScore(Property):
     """
@@ -23,6 +22,12 @@ class SAScore(Property):
         For details, see: http://www.doi.org/10.1186/1758-2946-1-8
     """
 
+    def __init__(self, prop_name, **kwargs):
+        # Initialize super
+        super().__init__(prop_name, **kwargs)
+        self.sascorer = SA_Scorer()
+
+
     def value(self, 
               query_mol:rdkit.Chem.Mol,
               **kwargs) -> float:
@@ -36,7 +41,7 @@ class SAScore(Property):
         sa_score = 10.0
         if query_mol is not None:
             try:
-                sa_score = sascorer.predict([query_mol])[0] 
+                sa_score = self.sascorer.predict([query_mol])[0] 
             except:
                 # In some cases,RDKit throws a weird exception and crashes.
                 # Here, we just catch that and continue, leaving the value as the
