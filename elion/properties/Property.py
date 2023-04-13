@@ -50,7 +50,7 @@ class Property(ABC):
             self.bomb_input(self.prop_name,msg)
             
         self.prop_class = prop_class.lower()
-        print(f"Loading {self.prop_name} as a {self.prop_class} property.")
+        print(f"Loading {self.prop_name} as a {self.prop_class.upper()} property.")
 
         # Secondary properties must have a weight associated
         if self.prop_class == 'secondary':
@@ -129,6 +129,8 @@ class Property(ABC):
             # Step size must be =! 0
             if self.thresh_step == 0:
                 self.bomb_input(self.prop_name, "Threshold step size must be =! 0")
+        # Finished loading this property.
+        print("-"*50)
 
     def bomb_input(self, prop, msg):
         """For sending a message and quitting if there's an error in the input"""        
