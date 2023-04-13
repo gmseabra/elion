@@ -105,6 +105,7 @@ def read_input_file(input_file_name:str)-> Dict:
     properties = {}
     if 'properties' in cfg_input.keys():
         for prop in cfg_input['properties'].keys():
+            print("-"*50)
             module = importlib.import_module(f'properties.{prop}')
             module = getattr(module, prop)
             properties[prop] = module(prop,**cfg_input['properties'][prop])

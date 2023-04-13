@@ -130,7 +130,6 @@ class Property(ABC):
             if self.thresh_step == 0:
                 self.bomb_input(self.prop_name, "Threshold step size must be =! 0")
         # Finished loading this property.
-        print("-"*50)
 
     def bomb_input(self, prop, msg):
         """For sending a message and quitting if there's an error in the input"""        
