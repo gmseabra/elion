@@ -23,6 +23,9 @@ properties:
     rew_weight: 0.7
     rew_class: 'soft'
     rew_acc: 0.05
+  ScaffoldMatch:
+    prop_class: 'primary'
+    scaffold_file: "elion/example_template.smarts"
   SAScore:
     prop_class: 'primary'
   QEDScore:
