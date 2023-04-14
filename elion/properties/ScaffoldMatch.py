@@ -42,27 +42,6 @@ class ScaffoldMatch(Property):
 
     """
 
-    params = rdFMCS.MCSParameters()
-    
-    params.AtomCompareParameters.CompleteRingsOnly   = True
-    params.AtomCompareParameters.RingMatchesRingOnly = True
-    params.AtomCompareParameters.MatchChiralTag      = False
-    params.AtomCompareParameters.MatchFormalCharge   = False
-    params.AtomCompareParameters.MatchIsotope        = False
-    params.AtomCompareParameters.MatchValences       = False
-
-    params.BondCompareParameters.RingMatchesRingOnly   = True
-    params.BondCompareParameters.CompleteRingsOnly     = True
-    params.BondCompareParameters.MatchFusedRings       = False
-    params.BondCompareParameters.MatchFusedRingsStrict = False
-    params.BondCompareParameters.MatchStereo           = False
-    
-    # Requests the use of the `CompareQueryAtoms` class (defined above) to compare atoms
-    params.AtomTyper = CompareQueryAtoms()
-
-    # No custom matching set for bonds. It will just use the `CompareAny`, which allows
-    # bonds of any order to be compared.
-    params.BondTyper = rdFMCS.BondCompare.CompareAny
 
     def __init__(self, prop_name, **kwargs):
 
@@ -85,11 +64,33 @@ class ScaffoldMatch(Property):
             # This prints info, but also forces the info about rings to be calculated.
             # It is necessary because (a bug?) in RDKit that does not calculate the
             # infor about rings until they are requested (or printed)
-            print(f"\tAtom  AtNum  InRing?  Arom?")
+            print("\tAtom  AtNum  InRing?  Arom?")
             for idx, atom in enumerate(template.GetAtoms()):
                 print(f"\t{idx:>4d}  {atom.GetAtomicNum():5d}  {str(atom.IsInRing()):>7}  {str(atom.GetIsAromatic()):>5}")
             self.scaffold = template
-            print(f"  Scaffold: ", Chem.MolToSmiles(self.scaffold))
+            print("  Scaffold: ", Chem.MolToSmiles(self.scaffold))
+            
+        # Sets up the parameters
+        self.params = rdFMCS.MCSParameters()
+
+        self.params.AtomCompareParameters.CompleteRingsOnly   = True
+        self.params.AtomCompareParameters.RingMatchesRingOnly = True
+        self.params.AtomCompareParameters.MatchChiralTag      = False
+        self.params.AtomCompareParameters.MatchFormalCharge   = False
+        self.params.AtomCompareParameters.MatchIsotope        = False
+        self.params.AtomCompareParameters.MatchValences       = False
+        self.params.BondCompareParameters.RingMatchesRingOnly   = True
+        self.params.BondCompareParameters.CompleteRingsOnly     = True
+        self.params.BondCompareParameters.MatchFusedRings       = False
+        self.params.BondCompareParameters.MatchFusedRingsStrict = False
+        self.params.BondCompareParameters.MatchStereo           = False
+        
+        # Requests the use of the `CompareQueryAtoms` class (defined above) to compare atoms
+        self.params.AtomTyper = CompareQueryAtoms()
+
+        # No custom matching set for bonds. It will just use the `CompareAny`, which allows
+        # bonds of any order to be compared.
+        self.params.BondTyper = rdFMCS.BondCompare.CompareAny
         
     def value(self,query_mol="CCCCC", **kwargs):
         """
@@ -99,8 +100,19 @@ class ScaffoldMatch(Property):
             Returns:
                 float: The percent scaffold match [0,1].
         """
-        return 30
-
+        scaffold = self.scaffold
+        match = 0.0
+        if query_mol is not None:
+            maxMatch = scaffold.GetNumAtoms()
+            match = rdFMCS.FindMCS([scaffold,query_mol],self.params).numAtoms / maxMatch
+        return match
+    
     def reward(self, prop_value, **kwargs):
-        return 15
+        threshold = self.threshold
+
+        reward = self.min_reward
+        if prop_value >= threshold:
+            reward = self.max_reward
+    
+        return reward
 
