@@ -7,6 +7,15 @@ if __name__ == "__main__":
     # Just for testing purposes
     import pprint
     example_mols = [
+        "COC1=CC=C(S(=O)(=O)O)C(=O)C=C(O)C(C)c2ncc(Cl)cc2C1=O",
+        "COc1cc2c(cc1OCCCCC(=O)O)N=C1CCCC1C(=O)O2",
+        "O=C1CCNc2cc(c(Cl)cn2)NC(N2CCC(NC3=NC=C(c4ccccc4)C3=O)CC2)=N1",
+        "O=C1NC=C(Nc2ccccc2)C1=Cc1ccc(Cl)cc1",
+        "CN1CCCC1CSCCc1cccc(Cl)c1",
+        "CCCCOc1ccc(COc2ccccc2C#N)cc1O",
+        "CNC1CCC(Nc2ncnc3cc(-c4ccc(F)cc4)[nH]c23)CC1",
+        "Cc1cc(Cl)ccc1NC(=O)C1CCCN1CCNCCc1ccccc1",
+        "Cc1cc(-c2ccc(N3CCCC3=O)cc2)ccc1CCOC1CCNCC1N",
         "CCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(CC4=CC=C(F)C=C4)CC3)=CC=C1OCC)=N2",
         "CCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(CC4=CC=CC=C4)CC3)=CC=C1OCC)=N2",
         "CCCCCCC1=CC=C(CN2N=C(CCC)C3=C2C(=O)NC(C2=CC(S(=O)(=O)N4CCN(CCC5=CC=CS5)CC4)=CC=C2OCC)=N3)C=C1",

@@ -26,6 +26,7 @@ properties:
   ScaffoldMatch:
     prop_class: 'primary'
     scaffold_file: "elion/example_template.smarts"
+    threshold: 0.5
   SAScore:
     prop_class: 'primary'
   QEDScore:
