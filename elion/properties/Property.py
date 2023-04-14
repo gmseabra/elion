@@ -11,7 +11,7 @@ class Property(ABC):
                        prop_class='primary', rew_weight=None,
                        rew_class='hard', rew_acc=None,
                        optimize=False,
-                       threshold_init=0.0,
+                       threshold=0.0,
                        threshold_limit=None,
                        threshold_step=None,
                        **kwargs):
@@ -34,7 +34,7 @@ class Property(ABC):
                                         Defaults to None.
             optimize (bool, optional): Whether or not to optimize this property.
                                        Defaults to False.
-            threshold_init (float, optional): Initial property threshold. Defaults to 0.0.
+            threshold (float, optional): Initial property threshold. Defaults to 0.0.
             threshold_limit (_type_, optional): Must be modified in case of optimization. 
                                                 Defines the thresold limit. Defaults to None.
             threshold_step (_type_, optional): _description_. Defaults to None.
@@ -75,12 +75,16 @@ class Property(ABC):
         # We set a default threshold to 0.0, in case a uer does not want
         # to calculate rewards.
         try:
-            self.thresh_ini = float(threshold_init)
+            self.thresh_ini = float(threshold)
         except TypeError:
-           msg=f"'threshold_init = {threshold_init}' is invalid. It must a float."
+           msg=f"'threshold = {threshold}' is invalid. It must a float."
            self.bomb_input(self.prop_name, msg)
         print(f"  Initial Threshold = {self.thresh_ini}")
         self.threshold = self.thresh_ini
+
+        # Max and min rewards. Set here so that they can be controlled later if needed.
+        self.max_reward = 15
+        self.min_reward = 1
         
         # If the reward class is 'soft', we need an acceptance ratio (softness)
         # for values that fall outside the specified threshold:
