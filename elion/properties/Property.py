@@ -80,6 +80,7 @@ class Property(ABC):
            msg=f"'threshold_init = {threshold_init}' is invalid. It must a float."
            self.bomb_input(self.prop_name, msg)
         print(f"  Initial Threshold = {self.thresh_ini}")
+        self.threshold = self.thresh_ini
         
         # If the reward class is 'soft', we need an acceptance ratio (softness)
         # for values that fall outside the specified threshold:
