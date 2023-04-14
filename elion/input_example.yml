@@ -29,6 +29,7 @@ properties:
     threshold: 0.5
   SAScore:
     prop_class: 'primary'
+    threshold: 3.0
   QEDScore:
     prop_class: 'primary'
     threshold: 0.5
