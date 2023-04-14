@@ -42,8 +42,21 @@ class QEDScore(Property):
         return qed_score
     
     def reward(self, prop_value, **kwargs):
-        return 5
+        """Calculates the reward
 
+        Args:
+            prop_value (float): The value for the property
+
+        Returns:
+            float: The reward
+        """
+        
+        threshold = self.threshold
+        reward = self.min_reward
+        if prop_value >= threshold:
+            reward = self.max_reward
+    
+        return reward
 
 
  

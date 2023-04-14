@@ -31,6 +31,7 @@ properties:
     prop_class: 'primary'
   QEDScore:
     prop_class: 'primary'
+    threshold: 0.5
   VinaScore: 
     prop_class: 'primary'
     optimize: True
