@@ -2,6 +2,13 @@ from pathlib import Path
 from rdkit import Chem
 import input_reader
 
+
+
+# NOTE: At the moment, the code is passing molecule-by-molecule to the 
+#       predictor. This need to be changed to pass a list of molecules
+#       so that the predictor calculates properties for the whole list 
+#       at once.
+
 def predict_properties(molecules,properties):
     """Calculates the properties for a list of molecules
 
