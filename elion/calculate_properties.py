@@ -45,33 +45,33 @@ if __name__ == "__main__":
 
     # Properties
     print( "\nProperties")
-    print(f"      {'Molecule':{length_lim+3}s}", end="")
+    print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
     
     for ind, mol in enumerate(example_mols):
-        print(f"{ind:>4d}  {mol:{length_lim}.{length_lim}s}...", end="")
+        print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)
-            value = cls.value(Chem.MolFromSmiles(mol))
-            print(f"  {value:^{title_len}.2f}", end="")
+            value = cls.predict(Chem.MolFromSmiles(mol))
+            print(f"  {value:>{title_len}.2f}", end="")
         print("")
 
     # Rewards
     print( "\nRewards")
-    print(f"      {'Molecule':{length_lim+3}s}", end="")
+    print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
     
     for ind, mol in enumerate(example_mols):
-        print(f"{ind:>4d}  {mol:{length_lim}.{length_lim}s}...", end="")
+        print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)
-            value = cls.value(Chem.MolFromSmiles(mol))
+            value = cls.predict(Chem.MolFromSmiles(mol))
             reward = cls.reward(value)
-            print(f"  {reward:^{title_len}.2f}", end="")
+            print(f"  {reward:>{title_len}.2f}", end="")
         print("")

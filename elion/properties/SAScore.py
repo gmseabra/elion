@@ -28,7 +28,7 @@ class SAScore(Property):
         self.sascorer = SA_Scorer()
 
 
-    def value(self, 
+    def predict(self, 
               query_mol:rdkit.Chem.Mol,
               **kwargs) -> float:
         """

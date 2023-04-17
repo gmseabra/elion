@@ -92,7 +92,7 @@ class ScaffoldMatch(Property):
         # bonds of any order to be compared.
         self.params.BondTyper = rdFMCS.BondCompare.CompareAny
         
-    def value(self,query_mol="CCCCC", **kwargs):
+    def predict(self,query_mol="CCCCC", **kwargs):
         """
             Args:
                 query_mol (rdkit.Chem.Mol): The query molecule

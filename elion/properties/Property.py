@@ -144,7 +144,7 @@ class Property(ABC):
 
     # The methods below MUST be overridden by whatever property is implemented
     @abstractmethod
-    def value(self, mol, **kwargs):
+    def predict(self, mol, **kwargs):
         """ Given an molecule (format depending on implementation, 
             but usually RDKit molecule or SMILES), 
             returns a value for the property (float)

@@ -21,7 +21,7 @@ class QEDScore(Property):
             1 == GOOD (all properties favourable)
     """
 
-    def value(self, 
+    def predict(self, 
               query_mol:rdkit.Chem.Mol,
               **kwargs) -> float:
         """
