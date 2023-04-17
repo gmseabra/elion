@@ -177,17 +177,25 @@ class chembert_model:
 
         predictions  = []
         with torch.no_grad():
-            pbar_update_n = params['batch_size']
-            with tqdm(dataloader, total=len(dataset), desc="Predicting activities ", leave=False) as pbar:
-                for i, data in enumerate(dataloader):
-                    data = {key:value.to(device) for key, value in data.items()}
-                    position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
-                    output = model.forward(data["smiles_bert_input"], position_num,
-                                        adj_mask=data["smiles_bert_adj_mask"],
-                                        adj_mat=data["smiles_bert_adjmat"])
-                    output = output[:,0]
-                    predictions.extend(output[:,0].tolist())
-                    pbar.update(len(data["smiles_bert_input"]))
+            # pbar_update_n = params['batch_size']
+            # with tqdm(dataloader, total=len(dataset), desc="Predicting activities ", leave=False) as pbar:
+            #     for i, data in enumerate(dataloader):
+            #         data = {key:value.to(device) for key, value in data.items()}
+            #         position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
+            #         output = model.forward(data["smiles_bert_input"], position_num,
+            #                             adj_mask=data["smiles_bert_adj_mask"],
+            #                             adj_mat=data["smiles_bert_adjmat"])
+            #         output = output[:,0]
+            #         predictions.extend(output[:,0].tolist())
+            #         pbar.update(len(data["smiles_bert_input"]))
+            for i, data in enumerate(dataloader):
+                data = {key:value.to(device) for key, value in data.items()}
+                position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
+                output = model.forward(data["smiles_bert_input"], position_num,
+                                    adj_mask=data["smiles_bert_adj_mask"],
+                                    adj_mat=data["smiles_bert_adjmat"])
+                output = output[:,0]
+                predictions.extend(output[:,0].tolist())
             return predictions
 
 def SMILES_Dataset_from_file(smiles_file):
