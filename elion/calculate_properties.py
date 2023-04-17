@@ -1,38 +1,87 @@
 from pathlib import Path
 from rdkit import Chem
-
 import input_reader
 
+def predict_properties(molecules,properties):
+    """Calculates the properties for a list of molecules
+
+    Args:
+        molecules ([str]): List of SMILES strings
+        properies (dict):  Dictionary with properties as keys and details
+                           of predictor functions as values.
+    Returns:
+        Dict: Dictionary of properties as keys and predictions (floats) as values
+    """
+    pred = {}
+    for _prop in properties.keys():
+        pred[_prop] = []
+
+    for _mol in molecules:
+        for _prop, _cls in properties.items():
+            _value = _cls.predict(Chem.MolFromSmiles(_mol))
+            pred[_prop].append(_value)
+    return pred
+
+
+
+def predict_rewards(n_mols, predictions, properties):
+    """Calculates the rewards, given a dict of pre-calculated properties.
+
+    Args:
+        n_mols (int): number of molecules
+        predictions (dict): Dictionary with properties as keys and lists of
+                            predicted values as values.
+        properties (_type_): Dictionary with properties as keys and details
+                             of the property pbjects as values
+
+    Returns:
+        dict: Dict with property names as keys and rewards as values.
+    """
+
+    rew = {}
+    for _prop in properties.keys():
+        rew[_prop] = []
+
+    # Predicts rewards molecule-wise
+    for _mol in range(n_mols):
+        for _prop, cls in properties.items():
+            _value = predictions[_prop][_mol]
+            rew[_prop].append(cls.reward(_value))
+    return rew
+
 if __name__ == "__main__":
-    # Just for testing purposes
-    import pprint
-    example_mols = [
-        "COC1=CC=C(S(=O)(=O)O)C(=O)C=C(O)C(C)c2ncc(Cl)cc2C1=O",
-        "COc1cc2c(cc1OCCCCC(=O)O)N=C1CCCC1C(=O)O2",
-        "O=C1CCNc2cc(c(Cl)cn2)NC(N2CCC(NC3=NC=C(c4ccccc4)C3=O)CC2)=N1",
-        "O=C1NC=C(Nc2ccccc2)C1=Cc1ccc(Cl)cc1",
-        "CN1CCCC1CSCCc1cccc(Cl)c1",
-        "CCCCOc1ccc(COc2ccccc2C#N)cc1O",
-        "CNC1CCC(Nc2ncnc3cc(-c4ccc(F)cc4)[nH]c23)CC1",
-        "Cc1cc(Cl)ccc1NC(=O)C1CCCN1CCNCCc1ccccc1",
-        "Cc1cc(-c2ccc(N3CCCC3=O)cc2)ccc1CCOC1CCNCC1N",
-        "CCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(CC4=CC=C(F)C=C4)CC3)=CC=C1OCC)=N2",
-        "CCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(CC4=CC=CC=C4)CC3)=CC=C1OCC)=N2",
-        "CCCCCCC1=CC=C(CN2N=C(CCC)C3=C2C(=O)NC(C2=CC(S(=O)(=O)N4CCN(CCC5=CC=CS5)CC4)=CC=C2OCC)=N3)C=C1",
-        "CCCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(C(=O)C4=CC=CC=C4)CC3)=CC=C1OCC)=N2",
-        "CCCCCOCCOCCOCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(C)CC3)=CC=C1OCC)=N2",
-        "CCCCCCCCCCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(C)CC3)=CC=C1OCC)=N2",
-        "CCCC1=NN(CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCO)C2=C1N=C(C1=CC(S(=O)(=O)N3CCN(C(O)=NO)CC3)=CC=C1OCC)NC2=O",
-        "CCCCCCCCCCCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(C(=N)S)CC3)=CC=C1OCC)=N2",
-        "CCCCCCCC1=CC=C(C2=CSC(CCCCCCN3CCN(S(=O)(=O)C4=CC=C(OCC)C(C5=NC6=C(C(=O)N5)N(C)N=C6CCC)=C4)CC3)=N2)C=C1",
-        "CCCCCCCCCCCCCN1N=C(CCC)C2=C1C(=O)NC(C1=CC(S(=O)(=O)N3CCN(CC4CCCN4C(=O)OC)CC3)=CC=C1OCC)=N2",
-    ]
+    #"""
+    #    Reads a SMILES file, and calculates properties and rewards
+    #    for each molecule in the file.
+    #"""
 
     root_dir = Path().cwd()
     input_file = Path(root_dir,"elion/input_example.yml")
     config = input_reader.read_input_file(input_file)
+
+    # Debug: Prints the confic dict
     if config['Control']['verbosity'] > 0:
+        import pprint
         pprint.pprint(config)
+
+    # Read SMILES file
+    example_mols = []
+    smiles_file = Path(config['Control']['smiles_file'])
+
+    if smiles_file.is_file():
+        with open(smiles_file,'r') as smif:
+            for line in smif.readlines():
+                example_mols.append(line.split()[0])
+    else:
+        msg = ( "ERROR when reading config file:\n"
+               f"Could not find the smiles_file <{smiles_file.absolute()}>.")
+        quit(msg)
+    
+    # Calculates Properties and Rewards
+    predictions = predict_properties(example_mols, config['Properties'])
+    rewards = predict_rewards(len(example_mols), predictions,config['Properties'])  
+
+    # Pretty-print results 
 
     # For pretty-printing purposes, find the longest
     # SMILES string to print
@@ -43,35 +92,32 @@ if __name__ == "__main__":
     if length_lim > 30:
         length_lim = 30
 
-    # Properties
+    # Prints Properties
     print( "\nProperties")
     print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
-    
     for ind, mol in enumerate(example_mols):
         print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)
-            value = cls.predict(Chem.MolFromSmiles(mol))
+            value = predictions[prop][ind]
             print(f"  {value:>{title_len}.2f}", end="")
         print("")
 
-    # Rewards
+    # Prints Rewards
     print( "\nRewards")
     print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
-    
     for ind, mol in enumerate(example_mols):
         print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)
-            value = cls.predict(Chem.MolFromSmiles(mol))
-            reward = cls.reward(value)
+            reward = rewards[prop][ind]
             print(f"  {reward:>{title_len}.2f}", end="")
         print("")

@@ -5,7 +5,7 @@ control:
   max_iter: 1000
   comment: "ReLeaSE Generator Test"
   verbosity: 0
-  smi_file: "/home/seabra/work/li/elion_dev/bleeding/elion/example_smiles.smi"
+  smiles_file: "elion/example_smiles.smi"
 generator:
   name: "ReLeaSE"
   author: "Isayev"
