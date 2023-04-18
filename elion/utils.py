@@ -164,4 +164,34 @@ def print_results(mols, results,header="", LENGTH_LIM=30):
             value = results[prop][ind]
             print(f"  {value:>{title_len}.2f}", end="")
         print("")
+
+    # Stats
+    print(f"{'':>6s}  {'MAXIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
+    for prop, cls in results.items():
+        title_len = len(prop)
+        maximum = np.max(results[prop])
+        print(f"  {maximum:>{title_len}.2f}", end="")
+    print("")
+
+    print(f"{'':>6s}  {'MINIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
+    for prop, cls in results.items():
+        title_len = len(prop)
+        minimum = np.min(results[prop])
+        print(f"  {minimum:>{title_len}.2f}", end="")
+    print("")
+
+    print(f"{'':>6s}  {'AVERAGES:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
+    for prop, cls in results.items():
+        title_len = len(prop)
+        average = np.average(results[prop])
+        print(f"  {average:>{title_len}.2f}", end="")
+    print("")
+        
+    print(f"{'':>6s}  {'STD DEV:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
+    for prop, cls in results.items():
+        title_len = len(prop)
+        stdev = np.std(results[prop])
+        print(f"  {stdev:>{title_len}.2f}", end="")
+    print("")
+
     print("")
