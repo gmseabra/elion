@@ -41,10 +41,7 @@ if __name__ == "__main__":
 
     estimator = Estimators(config['Properties'])
     predictions = estimator.estimate_properties(mols)
-    rewards = estimator.estimate_rewards(len(mols), predictions)
-      
-    # predictions = estimators.estimate_properties(mols, config['Properties'])
-    # rewards = estimators.estimate_rewards(len(mols), predictions,config['Properties'])  
+    rewards = estimator.estimate_rewards(predictions)
 
     # Pretty-print results
     # ====================
@@ -60,14 +57,14 @@ if __name__ == "__main__":
     # Prints Properties
     print( "\nProperties")
     print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
-    for prop, cls in config['Properties'].items():
+    for prop, cls in predictions.items():
         print(f"  {prop}", end="")
     print("")
     for ind, smi in enumerate(smis):
         CONT = "..." if len(smi) > LENGTH_LIM else "   "
         print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
 
-        for prop, cls in config['Properties'].items():
+        for prop, cls in predictions.items():
             title_len = len(prop)
             value = predictions[prop][ind]
             print(f"  {value:>{title_len}.2f}", end="")
@@ -76,7 +73,7 @@ if __name__ == "__main__":
     # Prints Rewards
     print( "\nRewards")
     print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
-    for prop, cls in config['Properties'].items():
+    for prop, cls in rewards.items():
         print(f"  {prop}", end="")
     print("")
     
@@ -84,7 +81,7 @@ if __name__ == "__main__":
         CONT = "..." if len(smi) > LENGTH_LIM else "   "
         print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
 
-        for prop, cls in config['Properties'].items():
+        for prop, cls in rewards.items():
             title_len = len(prop)
             reward = rewards[prop][ind]
             print(f"  {reward:>{title_len}.2f}", end="")

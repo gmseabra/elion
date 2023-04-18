@@ -13,6 +13,7 @@ class Estimators:
 
     def __init__(self, properties_cfg):
         self.properties = {}
+        self.n_mols = 0
         for prop in properties_cfg:
             print("-"*50)
             module = importlib.import_module(f'properties.{prop}')
@@ -38,16 +39,17 @@ class Estimators:
 
         _mols = []
         _mols.extend(mols)
+        self.n_mols = len(_mols)
+        
         for _prop, _cls in self.properties.items():
             predictions = _cls.predict(mols)
             pred[_prop] = predictions
         return pred
 
-    def estimate_rewards(self, n_mols, predictions):
+    def estimate_rewards(self, predictions):
         """Calculates the rewards, given a dict of pre-calculated properties.
 
         Args:
-            n_mols (int): number of molecules
             predictions (dict): Dictionary with properties as keys and lists of
                                 predicted values as values.
             properties (_type_): Dictionary with properties as keys and details
@@ -58,9 +60,31 @@ class Estimators:
         """
 
         rew = {}
-
         for _prop, cls in self.properties.items():
             _values = predictions[_prop]
+
+            if len(_values) != self.n_mols:
+                msg = ( "ERROR: Something went wrong...\n"
+                       f"Expecting {self.n_mols} values, but got only {len(_values)}"
+                       f"for property {_prop}.")
+                quit(msg)
+                
             rew[_prop] = cls.reward(_values)
+        rew["TOTAL"] = self.total_reward(rew)
         return rew
+
+    def total_reward(self, rewards):
+
+        total_rew = []
+        for mol in range(self.n_mols):
+            total_rew_mol = 0.0
+            for _prop, cls in self.properties.items():
+                this_rew = rewards[_prop][mol]
+
+                if cls.prop_class == 'secondary':
+                    this_rew = this_rew * cls.rew_coeff
+                total_rew_mol += this_rew
+                    
+            total_rew.append(total_rew_mol)
+        return total_rew
 

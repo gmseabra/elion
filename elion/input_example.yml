@@ -17,10 +17,10 @@ generator:
 properties:
   Prop1:
     prop_class: 'secondary'
-    rew_weight: 0.3
+    rew_coeff: 0.3
   Prop2: 
     prop_class: 'secondary'
-    rew_weight: 0.7
+    rew_coeff: 0.7
     rew_class: 'soft'
     rew_acc: 0.05
   ScaffoldMatch:

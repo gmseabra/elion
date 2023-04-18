@@ -8,7 +8,7 @@ class Property(ABC):
     """
 
     def __init__(self, prop_name, 
-                       prop_class='primary', rew_weight=None,
+                       prop_class='primary', rew_coeff=None,
                        rew_class='hard', rew_acc=None,
                        optimize=False,
                        threshold=0.0,
@@ -23,8 +23,8 @@ class Property(ABC):
             prop_name (str): The name of the property
             prop_class (str, optional): Property class, 'primary' or 'secondary'. 
                                         Defaults to 'primary'.
-            rew_weight (_type_, optional): Must be modified for secondary properties.
-                                           Defines this property weight in the reward function. 
+            rew_coeff (_type_, optional): Must be modified for secondary properties.
+                                           Defines this property coeff in the reward function. 
                                            Defaults to None.
             rew_class (str, optional): Type of reward definition, 'hard' or 'soft'. 
                                        Defaults to 'hard'.
@@ -52,15 +52,15 @@ class Property(ABC):
         self.prop_class = prop_class.lower()
         print(f"Loading {self.prop_name} as a {self.prop_class.upper()} property.")
 
-        # Secondary properties must have a weight associated
+        # Secondary properties must have a coeff associated
         if self.prop_class == 'secondary':
             try:
-                self.rew_weight = float(rew_weight)
+                self.rew_coeff = float(rew_coeff)
             except TypeError:
-                msg = (f"'rew_weight = {rew_weight}' (invalid or missing),"
+                msg = (f"'rew_coeff = {rew_coeff}' (invalid or missing),"
                         "but is required by secondary properties.")
                 self.bomb_input(self.prop_name, msg)
-            print(f"  Reward Weight = {self.rew_weight}")
+            print(f"  Reward Weight = {self.rew_coeff}")
         
         # Reward class. Must be either 'hard' or 'soft' reward.
         if rew_class.lower() not in ['hard','soft']: 

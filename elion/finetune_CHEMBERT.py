@@ -241,7 +241,7 @@ def finetune_model(smiles_file,
         print("Using GPU acceleration")
         model = nn.DataParallel(model)
 
-    optim = Adam(model.parameters(), lr=params['learning_rate'], weight_decay=0)
+    optim = Adam(model.parameters(), lr=params['learning_rate'], coeff_decay=0)
     if task == 'classification':
         criterion = nn.BCEWithLogitsLoss()
     else:

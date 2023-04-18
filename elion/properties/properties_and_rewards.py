@@ -193,11 +193,11 @@ def estimate_capped_rewards_batch(properties: Dict, reward_params: Dict) -> Dict
     props.remove('prob_active')
     props.remove('scaffold_match') 
 
-    # This will get the weight of all the other properties and
+    # This will get the coeff of all the other properties and
     # transform into probabilities. The sum of all probabilities
     # must be 1.
     for prop in props:
-        probabilities.append(reward_params[prop]['weight'])
+        probabilities.append(reward_params[prop]['coeff'])
     probabilities = np.array(probabilities)
     probabilities = probabilities / probabilities.sum()
 
@@ -291,7 +291,7 @@ def estimate_capped_rewards_one(properties:Dict,reward_params:Dict) -> Dict:
 
         To get a reward of 15 the molecule must meet the `prob_active` and 
         `scaffold_match` requirements, plus the requirements for one extra property
-        chosen at random with probabilities equal to the property weight.
+        chosen at random with probabilities equal to the property coeff.
         
     Args:
         properties (Dict): The calculated properties
@@ -311,11 +311,11 @@ def estimate_capped_rewards_one(properties:Dict,reward_params:Dict) -> Dict:
     props.remove('prob_active')    # MANDATORY
     props.remove('scaffold_match') # MANDATORY
 
-    # This will get the weight of all the other properties and
+    # This will get the coeff of all the other properties and
     # transform into probabilities. The sum of all probabilities
     # must be 1.
     for prop in props:
-        probabilities.append(reward_params[prop]['weight'])
+        probabilities.append(reward_params[prop]['coeff'])
     probabilities = np.array(probabilities)
     probabilities = probabilities / probabilities.sum()
 
