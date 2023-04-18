@@ -1,6 +1,7 @@
 from pathlib import Path
 from rdkit import Chem
 import input_reader
+from utils import print_results
 from properties.Estimators import Estimators
 
 if __name__ == "__main__":
@@ -43,46 +44,7 @@ if __name__ == "__main__":
     predictions = estimator.estimate_properties(mols)
     rewards = estimator.estimate_rewards(predictions)
 
-    # Pretty-print results
-    # ====================
-    # For pretty-printing purposes, find the longest
-    # SMILES string to print
-    LENGTH_LIM = 0
-    for smi in smis:
-        if len(smi) > LENGTH_LIM:
-            LENGTH_LIM = len(smi)
-    if LENGTH_LIM > 30:
-        LENGTH_LIM = 30
-
-    # Prints Properties
-    print( "\nProperties")
-    print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
-    for prop, cls in predictions.items():
-        print(f"  {prop}", end="")
-    print("")
-    for ind, smi in enumerate(smis):
-        CONT = "..." if len(smi) > LENGTH_LIM else "   "
-        print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
-
-        for prop, cls in predictions.items():
-            title_len = len(prop)
-            value = predictions[prop][ind]
-            print(f"  {value:>{title_len}.2f}", end="")
-        print("")
-
-    # Prints Rewards
-    print( "\nRewards")
-    print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
-    for prop, cls in rewards.items():
-        print(f"  {prop}", end="")
-    print("")
+    # Prints results
+    print_results(smis, predictions, header="PROPERTIES")
+    print_results(smis, rewards, header="REWARDS")
     
-    for ind, smi in enumerate(smis):
-        CONT = "..." if len(smi) > LENGTH_LIM else "   "
-        print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
-
-        for prop, cls in rewards.items():
-            title_len = len(prop)
-            reward = rewards[prop][ind]
-            print(f"  {reward:>{title_len}.2f}", end="")
-        print("")

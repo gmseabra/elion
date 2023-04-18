@@ -55,7 +55,7 @@ def read_input_file(input_file_name:str)-> Dict:
         for option, value in cfg_input['control'].items():
             ctrl[option] = value
 
-    # IF this is a restart, sets the history acccordingly
+    # If this is a restart, sets the history acccordingly
     if ctrl['restart']:
         
         # Tries to find the info from the biasing_history file
@@ -99,6 +99,14 @@ def read_input_file(input_file_name:str)-> Dict:
     if 'properties' in cfg_input.keys():
         cfg['Properties'] = cfg_input['properties']
 
+    # For DEBUG purposese, print the whole configuration
+    if cfg['Control']['verbosity'] > 2:
+        print("="*80)
+        print(f"{'FINAL CONFIGURATION'}:^80s")
+        print("="*80)
+        pprint.pprint(cfg)
+        print("="*80)
+
     return cfg
 
 if __name__ == "__main__":
@@ -108,7 +116,5 @@ if __name__ == "__main__":
     root_dir = Path().cwd()
     input_file = Path(root_dir,"elion/input_example.yml")
     result = read_input_file(input_file)
-    if result['Control']['verbosity'] > 0:
-        pprint.pprint(result)
     for prop, cls in result['Properties'].items():
         print(prop, cls.value())

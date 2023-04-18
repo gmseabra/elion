@@ -140,4 +140,28 @@ def save_smi_file(filename, smiles, predictions):
             output.write(line)
             i += 1
 
+# Print results
+def print_results(mols, results,header="", LENGTH_LIM=30):
+    """Prints a table with results
 
+    Args:
+        mols ([str]): Molecules in SMILES format
+        results (Dict): The results to be printed
+    """
+    
+    print(header)
+    print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
+    for prop, cls in results.items():
+        print(f"  {prop}", end="")
+    print("")
+    
+    for ind, smi in enumerate(mols):
+        CONT = "..." if len(smi) > LENGTH_LIM else "   "
+        print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
+
+        for prop, cls in results.items():
+            title_len = len(prop)
+            value = results[prop][ind]
+            print(f"  {value:>{title_len}.2f}", end="")
+        print("")
+    print("")
