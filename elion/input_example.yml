@@ -16,26 +16,21 @@ generator:
         
 properties:
   Prop1:
-    prop_class: 'secondary'
     rew_coeff: 0.3
   Prop2: 
-    prop_class: 'secondary'
     rew_coeff: 0.7
     rew_class: 'soft'
     rew_acc: 0.05
   ScaffoldMatch:
-    prop_class: 'primary'
     scaffold_file: "elion/example_template.smarts"
     threshold: 0.5
   SAScore:
-    prop_class: 'primary'
     threshold: 3.0
   QEDScore:
-    prop_class: 'primary'
     threshold: 0.5
   CHEMBERT_BE:
-    prop_class: 'primary'
     model_file: 'elion/properties/CHEMBERT/example_model.pt'
+    rew_coeff: 5.0
     optimize: True
     threshold: -8.0
     threshold_limit: -12.0

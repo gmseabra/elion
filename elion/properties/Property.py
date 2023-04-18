@@ -8,7 +8,7 @@ class Property(ABC):
     """
 
     def __init__(self, prop_name, 
-                       prop_class='primary', rew_coeff=None,
+                       rew_coeff=1.0,
                        rew_class='hard', rew_acc=None,
                        optimize=False,
                        threshold=0.0,
@@ -21,11 +21,8 @@ class Property(ABC):
 
         Args:
             prop_name (str): The name of the property
-            prop_class (str, optional): Property class, 'primary' or 'secondary'. 
-                                        Defaults to 'primary'.
-            rew_coeff (_type_, optional): Must be modified for secondary properties.
-                                           Defines this property coeff in the reward function. 
-                                           Defaults to None.
+            rew_coeff (_type_, optional): Defines this property coefficient in the reward function. 
+                                          Defaults to 1.0.
             rew_class (str, optional): Type of reward definition, 'hard' or 'soft'. 
                                        Defaults to 'hard'.
             rew_acc (_type_, optional): Must be modified for soft rewards.
@@ -43,24 +40,13 @@ class Property(ABC):
         # Name the property
         self.prop_name = prop_name
         
-        # Property class must be 'primary' or 'secondary'
-        if prop_class.lower() not in ['primary','secondary']: 
-            msg = (f"'prop_class = {prop_class}' is not a valid property class. "
-                    "It must be either 'primary' or 'secondary'.")
-            self.bomb_input(self.prop_name,msg)
-            
-        self.prop_class = prop_class.lower()
-        print(f"Loading {self.prop_name} as a {self.prop_class.upper()} property.")
-
-        # Secondary properties must have a coeff associated
-        if self.prop_class == 'secondary':
-            try:
-                self.rew_coeff = float(rew_coeff)
-            except TypeError:
-                msg = (f"'rew_coeff = {rew_coeff}' (invalid or missing),"
-                        "but is required by secondary properties.")
-                self.bomb_input(self.prop_name, msg)
-            print(f"  Reward Weight = {self.rew_coeff}")
+        # All properties start with coeff = 1.0, but can be altered
+        try:
+            self.rew_coeff = float(rew_coeff)
+        except TypeError:
+            msg = (f"'rew_coeff = {rew_coeff}' is invalid.")
+            self.bomb_input(self.prop_name, msg)
+        print(f"  Reward Weight = {self.rew_coeff}")
         
         # Reward class. Must be either 'hard' or 'soft' reward.
         if rew_class.lower() not in ['hard','soft']: 

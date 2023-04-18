@@ -70,7 +70,7 @@ class Estimators:
                 quit(msg)
                 
             rew[_prop] = cls.reward(_values)
-        rew["TOTAL"] = self.total_reward(rew)
+        rew["REW_TOTAL"] = self.total_reward(rew)
         return rew
 
     def total_reward(self, rewards):
@@ -79,10 +79,7 @@ class Estimators:
         for mol in range(self.n_mols):
             total_rew_mol = 0.0
             for _prop, cls in self.properties.items():
-                this_rew = rewards[_prop][mol]
-
-                if cls.prop_class == 'secondary':
-                    this_rew = this_rew * cls.rew_coeff
+                this_rew = rewards[_prop][mol] * cls.rew_coeff
                 total_rew_mol += this_rew
                     
             total_rew.append(total_rew_mol)
