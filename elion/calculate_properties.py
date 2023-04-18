@@ -1,54 +1,7 @@
 from pathlib import Path
 from rdkit import Chem
 import input_reader
-
-
-
-# NOTE: At the moment, the code is passing molecule-by-molecule to the 
-#       predictor. This need to be changed to pass a list of molecules
-#       so that the predictor calculates properties for the whole list 
-#       at once.
-
-def predict_properties(mols,properties):
-    """Calculates the properties for a list of molecules
-
-    Args:
-        mols ([RDKit ROMol]): List of RDKit ROMol objects
-        properies (dict):  Dictionary with properties as keys and details
-                           of predictor functions as values.
-    Returns:
-        Dict: Dictionary of properties as keys and predictions (floats) as values
-    """
-    pred = {}
-    for _prop in properties.keys():
-        pred[_prop] = []
-
-    _mols = [].extend(mols)
-    for _prop, _cls in properties.items():
-        predictions = _cls.predict(mols)
-        pred[_prop] = predictions
-    return pred
-
-def predict_rewards(n_mols, predictions, properties):
-    """Calculates the rewards, given a dict of pre-calculated properties.
-
-    Args:
-        n_mols (int): number of molecules
-        predictions (dict): Dictionary with properties as keys and lists of
-                            predicted values as values.
-        properties (_type_): Dictionary with properties as keys and details
-                             of the property pbjects as values
-
-    Returns:
-        dict: Dict with property names as keys and rewards as values.
-    """
-
-    rew = {}
-
-    for _prop, cls in properties.items():
-        _values = predictions[_prop]
-        rew[_prop] = cls.reward(_values)
-    return rew
+from properties.Estimators import Estimators
 
 if __name__ == "__main__":
     #"""
@@ -60,7 +13,7 @@ if __name__ == "__main__":
     input_file = Path(root_dir,"elion/input_example.yml")
     config = input_reader.read_input_file(input_file)
 
-    # Debug: Prints the confic dict
+    # Debug: Prints the config dict
     if config['Control']['verbosity'] > 0:
         import pprint
         pprint.pprint(config)
@@ -85,8 +38,13 @@ if __name__ == "__main__":
         quit(msg)
     
     # Calculates Properties and Rewards
-    predictions = predict_properties(mols, config['Properties'])
-    rewards = predict_rewards(len(mols), predictions,config['Properties'])  
+
+    estimator = Estimators(config['Properties'])
+    predictions = estimator.estimate_properties(mols)
+    rewards = estimator.estimate_rewards(len(mols), predictions)
+      
+    # predictions = estimators.estimate_properties(mols, config['Properties'])
+    # rewards = estimators.estimate_rewards(len(mols), predictions,config['Properties'])  
 
     # Pretty-print results
     # ====================

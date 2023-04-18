@@ -11,11 +11,6 @@ from typing import Dict
 from pathlib import Path
 import yaml
 
-# Chemistry
-# import rdkit
-# from rdkit import Chem
-
-
 # -----------------------------------------------------------------
 # Reads an input file and returns a dictionary of the contents.
 # -----------------------------------------------------------------
@@ -98,21 +93,11 @@ def read_input_file(input_file_name:str)-> Dict:
     # -------------------------------
     # Molecular Properties Prediction
     # -------------------------------
-    # The 'Properties' dict will contain OBJECTS to calculate properties and rewards.
-    # Each of those objects must implement at least 2 methods: 
-    #   1) 'value':  Gets an RDKit Mol object and returns a property value; and
-    #   2) 'reward': Gets a property value and returns a reward. 
-    properties = {}
+    # We don't initialize anything here. The properties are initialized
+    # by instantiating the 'Estimators' class.
+    
     if 'properties' in cfg_input.keys():
-        for prop in cfg_input['properties'].keys():
-            print("-"*50)
-            module = importlib.import_module(f'properties.{prop}')
-            module = getattr(module, prop)
-            properties[prop] = module(prop,**cfg_input['properties'][prop])
-        print("Done reading properties.")
-        print("="*80)
-        print("\n")
-    cfg['Properties'] = properties
+        cfg['Properties'] = cfg_input['properties']
 
     return cfg
 
@@ -127,36 +112,3 @@ if __name__ == "__main__":
         pprint.pprint(result)
     for prop, cls in result['Properties'].items():
         print(prop, cls.value())
-
-# OLD STUFF (REMOVED)
-# Keeping it here just in case I need it back.
-
-    # # Docking Score Predictor
-    # # -----------------------
-    # model_type = cfg['reward_properties']['prob_active']['model_type']
-    # model_file = cfg['reward_properties']['prob_active']['model_file']
-
-    # if model_type == "CHEMBERT":
-    #     # CHEMBERT model
-    #     from properties.activity.CHEMBERT.chembert import chembert_model
-
-    #     print(f"\nInitializiing CHEMBERT with state from file {model_file} ... ", end='')
-    #     activity_model = chembert_model(model_file)
-    #     print("Done.")
-    # cfg['reward_properties']['prob_active']['predictor'] = activity_model
-
-    # # Scaffold
-    # # --------
-    # template_smiles_file = cfg['reward_properties']['scaffold_match']['scaffold_file']
-    # print(f"\nLoading scaffold from {template_smiles_file}. ")
-    # with open(template_smiles_file,'r') as tf:
-    #     template = tf.readline().strip() 
-    # template = Chem.MolFromSmarts(template)
-
-    # # This prints info, but also forces the info about rings to be calculated.
-    # # It is necessary because (a bug?) in RDKit that does not calculate the
-    # # infor about rings until they are requested (or printed)
-    # print(f"Atom  AtNum  InRing?  Arom?")
-    # for idx, atom in enumerate(template.GetAtoms()):
-    #     print(f"{idx:>4d}  {atom.GetAtomicNum():5d}  {str(atom.IsInRing()):>7}  {str(atom.GetIsAromatic()):>5}")
-    # cfg['reward_properties']['scaffold_match']['scaffold'] = template
