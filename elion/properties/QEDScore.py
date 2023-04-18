@@ -36,14 +36,13 @@ class QEDScore(Property):
 
         for query_mol in _mols:
             score = -1.0
-            if query_mol is not None:
-                try:
-                    score = QED.qed(query_mol)
-                except:
-                    # RDKit gives exception when the molecules are weird. 
-                    # Here we just ignore them and pass a score of -1.
-                    pass
-                qed_scores.append(score)
+            try:
+                score = QED.qed(query_mol)
+            except:
+                # RDKit gives exception when the molecules are weird. 
+                # Here we just ignore them and pass a score of -1.
+                pass
+            qed_scores.append(score)
         return qed_scores
     
     def reward(self, prop_values, **kwargs):

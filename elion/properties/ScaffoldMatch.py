@@ -106,15 +106,14 @@ class ScaffoldMatch(Property):
 
         for query_mol in _mols:
             match = 0.0
-            if query_mol is not None:
-                try:
-                    maxMatch = scaffold.GetNumAtoms()
-                    match = rdFMCS.FindMCS([scaffold,query_mol],self.params).numAtoms / maxMatch
-                except:
-                    # RDKit gives exception when the molecules are weird. 
-                    # Here we just ignore them and pass a score of -1.
-                    pass
-                scaffold_match.append(match)
+            try:
+                maxMatch = scaffold.GetNumAtoms()
+                match = rdFMCS.FindMCS([scaffold,query_mol],self.params).numAtoms / maxMatch
+            except:
+                # RDKit gives exception when the molecules are weird. 
+                # Here we just ignore them and pass a score of -1.
+                pass
+            scaffold_match.append(match)
         return scaffold_match
 
     
