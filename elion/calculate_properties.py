@@ -9,11 +9,11 @@ import input_reader
 #       so that the predictor calculates properties for the whole list 
 #       at once.
 
-def predict_properties(molecules,properties):
+def predict_properties(mols,properties):
     """Calculates the properties for a list of molecules
 
     Args:
-        molecules ([str]): List of SMILES strings
+        mols ([RDKit ROMol]): List of RDKit ROMol objects
         properies (dict):  Dictionary with properties as keys and details
                            of predictor functions as values.
     Returns:
@@ -23,13 +23,11 @@ def predict_properties(molecules,properties):
     for _prop in properties.keys():
         pred[_prop] = []
 
-    for _mol in molecules:
-        for _prop, _cls in properties.items():
-            _value = _cls.predict(Chem.MolFromSmiles(_mol))
-            pred[_prop].append(_value)
+    _mols = [].extend(mols)
+    for _prop, _cls in properties.items():
+        predictions = _cls.predict(mols)
+        pred[_prop] = predictions
     return pred
-
-
 
 def predict_rewards(n_mols, predictions, properties):
     """Calculates the rewards, given a dict of pre-calculated properties.
@@ -46,14 +44,10 @@ def predict_rewards(n_mols, predictions, properties):
     """
 
     rew = {}
-    for _prop in properties.keys():
-        rew[_prop] = []
 
-    # Predicts rewards molecule-wise
-    for _mol in range(n_mols):
-        for _prop, cls in properties.items():
-            _value = predictions[_prop][_mol]
-            rew[_prop].append(cls.reward(_value))
+    for _prop, cls in properties.items():
+        _values = predictions[_prop]
+        rew[_prop] = cls.reward(_values)
     return rew
 
 if __name__ == "__main__":
@@ -72,41 +66,48 @@ if __name__ == "__main__":
         pprint.pprint(config)
 
     # Read SMILES file
-    example_mols = []
+    # Filters out invalid SMILES
+    mols, smis = [], []
     smiles_file = Path(config['Control']['smiles_file'])
 
     if smiles_file.is_file():
         with open(smiles_file,'r') as smif:
             for line in smif.readlines():
-                example_mols.append(line.split()[0])
+                smi = line.split()[0]
+                mol = Chem.MolFromSmiles(smi)
+                
+                if mol is not None:
+                    mols.append(mol)
+                    smis.append(smi)
     else:
         msg = ( "ERROR when reading config file:\n"
                f"Could not find the smiles_file <{smiles_file.absolute()}>.")
         quit(msg)
     
     # Calculates Properties and Rewards
-    predictions = predict_properties(example_mols, config['Properties'])
-    rewards = predict_rewards(len(example_mols), predictions,config['Properties'])  
+    predictions = predict_properties(mols, config['Properties'])
+    rewards = predict_rewards(len(mols), predictions,config['Properties'])  
 
-    # Pretty-print results 
-
+    # Pretty-print results
+    # ====================
     # For pretty-printing purposes, find the longest
     # SMILES string to print
-    length_lim = 0
-    for mol in example_mols:
-        if len(mol) > length_lim:
-            length_lim = len(mol)
-    if length_lim > 30:
-        length_lim = 30
+    LENGTH_LIM = 0
+    for smi in smis:
+        if len(smi) > LENGTH_LIM:
+            LENGTH_LIM = len(smi)
+    if LENGTH_LIM > 30:
+        LENGTH_LIM = 30
 
     # Prints Properties
     print( "\nProperties")
-    print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
+    print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
-    for ind, mol in enumerate(example_mols):
-        print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
+    for ind, smi in enumerate(smis):
+        CONT = "..." if len(smi) > LENGTH_LIM else "   "
+        print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)
@@ -116,12 +117,14 @@ if __name__ == "__main__":
 
     # Prints Rewards
     print( "\nRewards")
-    print(f"{'#':>6s}  {'Molecule':{length_lim+3}s}", end="")
+    print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
     for prop, cls in config['Properties'].items():
         print(f"  {prop}", end="")
     print("")
-    for ind, mol in enumerate(example_mols):
-        print(f"{ind:>6d}  {mol:{length_lim}.{length_lim}s}...", end="")
+    
+    for ind, smi in enumerate(smis):
+        CONT = "..." if len(smi) > LENGTH_LIM else "   "
+        print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
 
         for prop, cls in config['Properties'].items():
             title_len = len(prop)

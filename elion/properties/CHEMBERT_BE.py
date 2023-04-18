@@ -29,38 +29,45 @@ class CHEMBERT_BE(Property):
         print("Done.")
 
     def predict(self, 
-                query_mol:rdkit.Chem.Mol,
-                **kwargs) -> float:
+                mols,
+                **kwargs):
         """
             Args:
-                mol (rdkit.Chem.ROMol): molecule to be evaluated
+                mol (rdkit.Chem.ROMol or list): molecule to be evaluated
 
             Returns:
                 float: Predicted binding energy from the model
         """
-        score = 10.0
-        if query_mol is not None:
-            dataset = SMILES_Dataset([Chem.MolToSmiles(query_mol)])
-            score = float(self.model.predict(dataset)[0])
-        return score
+
+        _mols, chembert_scores = [], []
+        _mols.extend(mols)
+
+        smis = []
+        for mol in _mols:
+            smis.append(Chem.MolToSmiles(mol))
+                   
+        dataset = SMILES_Dataset(smis)
+        chembert_scores = self.model.predict(dataset)
+
+        return chembert_scores
     
-    def reward(self, prop_value, **kwargs):
+    def reward(self, prop_values, **kwargs):
         """Calculates the reward
 
         Args:
-            prop_value (float): The value for the property
+            prop_values (float/list): The values for the property
 
         Returns:
-            float: The reward
+            list(float): The rewards
         """
-        
         threshold = self.threshold
-        reward = self.min_reward
-        if prop_value <= threshold:
-            reward = self.max_reward
-    
-        return reward
 
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
 
-
- 
+        for value in _prop_values:
+            rew = self.min_reward
+            if value <= threshold:
+                rew = self.max_reward
+            rewards.append(rew)
+        return rewards 

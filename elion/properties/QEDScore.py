@@ -21,42 +21,52 @@ class QEDScore(Property):
             1 == GOOD (all properties favourable)
     """
 
-    def predict(self, 
-              query_mol:rdkit.Chem.Mol,
-              **kwargs) -> float:
+    def predict(self,
+                mols,
+                **kwargs):
         """
             Args:
-                mol (rdkit.Chem.ROMol): molecule to be evaluated
+                mols: RDKit Mol or list of RDKit Mols
 
             Returns:
-                float: Drug likeness score
+                list(float): Drug likeness scores
         """
-        qed_score = -1.0
-        if query_mol is not None:
-            try:
-                qed_score = QED.qed(query_mol)
-            except:
-                # RDKit gives exception when the molecules are weird. 
-                # Here we just ignore them and pass a score of -1.
-                pass
-        return qed_score
+        _mols, qed_scores = [], []
+        _mols.extend(mols)
+
+        for query_mol in _mols:
+            score = -1.0
+            if query_mol is not None:
+                try:
+                    score = QED.qed(query_mol)
+                except:
+                    # RDKit gives exception when the molecules are weird. 
+                    # Here we just ignore them and pass a score of -1.
+                    pass
+                qed_scores.append(score)
+        return qed_scores
     
-    def reward(self, prop_value, **kwargs):
+    def reward(self, prop_values, **kwargs):
         """Calculates the reward
 
         Args:
-            prop_value (float): The value for the property
+            prop_values (float/list): The values for the property
 
         Returns:
-            float: The reward
+            list(float): The rewards
         """
-        
+
         threshold = self.threshold
-        reward = self.min_reward
-        if prop_value >= threshold:
-            reward = self.max_reward
-    
-        return reward
+
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
+
+        for value in _prop_values:
+            rew = self.min_reward
+            if value >= threshold:
+                rew = self.max_reward
+            rewards.append(rew)
+        return rewards
 
 
  

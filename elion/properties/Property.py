@@ -150,22 +150,22 @@ class Property(ABC):
             returns a value for the property (float)
 
         Args:
-            A molecule, the format can be defined on the method. Usually
-            an RDKit Mol object or SMILES.
+            An RDKit Mol object or list of RDKit mol objects.
 
         Returns:
-            prop_value (float): The estimated value for the property
+            list(float): The estimated values for the property
         """
         pass
 
     @abstractmethod
-    def reward(self, prop_value, **kwargs):
-        """Given a property value, returns this property reward (float).
+    def reward(self, prop_values, **kwargs):
+        """Given a property value, or list of values,
+           returns this property rewards list(float).
 
         Args:
-            prop_value (float): The property value
+            prop_value (float or list(floats)): The calculated value(s) of the property
 
         Returns: 
-            reward_value (float): The value for this propoerty reward
+            list(float): This property rewards for each value passed in.
         """
         pass

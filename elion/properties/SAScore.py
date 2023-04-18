@@ -28,44 +28,39 @@ class SAScore(Property):
         self.sascorer = SA_Scorer()
 
 
-    def predict(self, 
-              query_mol:rdkit.Chem.Mol,
-              **kwargs) -> float:
+    def predict(self,
+                mols,
+                **kwargs):
         """
             Args:
-                mol (rdkit.Chem.ROMol): molecule to be evaluated
+                mols (rdkit.Chem.ROMol or list): molecule(s) to be evaluated
 
             Returns:
-                float: Drug likeness score
+                list(float): Drug likeness scores
         """
-        sa_score = 10.0
-        if query_mol is not None:
-            try:
-                sa_score = self.sascorer.predict([query_mol])[0] 
-            except:
-                # In some cases,RDKit throws a weird exception and crashes.
-                # Here, we just catch that and continue, leaving the value as the
-                # maximum.
-                pass
-        return sa_score
+        _mols = []
+        _mols.extend(mols)
+        sa_scores = self.sascorer.predict(_mols)
+        return sa_scores
     
-    def reward(self, prop_value, **kwargs):
+    def reward(self, prop_values, **kwargs):
         """Calculates the reward
 
         Args:
-            prop_value (float): The value for the property
+            prop_values (float/list): The values for the property
 
         Returns:
-            float: The reward
+            list(float): The rewards
         """
-        
         threshold = self.threshold
-        reward = self.min_reward
-        if prop_value <= threshold:
-            reward = self.max_reward
+
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
+
+        for value in _prop_values:
+            rew = self.min_reward
+            if value <= threshold:
+                rew = self.max_reward
+            rewards.append(rew)
+        return rewards
     
-        return reward
-
-
-
- 

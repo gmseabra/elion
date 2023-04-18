@@ -92,35 +92,50 @@ class ScaffoldMatch(Property):
         # bonds of any order to be compared.
         self.params.BondTyper = rdFMCS.BondCompare.CompareAny
         
-    def predict(self,query_mol="CCCCC", **kwargs):
+    def predict(self,mols, **kwargs):
         """
             Args:
-                query_mol (rdkit.Chem.Mol): The query molecule
+                mol (rdkit.Chem.Mol or list): The query molecule(s)
 
             Returns:
-                float: The percent scaffold match [0,1].
+                list(float): The percent scaffold match [0,1].
         """
+        _mols, scaffold_match = [], []
+        _mols.extend(mols)
         scaffold = self.scaffold
-        match = 0.0
-        if query_mol is not None:
-            maxMatch = scaffold.GetNumAtoms()
-            match = rdFMCS.FindMCS([scaffold,query_mol],self.params).numAtoms / maxMatch
-        return match
+
+        for query_mol in _mols:
+            match = 0.0
+            if query_mol is not None:
+                try:
+                    maxMatch = scaffold.GetNumAtoms()
+                    match = rdFMCS.FindMCS([scaffold,query_mol],self.params).numAtoms / maxMatch
+                except:
+                    # RDKit gives exception when the molecules are weird. 
+                    # Here we just ignore them and pass a score of -1.
+                    pass
+                scaffold_match.append(match)
+        return scaffold_match
+
     
-    def reward(self, prop_value, **kwargs):
+    def reward(self, prop_values, **kwargs):
         """Calculates the reward
 
         Args:
-            prop_value (float): The value for the property
+            prop_values list(float): The values for the property
 
         Returns:
-            float: The reward
+            list(float): The reward
         """
-        
         threshold = self.threshold
-        reward = self.min_reward
-        if prop_value >= threshold:
-            reward = self.max_reward
-    
-        return reward
+
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
+
+        for value in _prop_values:
+            rew = self.min_reward
+            if value >= threshold:
+                rew = self.max_reward
+            rewards.append(rew)
+        return rewards
 
