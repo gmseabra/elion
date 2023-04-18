@@ -36,7 +36,8 @@ class Estimators:
         for _prop in self.properties.keys():
             pred[_prop] = []
 
-        _mols = [].extend(mols)
+        _mols = []
+        _mols.extend(mols)
         for _prop, _cls in self.properties.items():
             predictions = _cls.predict(mols)
             pred[_prop] = predictions
