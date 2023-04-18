@@ -120,6 +120,9 @@ class Property(ABC):
             # Step size must be =! 0
             if self.thresh_step == 0:
                 self.bomb_input(self.prop_name, "Threshold step size must be =! 0")
+        else:
+            # If not optimizing this property, don't count it in the total reward.
+            self.rew_coeff = 0.0
         # Finished loading this property.
 
     def bomb_input(self, prop, msg):

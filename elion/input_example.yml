@@ -23,11 +23,20 @@ properties:
     rew_acc: 0.05
   ScaffoldMatch:
     scaffold_file: "elion/example_template.smarts"
+    optimize: True
     threshold: 0.5
+    threshold_limit: 0.9
+    threshold_step: 0.1
   SAScore:
-    threshold: 3.0
+    threshold: 8.0
+    optimize: True
+    threshold_limit: 3.0
+    threshold_step: -0.1
   QEDScore:
     threshold: 0.5
+    optimize: True
+    threshold_limit: 0.9
+    threshold_step: 0.1
   CHEMBERT_BE:
     model_file: 'elion/properties/CHEMBERT/example_model.pt'
     rew_coeff: 5.0
