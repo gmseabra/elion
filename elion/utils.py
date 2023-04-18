@@ -141,12 +141,13 @@ def save_smi_file(filename, smiles, predictions):
             i += 1
 
 # Print results
-def print_results(mols, results,header="", LENGTH_LIM=30):
+def print_results(mols, results,header="", LENGTH_LIM=30, include_stats=True):
     """Prints a table with results
 
     Args:
         mols ([str]): Molecules in SMILES format
         results (Dict): The results to be printed
+        include_stats (Bool): Whether to include stats. Defaults to True.
     """
     
     print(header)
@@ -165,6 +166,17 @@ def print_results(mols, results,header="", LENGTH_LIM=30):
             print(f"  {value:>{title_len}.2f}", end="")
         print("")
 
+    if include_stats:
+        print_stats(results)
+    print("")
+
+def print_stats(results, LENGTH_LIM=30):
+    """Prints statistics on the results
+
+    Args:
+        results (Dict): The results
+        LENGTH_LIM (int, optional): A lenght for the SMIELS field of results. Defaults to 30.
+    """
     # Stats
     print(f"{'':>6s}  {'MAXIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
@@ -194,4 +206,3 @@ def print_results(mols, results,header="", LENGTH_LIM=30):
         print(f"  {stdev:>{title_len}.2f}", end="")
     print("")
 
-    print("")
