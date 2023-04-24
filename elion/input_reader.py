@@ -90,14 +90,14 @@ def read_input_file(input_file_name:str)-> Dict:
                 generator['initial_state'] = Path(module_dir,"generators/moler/PRETRAINED_MODEL")
         cfg['Generator'] = generator
 
-    # -------------------------------
-    # Molecular Properties Prediction
-    # -------------------------------
+    # -------------------------
+    # Molecular Rewards Funtion
+    # -------------------------
     # We don't initialize anything here. The properties are initialized
     # by instantiating the 'Estimators' class.
     
-    if 'properties' in cfg_input.keys():
-        cfg['Properties'] = cfg_input['properties']
+    if 'reward_function' in cfg_input.keys():
+        cfg['Reward_function'] = cfg_input['reward_function']
 
     # For DEBUG purposese, print the whole configuration
     if cfg['Control']['verbosity'] > 2:
@@ -116,5 +116,5 @@ if __name__ == "__main__":
     root_dir = Path().cwd()
     input_file = Path(root_dir,"elion/input_example.yml")
     result = read_input_file(input_file)
-    for prop, cls in result['Properties'].items():
+    for prop, cls in result['Reward_function'].items():
         print(prop, cls.value())
