@@ -47,4 +47,4 @@ if __name__ == "__main__":
     if config['Control']['verbosity'] > 0:
         import pprint
         pprint.pprint(config)
-    run(config)
+    calculate(config)
