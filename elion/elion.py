@@ -1,18 +1,16 @@
 from pathlib import Path
-from rdkit import Chem
 import input_reader
-from utils import print_results
-from properties.Estimators import Estimators
 
-
-# This will be the entry point for all Elion calculations
+# Entry point for all Elion calculations
+# --------------------------------------
 # All details should be in the input file (YAML format). 
 # Here we will read this input file, and direct the calculations
 # accordingly.
 
 if __name__ == "__main__":
-    #"""
-    #"""
+    """
+    main
+    """
 
     import argparse
 
