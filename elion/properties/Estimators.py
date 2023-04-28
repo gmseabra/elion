@@ -70,7 +70,7 @@ class Estimators:
                 quit(msg)
                 
             rew[_prop] = cls.reward(_values)
-        rew["REW_TOTAL"] = self.total_reward(rew)
+        rew["TOTAL"] = self.total_reward(rew)
         return rew
 
     def total_reward(self, rewards):

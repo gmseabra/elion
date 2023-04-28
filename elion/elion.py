@@ -44,8 +44,9 @@ if __name__ == "__main__":
     run_type = config['Control']['run_type']
     if run_type == 'calculate_properties':
         reward_function.calculate(config)
+        
     elif run_type == 'generate':
-        generator = Generator(config['Generator'])
+        generator = Generator(config['Generator']).generator
         smis = generator.generate_mols()
         mols = [ Chem.MolFromSmiles(x) for x in smis ] 
 
@@ -59,7 +60,10 @@ if __name__ == "__main__":
         print_results(smis, rewards, header="REWARDS")
 
     elif run_type == 'bias_generator':
-        pass
+        generator = Generator(config['Generator']).generator
+        estimator = Estimators(config['Reward_function'])
+        generator.bias_generator(config['Control'], estimator)
+        
     elif run_type == 'post_process':
         pass
     
