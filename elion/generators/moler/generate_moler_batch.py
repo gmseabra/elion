@@ -30,8 +30,8 @@ def main():
     parser.add_argument('n_batch', type=int,
                         help='Number of molecules to generate. REQUIRED')
 
-    parser.add_argument('-s', '--scaffold',
-                        help='Scaffold SMILES',
+    parser.add_argument('-s', '--scaffolds_file',
+                        help='Scaffolds SMILES',
                         default=None)
 
     parser.add_argument('-c', '--centers_file',
@@ -42,12 +42,12 @@ def main():
                         help='Standard deviation around center',
                         default=1.0)
 
-    args         = parser.parse_args()
-    n_batch      = args.n_batch
-    model_dir    = args.model_dir
-    scaffold_smi = args.scaffold
-    centers_file = args.centers_file
-    stdev        = args.stdev
+    args           = parser.parse_args()
+    n_batch        = args.n_batch
+    model_dir      = args.model_dir
+    scaffolds_file = args.scaffolds_file
+    centers_file   = args.centers_file
+    stdev          = args.stdev
     # -----------------------------------------------------
 
     seed = np.random.randint(100_000_000)
@@ -83,10 +83,21 @@ def main():
 
             embeddings = latent_center + stdev * np.random.randn(n_batch, latent_center.shape[1]).astype(np.float32)
         
-        if scaffold_smi is None:
+        if scaffolds_file is None:
             decoded_smiles = generator.decode(embeddings)
         else:
-            decoded_smiles = generator.decode(embeddings,[scaffold_smi]*n_batch)
+            scaffolds_smis = []
+            with open(scaffolds_file.strip(), 'r') as sf:
+                for line in sf:
+                    scaffolds_smis.append(line.replace('\n',''))
+
+            scaffolds = []
+            if len(scaffolds_smis) == n_batch:
+                scaffolds = scaffolds_smis
+            else:
+                scaffolds = np.random.choice(scaffolds_smis,size=n_batch).tolist()
+            
+            decoded_smiles = generator.decode(embeddings,scaffolds)
 
     for smi in decoded_smiles: print(smi)
 if __name__ == "__main__":
