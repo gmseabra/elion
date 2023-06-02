@@ -8,6 +8,7 @@
 #   2) 'reward' : Gets a property value and returns a reward. 
 
 import importlib
+import rdkit.Chem as Chem
 
 class Estimators:
 
@@ -85,3 +86,29 @@ class Estimators:
             total_rew.append(total_rew_mol)
         return total_rew
 
+    def smiles_reward_pipeline(self, smis, **kwargs):
+        """
+        Sometimes the RL process needs to pass the molecules as SMILES and needs
+        to get the reward. This function does that.
+        
+        In sequence, 
+           1) Generate molecules from SMILES
+           2) Estimate properties
+           3) Estimate rewards
+           4) Calculate total reward
+           Returns the total reward for each molecule in the list.
+
+        Args:
+            smis ([str]): SMILES for the molecules to be evaluated
+            kwargs: Any other arguments to be passed to the property objects
+
+        Returns:
+            [float]: Total reward for each molecule in the list
+        """
+
+        mols = [Chem.MolFromSmiles(smi) for smi in smis]
+        predictions = self.estimate_properties(mols)
+        rewards = self.estimate_rewards(predictions)
+        total_reward = self.total_reward(rewards)
+        return total_reward
+                        

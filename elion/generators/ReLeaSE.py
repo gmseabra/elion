@@ -122,10 +122,9 @@ class ReLeaSE(AbstractGenerator):
         max_iterations = self.max_iterations
         
         # General options
-        # ctrl_opts = config_opts['control']
-        # verbosity = ctrl_opts['verbosity']
-
+        verbosity = ctrl_opts['verbosity']
         # If it is a restart, try to figure the next step number
+        gen_start = 0
         if ctrl_opts['restart'] == True:
 
             # Tries to find the info from the biasing_history file
@@ -221,7 +220,7 @@ class ReLeaSE(AbstractGenerator):
         # RL_action = Reinforcement(generator, predictor, get_total_reward_one)
         RL_action = Reinforcement(generator, 
                                   estimator.estimate_properties,
-                                  estimator.estimate_rewards)
+                                  estimator.smiles_reward_pipeline)
 
         # Now, bias the generator for 100 iterations towards the best molecules
         # (The filterwarnings is necessary to avoid litter)
@@ -238,11 +237,11 @@ class ReLeaSE(AbstractGenerator):
         #               Reinforcement loop
         ####################################################
         # This is the main loop, the heart of the program.
-        quit("STOP HERE")
+        #quit("STOP HERE")
         # Keep a history per iteration
         history = {}
         #history['sco_thresh'] = []
-        for prop in reward_properties.keys():
+        for prop in estimator.properties.keys():
             history[f"{prop}_thr"] = []
             history[f"{prop}_avg"] = []
             #history[prop] = []
@@ -267,8 +266,8 @@ class ReLeaSE(AbstractGenerator):
                 print(f"Reinforcement Iteration {reinforcement_iteration} of {gen_start + max_iterations}.")
                 print("-"*80, flush=True)
                 print("Thresholds:")
-                for prop in reward_properties.keys():
-                    print(f"    ---> {prop:<25s}: {reward_properties[prop]['threshold']:>8.3f}")
+                for prop in estimator.properties.keys():
+                    print(f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}")
                 iteration_start_time = time.time()
 
                 for policy_iteration in range(n_policy):
@@ -280,16 +279,21 @@ class ReLeaSE(AbstractGenerator):
 
                     # 1. Train the generator with the latest gen_data
                     print("Training generator with gen_data")
-                    cur_reward, cur_loss = RL_action.policy_gradient(generator.gen_data, std_smiles=True, **reward_properties)
+                    cur_reward, cur_loss = RL_action.policy_gradient(generator.gen_data, std_smiles=True)#, **estimator.properties)
                     print("  Average rewards = ", cur_reward)
                     print("  Average loss    = ", cur_loss)
                     print("\n")
 
                     # 2. Generate new molecules and predictions
-                    smiles_cur = generate_smiles_batch(generator,n_to_generate)
-                    predictions_cur = properties_and_rewards.estimate_properties_parallel(smiles_cur,reward_properties)
-                    rewards_cur = properties_and_rewards.estimate_capped_rewards_batch(predictions_cur,reward_properties)
-                    prob_actives_cur = np.array(predictions_cur['prob_active'])
+                    #smiles_cur = generate_smiles_batch(generator,n_to_generate)
+                    #predictions_cur = properties_and_rewards.estimate_properties_parallel(smiles_cur,estimator.properties)
+                    #rewards_cur = properties_and_rewards.estimate_capped_rewards_batch(predictions_cur,estimator.properties)
+                    #prob_actives_cur = np.array(predictions_cur['prob_active'])
+
+                    smiles_cur = self.generate_mols()
+                    mols = [Chem.MolFromSmiles(smi) for smi in smiles_cur]
+                    predictions_cur = estimator.estimate_properties(mols)
+                    rewards_cur = estimator.estimate_rewards(predictions_cur)
 
                     print("PROPERTIES  ", *[str(x) for x in predictions_cur])
                     # Statistics on the predicitons
@@ -335,7 +339,7 @@ class ReLeaSE(AbstractGenerator):
 
                     # Trying to accept only molecules with REWARD == 15.
                     n_approved_mols = np.sum(rew_np == 15)
-                    print(f" NUMBER OF MOLECULES   : {len(prob_actives_cur)}")
+                    print(f" NUMBER OF MOLECULES   : {len(smiles_cur)}")
                     print(f" TOTAL REWARDS AVERAGE : {rew_avg:4.1f}")
                     print(f" TOTAL REWARDS STD_DEV : {rew_std:4.2f}")
                     print(f" N APPROVED MOLECULES  : {n_approved_mols} ({n_approved_mols /len(rew_np):4.1%})")            
@@ -366,8 +370,8 @@ class ReLeaSE(AbstractGenerator):
                             gen_data_mols = []
                             for mol in generator.gen_data.file:
                                 gen_data_mols.append(mol.strip('<>'))
-                            gen_data_predictions = properties_and_rewards.estimate_properties_parallel(gen_data_mols,reward_properties)
-                            gen_data_rewards     = properties_and_rewards.estimate_rewards_batch(gen_data_predictions,reward_properties)["TOTAL"]
+                            gen_data_predictions = properties_and_rewards.estimate_properties_parallel(gen_data_mols,estimator.properties)
+                            gen_data_rewards     = properties_and_rewards.estimate_rewards_batch(gen_data_predictions,estimator.properties)["TOTAL"]
 
                             # 2. Get the indices of the n_best molecules with best reward.
                             #    We will keep only the 'n_best' molecules with the best total rewards
@@ -401,20 +405,20 @@ class ReLeaSE(AbstractGenerator):
 
                     # Finally, check and adjust the thresholds for the next iterations.
                     # Only consider molecules that pass the mandatory checks (rewards_cur['TOTAL'] == 15)
-                    properties_and_rewards.check_and_adjust_thresholds(predictions_cur, rewards_cur, reward_properties)
+                    properties_and_rewards.check_and_adjust_thresholds(predictions_cur, rewards_cur, estimator.properties)
 
                 # --- END OF POLICY ITERATION.
 
                 # Generate some molecules for stats. No need to save.
                 smi = generate_smiles_batch(generator,n_to_generate)
-                # predictions = properties_and_rewards.estimate_properties_batch(smi,reward_properties)
-                predictions = properties_and_rewards.estimate_properties_parallel(smi,reward_properties)
-                rewards = properties_and_rewards.estimate_capped_rewards_batch(predictions,reward_properties)
+                # predictions = properties_and_rewards.estimate_properties_batch(smi,estimator.properties)
+                predictions = properties_and_rewards.estimate_properties_parallel(smi,estimator.properties)
+                rewards = properties_and_rewards.estimate_capped_rewards_batch(predictions,estimator.properties)
 
                 # Dump stats on the generated mols
                 print(f"\nFINISHED BIASING ITERATION {reinforcement_iteration}")
                 print("-"*55)
-                print_progress_table(reward_properties,predictions,rewards)
+                print_progress_table(estimator.properties,predictions,rewards)
 
                 iteration_elapsed_time = time.time() - iteration_start_time
                 iteration_accumulated_time = iteration_accumulated_time + iteration_elapsed_time
@@ -422,13 +426,13 @@ class ReLeaSE(AbstractGenerator):
                 print(f"|--> Average time (all iterations) = {iteration_accumulated_time/(reinforcement_iteration+1):0.3f} sec./it")
 
                 # Save history
-                for prop in reward_properties.keys():
-                    history[f"{prop}_thr"].append(reward_properties[prop]['threshold'])
+                for prop in estimator.properties.keys():
+                    history[f"{prop}_thr"].append(estimator.properties[prop]['threshold'])
                     history[f"{prop}_avg"].append(np.average(predictions[prop]))
 
-                #history['sco_thresh'].append(reward_properties['prob_active']["threshold"])
+                #history['sco_thresh'].append(estimator.properties['prob_active']["threshold"])
 
-                #for prop in reward_properties.keys():
+                #for prop in estimator.properties.keys():
                 #    history[prop].append(np.average(predictions[prop]))
 
                 # Dump history
@@ -454,7 +458,7 @@ class ReLeaSE(AbstractGenerator):
                     generator.save_model(chk_path)
                 
                 # Check Convergence
-                # if properties_and_rewards.all_converged(reward_properties): 
+                # if properties_and_rewards.all_converged(estimator.properties): 
                 #     print("ALL PROPERTIES CONVERGED.")
                     
                 #     break
@@ -473,9 +477,9 @@ class ReLeaSE(AbstractGenerator):
         chk_path="./chk/biased_generator_final.chk"
 
         smi = generate_smiles_batch(generator,n_to_generate)
-        #predictions_final = properties_and_rewards.estimate_properties_batch(smi,reward_properties)
-        predictions_final = properties_and_rewards.estimate_properties_parallel(smi,reward_properties)
-        rewards_final = properties_and_rewards.estimate_capped_rewards_batch(predictions_final,reward_properties)
+        #predictions_final = properties_and_rewards.estimate_properties_batch(smi,estimator.properties)
+        predictions_final = properties_and_rewards.estimate_properties_parallel(smi,estimator.properties)
+        rewards_final = properties_and_rewards.estimate_capped_rewards_batch(predictions_final,estimator.properties)
         
         generator.save_model(chk_path)
         print(f"Final batch of molecules saved to file {smi_file}.")
@@ -484,7 +488,7 @@ class ReLeaSE(AbstractGenerator):
         print(f"\nFINISHED BIASING GENERATOR")
         print(f"|--> Total number of iterations    = {gen_start + reinforcement_iteration}")
         print("-"*55)
-        print_progress_table(reward_properties,predictions_final,rewards_final)
+        print_progress_table(estimator.properties,predictions_final,rewards_final)
 
         # Total elapsed time
         RL_elapsed_time = time.time() - RL_start_time
