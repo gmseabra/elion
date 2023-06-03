@@ -86,7 +86,15 @@ class Estimators:
             total_rew.append(total_rew_mol)
         return total_rew
 
-    def smiles_reward_pipeline(self, smis, **kwargs):
+    def check_and_adjust_thresholds(self, predictions):
+        """Checks if the predictions are within the thresholds and adjusts them"""
+
+        for _prop, cls in self.properties.items():
+            _values = predictions[_prop]
+            cls.check_and_adjust_property_threshold(_values)
+        return
+
+    def smiles_reward_pipeline(self, smis, kwargs):
         """
         Sometimes the RL process needs to pass the molecules as SMILES and needs
         to get the reward. This function does that.

@@ -405,7 +405,8 @@ class ReLeaSE(AbstractGenerator):
 
                     # Finally, check and adjust the thresholds for the next iterations.
                     # Only consider molecules that pass the mandatory checks (rewards_cur['TOTAL'] == 15)
-                    properties_and_rewards.check_and_adjust_thresholds(predictions_cur, rewards_cur, estimator.properties)
+                    #properties_and_rewards.check_and_adjust_thresholds(predictions_cur, rewards_cur, estimator.properties)
+                    estimator.check_and_adjust_thresholds(predictions_cur)
 
                 # --- END OF POLICY ITERATION.
 
@@ -414,6 +415,11 @@ class ReLeaSE(AbstractGenerator):
                 # predictions = properties_and_rewards.estimate_properties_batch(smi,estimator.properties)
                 predictions = properties_and_rewards.estimate_properties_parallel(smi,estimator.properties)
                 rewards = properties_and_rewards.estimate_capped_rewards_batch(predictions,estimator.properties)
+
+                smiles = self.generate_mols()
+                mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+                predictions = estimator.estimate_properties(mols)
+                rewards = estimator.estimate_rewards(predictions)
 
                 # Dump stats on the generated mols
                 print(f"\nFINISHED BIASING ITERATION {reinforcement_iteration}")

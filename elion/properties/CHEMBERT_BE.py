@@ -50,24 +50,3 @@ class CHEMBERT_BE(Property):
         chembert_scores = self.model.predict(dataset)
 
         return chembert_scores
-    
-    def reward(self, prop_values, **kwargs):
-        """Calculates the reward
-
-        Args:
-            prop_values (float/list): The values for the property
-
-        Returns:
-            list(float): The rewards
-        """
-        threshold = self.threshold
-
-        _prop_values, rewards = [], []
-        _prop_values.extend(prop_values)
-
-        for value in _prop_values:
-            rew = self.min_reward
-            if value <= threshold:
-                rew = self.max_reward
-            rewards.append(rew)
-        return rewards 

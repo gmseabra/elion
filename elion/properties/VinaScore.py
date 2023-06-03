@@ -12,14 +12,4 @@ class VinaScore(Property):
         for mol in _mols:
             value = 30
             vina_scores.append(value)
-        return prop2
-
-    def reward(self, prop_values, **kwargs):
-
-        _prop_values, rewards = [], []
-        _prop_values.extend(prop_values)
-
-        for value in _prop_values:
-            rew = 15
-            rewards.append(rew)
-        return rewards
+        return vina_scores

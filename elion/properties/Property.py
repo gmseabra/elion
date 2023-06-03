@@ -1,5 +1,6 @@
 # Abstract class for properties
 from abc import ABC, abstractmethod
+import numpy as np
 
 class Property(ABC):
     """
@@ -71,6 +72,9 @@ class Property(ABC):
         # Max and min rewards. Set here so that they can be controlled later if needed.
         self.max_reward = 15
         self.min_reward = 1
+
+        # Reward hook
+        self.reward_hook = 0.3
         
         # If the reward class is 'soft', we need an acceptance ratio (softness)
         # for values that fall outside the specified threshold:
@@ -130,6 +134,50 @@ class Property(ABC):
         message = f"\n*** ERROR when loading {prop}. ***\n{msg}"
         quit(message)
 
+    def reward(self, prop_values, **kwargs):
+        """Given a property value, or list of values,
+           returns this property rewards list(float).
+
+        Args:
+            prop_value (float or list(floats)): The calculated value(s) of the property
+
+        Returns: 
+            list(float): This property rewards for each value passed in.
+        """
+
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
+
+        sign = np.sign(self.thresh_step)
+        unsigned_threshold = sign * self.threshold
+
+        for value in _prop_values:
+            rew = self.min_reward
+            if (sign * value) >= (unsigned_threshold):
+                rew = self.max_reward
+            # TO-DO : Implement soft rewards
+            rewards.append(rew)
+        return rewards
+
+    def check_and_adjust_property_threshold(self, prop_values):
+        """ Checks if the property values are within the threshold range.
+            If not, adjusts the threshold accordingly.
+
+        Args:
+            prop_values (float or list(floats)): The calculated value(s) of the property
+        """
+
+        if ( (self.optimize) and 
+             (np.abs(self.threshold) < np.abs(self.thresh_limit)) ):
+
+            # Check how many values are outside the threshold
+            outside = np.sum(np.abs(prop_values) > np.abs(self.threshold))
+            outside_ratio = outside / len(prop_values)
+
+            if outside_ratio > self.reward_hook:
+                self.threshold += self.thresh_step
+                print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold}")
+        return
 
     # The methods below MUST be overridden by whatever property is implemented
     @abstractmethod
@@ -143,18 +191,5 @@ class Property(ABC):
 
         Returns:
             list(float): The estimated values for the property
-        """
-        pass
-
-    @abstractmethod
-    def reward(self, prop_values, **kwargs):
-        """Given a property value, or list of values,
-           returns this property rewards list(float).
-
-        Args:
-            prop_value (float or list(floats)): The calculated value(s) of the property
-
-        Returns: 
-            list(float): This property rewards for each value passed in.
         """
         pass

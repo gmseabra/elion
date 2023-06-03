@@ -117,24 +117,3 @@ class ScaffoldMatch(Property):
         return scaffold_match
 
     
-    def reward(self, prop_values, **kwargs):
-        """Calculates the reward
-
-        Args:
-            prop_values list(float): The values for the property
-
-        Returns:
-            list(float): The reward
-        """
-        threshold = self.threshold
-
-        _prop_values, rewards = [], []
-        _prop_values.extend(prop_values)
-
-        for value in _prop_values:
-            rew = self.min_reward
-            if value >= threshold:
-                rew = self.max_reward
-            rewards.append(rew)
-        return rewards
-

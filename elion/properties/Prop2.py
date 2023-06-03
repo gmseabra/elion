@@ -9,13 +9,3 @@ class Prop2(Property):
             value = 20
             prop2.append(value)
         return prop2
-
-    def reward(self, prop_values, **kwargs):
-
-        _prop_values, rewards = [], []
-        _prop_values.extend(prop_values)
-
-        for value in _prop_values:
-            rew2 = 10
-            rewards.append(rew2)
-        return rewards
