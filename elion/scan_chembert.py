@@ -4,7 +4,7 @@ Scans a database using a CHEM-BERT model
 import time
 import numpy as np
 import pandas as pd
-from CHEMBERT.chembert import chembert_model, SMILES_Dataset
+from properties.CHEMBERT.chembert import chembert_model, SMILES_Dataset
 from pathlib import Path
 module_dir = Path(__file__).parent
 

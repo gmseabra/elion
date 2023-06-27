@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, roc_curve, r2_score, auc
 
 ## CHEMBERT MODEL
-from properties.activity.CHEMBERT.model import Smiles_BERT, BERT_base
+from properties.CHEMBERT.model import Smiles_BERT, BERT_base
 
 module_dir = Path(__file__).parent
 
@@ -141,7 +141,7 @@ class FinetuningDataset(Dataset):
         return padded
 
 def finetune_model(smiles_file,
-                   pretrained_model=f'{module_dir}/properties/activity/CHEMBERT/model/pretrained_model.pt',
+                   pretrained_model=f'{module_dir}/properties/CHEMBERT/model/pretrained_model.pt',
                    task='regression',split_ratio=0.8,max_time=720, max_epochs=15,
                    cpu_threads=24):
 
@@ -241,7 +241,8 @@ def finetune_model(smiles_file,
         print("Using GPU acceleration")
         model = nn.DataParallel(model)
 
-    optim = Adam(model.parameters(), lr=params['learning_rate'], coeff_decay=0)
+    #optim = Adam(model.parameters(), lr=params['learning_rate'], coeff_decay=0)
+    optim = Adam(model.parameters(), lr=params['learning_rate'])
     if task == 'classification':
         criterion = nn.BCEWithLogitsLoss()
     else:
