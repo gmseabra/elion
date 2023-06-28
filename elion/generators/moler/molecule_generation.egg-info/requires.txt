@@ -1,6 +1,0 @@
-dpu-utils>=0.2.13
-more-itertools
-numpy==1.19.2
-scikit-learn>=0.24.1
-tensorflow==2.1.0
-tf2_gnn>=2.13.0

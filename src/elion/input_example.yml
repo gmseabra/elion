@@ -1,0 +1,46 @@
+# Training the generator with multiple properties
+control:
+  restart: False
+  history_file: "biasing_history.csv"
+  max_iter: 1000
+  comment: "ReLeaSE Generator Test"
+  verbosity: 0
+  smiles_file: "elion/example_smiles.smi"
+generator:
+  name: "ReLeaSE"
+  author: "Isayev"
+  initial_state: "/home/seabra/work/li/hitopt/hitopt/generator/release/checkpoints/generator/checkpoint_biggest_rnn"
+  batch_size: 200
+  # Start with celecoxib
+  seed_smi: "Cc1ccc(-c2cc(C(F)(F)F)nn2-c2ccc(S(N)(=O)=O)cc2)cc1"
+        
+properties:
+  Prop1:
+    rew_coeff: 0.3
+  Prop2: 
+    rew_coeff: 0.7
+    rew_class: 'soft'
+    rew_acc: 0.05
+  ScaffoldMatch:
+    scaffold_file: "elion/example_template.smarts"
+    optimize: True
+    threshold: 0.5
+    threshold_limit: 0.9
+    threshold_step: 0.1
+  SAScore:
+    threshold: 8.0
+    optimize: True
+    threshold_limit: 3.0
+    threshold_step: -0.1
+  QEDScore:
+    threshold: 0.5
+    optimize: True
+    threshold_limit: 0.9
+    threshold_step: 0.1
+  CHEMBERT_BE:
+    model_file: 'elion/properties/CHEMBERT/example_model.pt'
+    rew_coeff: 5.0
+    optimize: True
+    threshold: -8.0
+    threshold_limit: -12.0
+    threshold_step: -0.01
