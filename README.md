@@ -29,3 +29,6 @@ Successfully installed elion-0.0.1a0.dev0
 ```
 $ elion [-i input_file]
 ```
+
+# Extra Info
+This project uses `setuptools` and runs in editable mode, as described [here](https://setuptools.pypa.io/en/latest/userguide/development_mode.html).
