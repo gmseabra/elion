@@ -29,8 +29,7 @@ systems
 systems/
 systems/**
 
-
-
+# Files created by installation
 src/elion.egg-info/dependency_links.txt
 src/elion.egg-info/entry_points.txt
 src/elion.egg-info/PKG-INFO
