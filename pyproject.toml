@@ -17,10 +17,6 @@
                     "Development Status :: 0 - Alpha",
                     "Programming Language :: Python :: 3",
                   ]
-    dependencies = [
-                    "rdkit",
-                    'importlib; python_version>="3.7"',
-                    ]
 
 [project.urls]
     Repository = "https://github.com/gmseabra/elion"
