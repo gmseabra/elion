@@ -1,6 +1,11 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+"""
+# Entry point for all Elion calculations
+# --------------------------------------
+# All details should be in the input file (YAML format). 
+# Here we will read this input file, and direct the calculations
+# accordingly.
+"""
+import argparse
 
 from rdkit import Chem
 import input_reader
@@ -9,19 +14,9 @@ from utils import print_results
 from generators.Generator import Generator
 from properties.Estimators import Estimators
 
-
-# Entry point for all Elion calculations
-# --------------------------------------
-# All details should be in the input file (YAML format). 
-# Here we will read this input file, and direct the calculations
-# accordingly.
-
-if __name__ == "__main__":
-    #
-    #    Elion: A Workflow for the Design of Small Molecules with Desired Properties
-    #
-
-    import argparse
+def main():
+    """Elion: A Workflow for the Design of Small Molecules with Desired Properties
+    """
 
     #-- Command line arguments
     parser = argparse.ArgumentParser(
@@ -34,7 +29,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     input_file = args.input_file
-    #input_file = "/home/seabra/work/li/elion_dev/tests/modular/input.yml"
     #--
     config = input_reader.read_input_file(input_file)
 
@@ -70,4 +64,6 @@ if __name__ == "__main__":
     elif run_type == 'post_process':
         pass
     
-   
+if __name__ == '__main__':
+    main()
+    
