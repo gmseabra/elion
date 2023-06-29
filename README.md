@@ -24,7 +24,7 @@ Successfully installed elion-0.0.1a0.dev0
 
 ## Use
 1. To get help information, type `elion --help`
-1. Prepare an input file that controls the calculation to be done. By default, Elion looks for a file named 'input.yml'. If you want to use any other name, just use the `-i` flag.
+1. Prepare an input file that controls the calculation to be done. By default, Elion looks for a file named `input.yml`. If you want to use any other name, just use the `-i` flag.
 1. Run Elion with the command:
 ```
 $ elion [-i input_file]
