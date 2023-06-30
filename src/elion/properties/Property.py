@@ -176,7 +176,7 @@ class Property(ABC):
 
             if outside_ratio > self.reward_hook:
                 self.threshold += self.thresh_step
-                print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold}")
+                print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
         return
 
     # The methods below MUST be overridden by whatever property is implemented

@@ -2,15 +2,6 @@
 Just some utilities used by various files
 """
 
-__author__ = 'Gustavo Seabra'
-__copyright__ = 'Copyright 2020, Me'
-__credits__ = ['Gustavo Seabra']
-__license__ = 'None Yet'
-__version__ = '0.1'
-__maintainer__ = 'Gustavo Seabra'
-__email__ = 'seabra _at_ cop.ufl.edu'
-__status__ = 'Prototype'
-
 # --Python
 from typing import List, Dict
 import pandas as pd
@@ -141,7 +132,7 @@ def save_smi_file(filename, smiles, predictions):
             i += 1
 
 # Print results
-def print_results(mols, results,header="", LENGTH_LIM=30, include_stats=True):
+def print_results(mols, results, header="", LENGTH_LIM=30, include_stats=True):
     """Prints a table with results
 
     Args:
@@ -153,7 +144,8 @@ def print_results(mols, results,header="", LENGTH_LIM=30, include_stats=True):
     print(header)
     print(f"{'#':>6s}  {'Molecule':{LENGTH_LIM+3}s}", end="")
     for prop, cls in results.items():
-        print(f"  {prop}", end="")
+        title_len = max(len(prop),6)
+        print(f"  {prop:>{title_len}s}", end="")
     print("")
     
     for ind, smi in enumerate(mols):
@@ -161,7 +153,7 @@ def print_results(mols, results,header="", LENGTH_LIM=30, include_stats=True):
         print(f"{ind:>6d}  {smi:{LENGTH_LIM}.{LENGTH_LIM}s}{CONT}", end="")
 
         for prop, cls in results.items():
-            title_len = len(prop)
+            title_len = max(len(prop),6)
             value = results[prop][ind]
             print(f"  {value:>{title_len}.2f}", end="")
         print("")
@@ -170,38 +162,45 @@ def print_results(mols, results,header="", LENGTH_LIM=30, include_stats=True):
         print_stats(results)
     print("")
 
-def print_stats(results, LENGTH_LIM=30):
+def print_stats(results, header="", LENGTH_LIM=30, print_header=False):
     """Prints statistics on the results
 
     Args:
         results (Dict): The results
-        LENGTH_LIM (int, optional): A lenght for the SMIELS field of results. Defaults to 30.
+        LENGTH_LIM (int, optional): A lenght for the SMILES field of results. Defaults to 30.
     """
+    if print_header:
+        print(f"{'#':>6s}  {header:{LENGTH_LIM+3}s}", end="")
+        for prop, cls in results.items():
+            title_len = max(len(prop),6)
+            print(f"  {prop:>{title_len}s}", end="")
+        print("")
+
     # Stats
     print(f"{'':>6s}  {'MAXIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
-        title_len = len(prop)
+        title_len = max(len(prop),6)
         maximum = np.max(results[prop])
         print(f"  {maximum:>{title_len}.2f}", end="")
     print("")
 
     print(f"{'':>6s}  {'MINIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
-        title_len = len(prop)
+        title_len = max(len(prop),6)
         minimum = np.min(results[prop])
         print(f"  {minimum:>{title_len}.2f}", end="")
     print("")
 
     print(f"{'':>6s}  {'AVERAGES:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
-        title_len = len(prop)
+        title_len = max(len(prop),6)
         average = np.average(results[prop])
         print(f"  {average:>{title_len}.2f}", end="")
     print("")
         
     print(f"{'':>6s}  {'STD DEV:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
-        title_len = len(prop)
+        title_len = max(len(prop),6)
         stdev = np.std(results[prop])
         print(f"  {stdev:>{title_len}.2f}", end="")
     print("")

@@ -20,7 +20,16 @@ class Estimators:
             module = importlib.import_module(f'properties.{prop}')
             module = getattr(module, prop)
             self.properties[prop] = module(prop,**properties_cfg[prop])
+
+        # Maximum possible reward per molecule
+        max_reward = 0.0
+        for _prop, _cls in self.properties.items():
+            max_reward += _cls.rew_coeff * _cls.max_reward
+        self.max_reward = max_reward
+        print("-"*50)
+        
         print("Done reading properties.")
+        print(f"The maximum possible reward per molecule is: {self.max_reward:6.2f}")
         print("="*80)
         print("\n")
 

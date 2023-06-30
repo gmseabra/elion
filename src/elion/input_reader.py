@@ -55,9 +55,10 @@ def read_input_file(input_file_name:str)-> Dict:
         for option, value in cfg_input['control'].items():
             ctrl[option] = value
 
+    # TO-DO:
     # If this is a restart, sets the history acccordingly
-    if ctrl['restart']:
-        
+    # (For now, this is happening inside ReLeaSE.py)
+    if ctrl['restart']:        
         # Tries to find the info from the biasing_history file
         history_file = Path(ctrl['history_file'])
         if not history_file.is_file():
