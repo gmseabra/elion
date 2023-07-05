@@ -30,6 +30,7 @@ class Estimators:
         
         print("Done reading properties.")
         print(f"The maximum possible reward per molecule is: {self.max_reward:6.2f}")
+        print( "Note: Maximum rewards only consider properties being optimized.")
         print("="*80)
         print("\n")
 

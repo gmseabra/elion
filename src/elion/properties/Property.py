@@ -148,7 +148,7 @@ class Property(ABC):
         _prop_values, rewards = [], []
         _prop_values.extend(prop_values)
 
-        sign = np.sign(self.thresh_step)
+        sign = np.sign(self.thresh_step if self.optimize else self.threshold)
         unsigned_threshold = sign * self.threshold
 
         for value in _prop_values:

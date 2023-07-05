@@ -14,7 +14,13 @@ def calculate(config):
     if smiles_file.is_file():
         with open(smiles_file,'r') as smif:
             for line in smif.readlines():
-                smi = line.split()[0]
+                if line.startswith("#") or "Smiles" in line or "SMILES" in line:
+                    continue
+                if "," in line:
+                    smi = line.split(",")[0]
+                else:
+                    smi = line.split()[0]
+                
                 mol = Chem.MolFromSmiles(smi)
                 
                 if mol is not None:
