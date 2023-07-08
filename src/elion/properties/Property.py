@@ -176,6 +176,18 @@ class Property(ABC):
 
             if outside_ratio > self.reward_hook:
                 self.threshold += self.thresh_step
+
+                # BUG: This currently only works for increasing absolute thresholds
+                #      If the thresold is positive but decreasing, this will not work.
+                if abs(self.threshold) > abs(self.thresh_limit):
+                    self.threshold = self.thresh_limit
+                
+                # TO-DO: Allow larger threshold jumps based on percentile
+                # upper_limit = np.abs(thresh_limit)
+                # lower_limit = np.abs(thresh_limit)
+                
+                # self.threshold = max(upper_limit, max(threshold, np.percentile(pred,75,interpolation='higher')))
+
                 print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
         return
 

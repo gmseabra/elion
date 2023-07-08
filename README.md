@@ -32,3 +32,8 @@ $ elion [-i input_file]
 
 # Extra Info
 This project uses `setuptools` and runs in editable mode, as described [here](https://setuptools.pypa.io/en/latest/userguide/development_mode.html).
+
+# TO-DO
+- input_reader.py (78): Restore the threshold values from the last iteration
+- Property.py (185): Allow larger threshold jumps based on percentile
+- Property.py (180): (bug) enforce threshold limit. Currenlty only works for increasing absolute thresholds.
