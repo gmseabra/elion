@@ -68,7 +68,8 @@ class ScaffoldMatch(Property):
             for idx, atom in enumerate(template.GetAtoms()):
                 print(f"\t{idx:>4d}  {atom.GetAtomicNum():5d}  {str(atom.IsInRing()):>7}  {str(atom.GetIsAromatic()):>5}")
             self.scaffold = template
-            print("  Scaffold: ", Chem.MolToSmiles(self.scaffold))
+            print(f"  Scaffold: {Chem.MolToSmiles(self.scaffold)}")
+            print(f"  Scaffold has {self.scaffold.GetNumAtoms()} atoms.")
             
         # Sets up the parameters
         self.params = rdFMCS.MCSParameters()

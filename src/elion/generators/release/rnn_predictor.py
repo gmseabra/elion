@@ -34,7 +34,7 @@ class RNNPredictor(object):
         canonical_smiles = []
         invalid_smiles = []
         if use_tqdm:
-            pbar = tqdm(range(len(smiles)))
+            pbar = tqdm(range(len(smiles)), leave=False, ncols=80, unit='mols')
         else:
             pbar = range(len(smiles))
         for i in pbar:

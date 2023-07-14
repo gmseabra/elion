@@ -445,7 +445,8 @@ class StackAugmentedRNN(nn.Module):
         else:
             smiles_augmentation = None
 
-        for epoch in trange(1, n_iterations + 1, desc='[stackRNN.py] Training'):
+        for epoch in trange(1, n_iterations + 1, desc='[stackRNN.py] Training',
+                            leave=False, ncols=80, unit='epochs'):
             inp, target = data.random_training_set(smiles_augmentation)
             loss = self.train_step(inp, target)
             loss_avg += loss

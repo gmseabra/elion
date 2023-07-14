@@ -115,7 +115,7 @@ class release_smiles_generator(StackAugmentedRNN):
         """
         
         generated, unique_smiles = [], []
-        with tqdm(total=n_to_generate) as pbar:
+        with tqdm(total=n_to_generate,leave=False, ncols=80, unit='mols') as pbar:
             pbar.set_description("Generating molecules")
             total_generated = 0
             total_unique = 0

@@ -459,6 +459,7 @@ class ReLeaSE(AbstractGenerator):
         rewards_final = estimator.estimate_rewards(predictions_final)
               
         generator.save_model(chk_path)
+        utils.save_smi_file(smi_file, smis, predictions_final)
         print(f"Final batch of molecules saved to file {smi_file}.")
 
         # Dump stats on the generated mols

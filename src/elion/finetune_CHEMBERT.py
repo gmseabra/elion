@@ -279,7 +279,8 @@ def finetune_model(smiles_file,
         target_list = np.array([])
 
         model.train() # Equivalent to model.train(True)
-        for i, data in enumerate(tqdm(train_dataloader, desc="Training  ")):
+        for i, data in enumerate(tqdm(train_dataloader, desc="Training  ", 
+                                      leave=False, ncols=80, unit='batch')):
             # train set
             data = {key:value.to(device) for key, value in data.items()}
             position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
@@ -308,7 +309,8 @@ def finetune_model(smiles_file,
 
             # validation set
             # --------------
-            for i, data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+            for i, data in enumerate(tqdm(valid_dataloader, desc="Validating",
+                                          leave=False, ncols=80, unit='batch')):
                 data = {key:value.to(device) for key, value in data.items()}
                 position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
                 output = model.forward(data["smiles_bert_input"], position_num, adj_mask=data["smiles_bert_adj_mask"], adj_mat=data["smiles_bert_adjmat"])
@@ -345,7 +347,8 @@ def finetune_model(smiles_file,
             # --------
             predicted_list = np.array([])
             target_list = np.array([])
-            for i, data in enumerate(tqdm(test_dataloader, desc="Testing" )):
+            for i, data in enumerate(tqdm(test_dataloader, desc="Testing",
+                                          leave=False, ncols=80, unit='batch')):
                 data = {key:value.to(device) for key, value in data.items()}
                 position_num = torch.arange(256).repeat(data["smiles_bert_input"].size(0),1).to(device)
                 output = model.forward(data["smiles_bert_input"], position_num, adj_mask=data["smiles_bert_adj_mask"], adj_mat=data["smiles_bert_adjmat"])
