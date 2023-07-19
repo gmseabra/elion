@@ -40,6 +40,7 @@ class Property(ABC):
 
         # Name the property
         self.prop_name = prop_name
+        self.converged = False
         
         # All properties start with coeff = 1.0, but can be altered
         try:
@@ -167,7 +168,7 @@ class Property(ABC):
             prop_values (float or list(floats)): The calculated value(s) of the property
         """
 
-        if ( (self.optimize) and 
+        if ( (not self.converged) and (self.optimize) and 
              (np.abs(self.threshold) < np.abs(self.thresh_limit)) ):
 
             # Check how many values are outside the threshold
