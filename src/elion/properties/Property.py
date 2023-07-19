@@ -198,6 +198,8 @@ class Property(ABC):
             prop_values (float or list(floats)): The calculated value(s) of the property
         """
 
+        # TO-DO: Consider pushing BACK a threshold that has already converged, if needed
+        
         if (not self.converged) and (self.optimize):
             adjusted = False
             prop_values = np.array(prop_values)
