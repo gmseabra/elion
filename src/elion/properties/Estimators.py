@@ -15,6 +15,8 @@ class Estimators:
     def __init__(self, properties_cfg):
         self.properties = {}
         self.n_mols = 0
+        self.all_converged = False
+        
         for prop in properties_cfg:
             print("-"*50)
             module = importlib.import_module(f'properties.{prop}')
@@ -98,10 +100,15 @@ class Estimators:
 
     def check_and_adjust_thresholds(self, predictions):
         """Checks if the predictions are within the thresholds and adjusts them"""
-
+        self.all_converged = True
         for _prop, cls in self.properties.items():
             _values = predictions[_prop]
             cls.check_and_adjust_property_threshold(_values)
+
+            # If anly property has not converged yet, 
+            # then the whole process has not converged
+            if not cls.converged:
+                self.all_converged = False
         return
 
     def smiles_reward_pipeline(self, smis, kwargs):

@@ -277,9 +277,6 @@ class ReLeaSE(AbstractGenerator):
                 print("#"*80)
                 print(f"Reinforcement Iteration {reinforcement_iteration} of {gen_start + max_iterations - 1}.")
                 print("-"*80, flush=True)
-                print("Current Thresholds:")
-                for prop in estimator.properties.keys():
-                    print(f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}")
                 iteration_start_time = time.time()
 
                 for policy_iteration in range(n_policy):
@@ -287,6 +284,10 @@ class ReLeaSE(AbstractGenerator):
                     print("#",f"{ctrl_opts['comment'].upper():<76s}", "#")
                     print(f"Policy Iteration {policy_iteration + 1} of {n_policy}.")
                     print(f"(RL Iteration {reinforcement_iteration} of {gen_start + max_iterations - 1})")
+                    print(f"{'Property':<34s} {'Threshold'}\t{'Converged?'}")
+                    for prop in estimator.properties.keys():
+                        print((f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}"
+                               f"\t {estimator.properties[prop].converged}"))
                     print("-"*80, flush=True)
 
                     # 1. Train the generator with the latest gen_data
@@ -392,6 +393,8 @@ class ReLeaSE(AbstractGenerator):
 
                     # Finally, check and adjust the thresholds for the next iterations.
                     estimator.check_and_adjust_thresholds(predictions_cur)
+                    if estimator.all_converged:
+                        break
 
                 # --- END OF POLICY ITERATION.
 
@@ -439,6 +442,10 @@ class ReLeaSE(AbstractGenerator):
 
                     utils.save_smi_file(smi_path, smis, predictions)
                     generator.save_model(chk_path)
+
+                if estimator.all_converged:
+                    print("\nAll properties converged. Stopping.")
+                    break
                 
 
         # RL Cycle finished, print results and quit.
