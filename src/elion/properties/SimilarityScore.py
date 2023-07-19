@@ -50,8 +50,10 @@ class SimilarityScore(Property):
         if 'region_selector' in kwargs.keys():
             if kwargs['region_selector'] == 'murcko':
                 self.region_selector = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol
+                print("Using the Murcko Scaffold for similarity measures. ")
             elif kwargs['region_selector'] == 'generic_murcko':
                 self.region_selector = Chem.Scaffolds.MurckoScaffold.MakeScaffoldGeneric
+                print("Using the Generic Murcko Scaffold for similarity measures. ")
         
         # Fingerprint type
         # Deafault is 'rdkit'
