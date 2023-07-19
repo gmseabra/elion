@@ -35,7 +35,7 @@ class SimilarityScore(Property):
                 self.bomb_input(("ERROR while reading reference molecule:\n"
                                 f"Cannot convert {reference_smi} to RDKit Mol object."))
             
-            print(f"\nUsing molecule {reference_smi} as refence for similarity. ")
+            print(f"Using molecule '{reference_smi}' as refence for similarity. ")
             self.reference = reference_mol
         else:
             self.bomb_input("ERROR: Reference molecule not specified.")

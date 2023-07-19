@@ -59,12 +59,14 @@ class Property(ABC):
         # Name the property
         self.prop_name = prop_name
         self.converged = False
+        print(f"Loading Property: {self.prop_name.upper()}")	
         
         # All properties start with coeff = 1.0, but can be altered
         try:
             self.rew_coeff = float(rew_coeff)
         except TypeError:
-            msg = (f"'rew_coeff = {rew_coeff}' is invalid.")
+            msg = (f"'rew_coeff = {rew_coeff}' is invalid."
+                    "It must be a float.")
             self.bomb_input(msg)
         print(f"  Reward Weight = {self.rew_coeff}")
         
@@ -83,8 +85,8 @@ class Property(ABC):
         try:
             self.thresh_ini = float(threshold)
         except TypeError:
-           msg=f"'threshold = {threshold}' is invalid. It must a float."
-           self.bomb_input(msg)
+            msg=f"'threshold = {threshold}' is invalid. It must a float."
+            self.bomb_input(msg)
         print(f"  Initial Threshold = {self.thresh_ini}")
         self.threshold = self.thresh_ini
 
@@ -94,6 +96,7 @@ class Property(ABC):
 
         # Reward hook
         self.reward_hook = 0.3
+        self.allowed_threshold_jumps = True
         
         # If the reward class is 'soft', we need an acceptance ratio (softness)
         # for values that fall outside the specified threshold:
@@ -195,32 +198,56 @@ class Property(ABC):
             prop_values (float or list(floats)): The calculated value(s) of the property
         """
 
-        if ( (not self.converged) and (self.optimize) and 
-             (np.abs(self.threshold) < np.abs(self.thresh_limit)) ):
+        if (not self.converged) and (self.optimize):
+            adjusted = False
+            prop_values = np.array(prop_values)
+            
+            if (self.direction == 'increasing') and (self.threshold < self.thresh_limit):
+                above_thr = np.sum(prop_values > self.threshold) / len(prop_values)
 
-            # Check how many values are outside the threshold
-            outside = np.sum(np.abs(prop_values) > np.abs(self.threshold))
-            outside_ratio = outside / len(prop_values)
+                if above_thr > self.reward_hook:
+                    
+                    if self.allowed_threshold_jumps:
+                        self.threshold = min(self.thresh_limit,
+                                             np.percentile(prop_values, 
+                                                           100 - self.reward_hook*100, 
+                                                           method='higher'))
+                    else:
+                        self.threshold += self.thresh_step
+                    
+                    # Check convergence
+                    if self.threshold >= self.thresh_limit:
+                        self.threshold = self.thresh_limit
+                        self.converged = True
 
-            if outside_ratio > self.reward_hook:
-                self.threshold += self.thresh_step
+                    # Threshold was adjusted
+                    adjusted = True
+                        
+            elif (self.direction == 'decreasing') and (self.threshold > self.thresh_limit):
+                below_thr = np.sum(prop_values < self.threshold) / len(prop_values)
 
-                # Stop at threshold limit
-                if ((self.direction == 'increasing') and 
-                    (self.threshold > self.thresh_limit) or
-                    (self.direction == 'decreasing') and
-                    (self.threshold < self.thresh_limit)):
+                if below_thr > self.reward_hook:
 
-                    self.threshold = self.thresh_limit
-                    self.converged = True
-                    print(f"{self.prop_name.upper()}:  Threshold converged to {self.threshold:6.2f}")
-                    return
-                                
-                # TO-DO: Allow larger threshold jumps based on percentile
-                # upper_limit = np.abs(thresh_limit)
-                # lower_limit = np.abs(thresh_limit)
-                
-                # self.threshold = max(upper_limit, max(threshold, np.percentile(pred,75,interpolation='higher')))
+                    if self.allowed_threshold_jumps:
+                        self.threshold = max(self.thresh_limit,
+                                             np.percentile(prop_values,
+                                                           self.reward_hook*100, 
+                                                           method='lower'))
+                    else:
+                        self.threshold += self.thresh_step
 
+                    # Check convergence
+                    if self.threshold <= self.thresh_limit:
+                        self.threshold = self.thresh_limit
+                        self.converged = True
+                    
+                    # Threshold was adjusted
+                    adjusted = True
+                    
+                        
+            if adjusted: 
                 print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
+            if self.converged: 
+                print(f"{self.prop_name.upper()}:  Hooray! Threshold converged!")
+
         return
