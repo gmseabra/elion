@@ -51,8 +51,9 @@ class ScaffoldMatch(Property):
         if 'scaffold_file' in kwargs.keys():
             template_smarts_file = Path(kwargs['scaffold_file'])
             if not template_smarts_file.is_file():
-                quit(("ERROR while loading template file:\n"
-                      f"File {template_smarts_file.absolute()} doesn't exist."))
+                msg = ("ERROR while loading template file:\n"
+                      f"File {template_smarts_file.absolute()} doesn't exist.")
+                self.bomb_input(msg)
 
             
             print(f"\nLoading scaffold from {template_smarts_file.absolute()}. ")

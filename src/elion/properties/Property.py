@@ -65,14 +65,14 @@ class Property(ABC):
             self.rew_coeff = float(rew_coeff)
         except TypeError:
             msg = (f"'rew_coeff = {rew_coeff}' is invalid.")
-            self.bomb_input(self.prop_name, msg)
+            self.bomb_input(msg)
         print(f"  Reward Weight = {self.rew_coeff}")
         
         # Reward class. Must be either 'hard' or 'soft' reward.
         if rew_class.lower() not in ['hard','soft']: 
             msg = (f"'rew_class = {rew_class}' is not a valid reward class. "
                    "It must be either 'hard' or 'soft'.")
-            self.bomb_input(self.prop_name, msg)
+            self.bomb_input(msg)
             
         self.rew_class = rew_class.lower()
         print(f"  Reward class = {self.rew_class}")
@@ -84,7 +84,7 @@ class Property(ABC):
             self.thresh_ini = float(threshold)
         except TypeError:
            msg=f"'threshold = {threshold}' is invalid. It must a float."
-           self.bomb_input(self.prop_name, msg)
+           self.bomb_input(msg)
         print(f"  Initial Threshold = {self.thresh_ini}")
         self.threshold = self.thresh_ini
 
@@ -103,12 +103,12 @@ class Property(ABC):
             except TypeError:
                 msg=(f"'rew_acc = {rew_acc}' invalid or missing, "
                       "but is required by soft rewards.")
-                self.bomb_input(self.prop_name, msg)
+                self.bomb_input(msg)
             if not 0.0 < self.rew_acc <= 1.0:
                 msg=(f"'rew_acc = {rew_acc}' is invalid."
                       " It must be in the 0.0 < rew_acc < 1.0 interval. "
                       " Either change this value or set the reward class to 'hard'.")
-                self.bomb_input(prop_name, msg)
+                self.bomb_input(msg)
             print(f"  Acceptance = {self.rew_acc}")
 
         # Whether or not ot uptimize this property
@@ -122,7 +122,7 @@ class Property(ABC):
             except TypeError:
                 msg=(f"'thresh_limit = {threshold_limit}' (invalid or missing), "
                       "but is required for optimization.")
-                self.bomb_input(self.prop_name, msg)
+                self.bomb_input(msg)
             print(f"    Threshold Limit = {self.thresh_limit}")
 
             # Threshold step size
@@ -131,21 +131,20 @@ class Property(ABC):
             except TypeError:
                 msg=(f"'thresh_step = {threshold_step}' (invalid or missing), "
                       "but is required for optimization.")
-                self.bomb_input(self.prop_name, msg)
+                self.bomb_input(msg)
 
             print(f"    Threshold Step = {self.thresh_step}")
 
             # Check threshold limits
             # Initial and final thresholds must be different
             if self.thresh_limit == self.thresh_ini:
-                self.bomb_input(self.prop_name, "Initial and final thresholds must be different")
+                self.bomb_input("Initial and final thresholds must be different")
 
             # Step size must be =! 0
             if self.thresh_step == 0:
-                self.bomb_input(self.prop_name, "Threshold step size must be =! 0")
+                self.bomb_input("Threshold step size must be =! 0")
             elif (self.thresh_limit - self.thresh_ini) / self.thresh_step < 0:
-                self.bomb_input(self.prop_name, 
-                                ("Threshold step size (thresh_step) must be in the "
+                self.bomb_input(("Threshold step size (thresh_step) must be in the "
                                  "same direction as the threshold limit (thresh_limit)"))
             elif self.thresh_step > 0:
                 self.direction = 'increasing'
@@ -158,9 +157,9 @@ class Property(ABC):
         print((f"{self.prop_name.upper()} loaded as a {self.direction} property\n"
                f"with inital threshold {self.thresh_ini} and limit {self.thresh_limit}."))
 
-    def bomb_input(self, prop, msg):
+    def bomb_input(self, msg):
         """For sending a message and quitting if there's an error in the input"""        
-        message = f"\n*** ERROR when loading {prop}. ***\n{msg}"
+        message = f"\n*** ERROR when loading {self.prop_name}. ***\n{msg}"
         quit(message)
 
     def reward(self, prop_values, **kwargs):

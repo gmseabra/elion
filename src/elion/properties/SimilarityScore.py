@@ -32,13 +32,13 @@ class SimilarityScore(Property):
             reference_smi = kwargs['reference_smi']
             reference_mol = Chem.MolFromSmiles(reference_smi)
             if not reference_mol:
-                self.bomb_input("similarityScore",("ERROR while reading reference molecule:\n"
-                                             f"Cannot convert {reference_smi} to RDKit Mol object."))
+                self.bomb_input(("ERROR while reading reference molecule:\n"
+                                f"Cannot convert {reference_smi} to RDKit Mol object."))
             
             print(f"\nUsing molecule {reference_smi} as refence for similarity. ")
             self.reference = reference_mol
         else:
-            self.bomb_input("similarityScore","ERROR: Reference molecule not specified.")
+            self.bomb_input("ERROR: Reference molecule not specified.")
 
         # RegionSelector
         # Can be: 'molecule', 'murcko' or 'generic_murcko
