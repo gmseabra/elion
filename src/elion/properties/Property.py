@@ -8,6 +8,24 @@ class Property(ABC):
     inherit from this one.
     """
 
+    # This method below MUST be overridden by whatever property is implemented
+    @abstractmethod
+    def predict(self, mol, **kwargs):
+        """ Given an molecule (format depending on implementation, 
+            but usually RDKit molecule or SMILES), 
+            returns a value for the property (float)
+
+        Args:
+            An RDKit Mol object or list of RDKit mol objects.
+
+        Returns:
+            list(float): The estimated values for the property
+        """
+        pass
+
+
+    # The methods below are general for every property and will
+    # be inherited by all properties. They can be overridden if needed.
     def __init__(self, prop_name, 
                        rew_coeff=1.0,
                        rew_class='hard', rew_acc=None,
@@ -125,10 +143,20 @@ class Property(ABC):
             # Step size must be =! 0
             if self.thresh_step == 0:
                 self.bomb_input(self.prop_name, "Threshold step size must be =! 0")
+            elif (self.thresh_limit - self.thresh_ini) / self.thresh_step < 0:
+                self.bomb_input(self.prop_name, 
+                                ("Threshold step size (thresh_step) must be in the "
+                                 "same direction as the threshold limit (thresh_limit)"))
+            elif self.thresh_step > 0:
+                self.direction = 'increasing'
+            else:
+                self.direction = 'decreasing'
         else:
             # If not optimizing this property, don't count it in the total reward.
             self.rew_coeff = 0.0
         # Finished loading this property.
+        print((f"{self.prop_name.upper()} loaded as a {self.direction} property\n"
+               f"with inital threshold {self.thresh_ini} and limit {self.thresh_limit}."))
 
     def bomb_input(self, prop, msg):
         """For sending a message and quitting if there's an error in the input"""        
@@ -178,11 +206,17 @@ class Property(ABC):
             if outside_ratio > self.reward_hook:
                 self.threshold += self.thresh_step
 
-                # BUG: This currently only works for increasing absolute thresholds
-                #      If the thresold is positive but decreasing, this will not work.
-                if abs(self.threshold) > abs(self.thresh_limit):
+                # Stop at threshold limit
+                if ((self.direction == 'increasing') and 
+                    (self.threshold > self.thresh_limit) or
+                    (self.direction == 'decreasing') and
+                    (self.threshold < self.thresh_limit)):
+
                     self.threshold = self.thresh_limit
-                
+                    self.converged = True
+                    print(f"{self.prop_name.upper()}:  Threshold converged to {self.threshold:6.2f}")
+                    return
+                                
                 # TO-DO: Allow larger threshold jumps based on percentile
                 # upper_limit = np.abs(thresh_limit)
                 # lower_limit = np.abs(thresh_limit)
@@ -191,18 +225,3 @@ class Property(ABC):
 
                 print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
         return
-
-    # The methods below MUST be overridden by whatever property is implemented
-    @abstractmethod
-    def predict(self, mol, **kwargs):
-        """ Given an molecule (format depending on implementation, 
-            but usually RDKit molecule or SMILES), 
-            returns a value for the property (float)
-
-        Args:
-            An RDKit Mol object or list of RDKit mol objects.
-
-        Returns:
-            list(float): The estimated values for the property
-        """
-        pass
