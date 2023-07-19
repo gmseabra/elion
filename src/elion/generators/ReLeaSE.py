@@ -287,7 +287,7 @@ class ReLeaSE(AbstractGenerator):
                     print(f"{'Property':<34s} {'Threshold'}\t{'Converged?'}")
                     for prop in estimator.properties.keys():
                         print((f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}"
-                               f"\t {estimator.properties[prop].converged}"))
+                               f"\t{estimator.properties[prop].converged:>10s}"))
                     print("-"*80, flush=True)
 
                     # 1. Train the generator with the latest gen_data
