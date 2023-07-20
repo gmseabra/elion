@@ -177,13 +177,6 @@ def print_stats(results, header="", LENGTH_LIM=30, print_header=False):
         print("")
 
     # Stats
-    print(f"{'':>6s}  {'THRESHOLDS:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
-    for prop, cls in results.items():
-        title_len = max(len(prop),6)
-        threshold = cls.threshold
-        print(f"  {threshold:>{title_len}.2f}", end="")
-    print("")
-
     print(f"{'':>6s}  {'MAXIMUM:':{LENGTH_LIM}.{LENGTH_LIM}s}   ", end="")
     for prop, cls in results.items():
         title_len = max(len(prop),6)
