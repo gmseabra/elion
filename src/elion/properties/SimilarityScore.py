@@ -49,11 +49,23 @@ class SimilarityScore(Property):
         # If indicated, use MurckoScaffold or GenericMurckoScaffold
         if 'region_selector' in kwargs.keys():
             if kwargs['region_selector'] == 'murcko':
+                # Use the Murcko Scaffold for similarity measures
                 self.region_selector = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol
                 print("Using the Murcko Scaffold for similarity measures. ")
-            elif kwargs['region_selector'] == 'generic_murcko':
+                
+            elif kwargs['region_selector'] == 'generic_molecule':
+                # This just replaces all atoms for carbon and all bonds for single bonds
                 self.region_selector = Chem.Scaffolds.MurckoScaffold.MakeScaffoldGeneric
+                print(("Using the Generic molecule for similarity measures. \n"
+                       "(All atoms are carbons and all bonds are single bonds)"))
+                
+            elif kwargs['region_selector'] == 'generic_murcko':
+                # First get the Murcko Scaffold and then make it generic
+                self.region_selector = self.generic_murcko_scaffold
                 print("Using the Generic Murcko Scaffold for similarity measures. ")
+
+            else:
+                self.bomb_input(f"ERROR: Region Selector '{kwargs['region_selector']}' not recognized.")
         
         # Fingerprint type
         # Deafault is 'rdkit'
@@ -69,7 +81,13 @@ class SimilarityScore(Property):
 
         # Finally, prepare the reference molecule
         self.reference_fp = self.fingerprinter.GetFingerprint(self.region_selector(self.reference))
-        
+
+    def generic_murcko_scaffold(self, mol):
+        # First get the Murcko Scaffold and then make it generic
+        scaffold = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
+        scaffold = Chem.Scaffolds.MurckoScaffold.MakeScaffoldGeneric(scaffold)
+        return scaffold
+    
     def predict(self,mols, **kwargs):
         """
             Args:
