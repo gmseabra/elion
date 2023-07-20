@@ -200,11 +200,12 @@ class Property(ABC):
 
         # TO-DO: Consider pushing BACK a threshold that has already converged, if needed
         
-        if (not self.converged) and (self.optimize):
+        if self.optimize:
             adjusted = False
             prop_values = np.array(prop_values)
-            
-            if (self.direction == 'increasing') and (self.threshold < self.thresh_limit):
+
+            self.converged = False
+            if (self.direction == 'increasing'):
                 above_thr = np.sum(prop_values > self.threshold) / len(prop_values)
 
                 if above_thr > self.reward_hook:
@@ -217,15 +218,15 @@ class Property(ABC):
                     else:
                         self.threshold += self.thresh_step
                     
-                    # Check convergence
-                    if self.threshold >= self.thresh_limit:
-                        self.threshold = self.thresh_limit
-                        self.converged = True
-
                     # Threshold was adjusted
                     adjusted = True
                         
-            elif (self.direction == 'decreasing') and (self.threshold > self.thresh_limit):
+                # Check convergence
+                if self.threshold >= self.thresh_limit:
+                    self.threshold = self.thresh_limit
+                    self.converged = True
+
+            elif (self.direction == 'decreasing'):
                 below_thr = np.sum(prop_values < self.threshold) / len(prop_values)
 
                 if below_thr > self.reward_hook:
@@ -237,16 +238,15 @@ class Property(ABC):
                                                            method='lower'))
                     else:
                         self.threshold += self.thresh_step
-
-                    # Check convergence
-                    if self.threshold <= self.thresh_limit:
-                        self.threshold = self.thresh_limit
-                        self.converged = True
                     
                     # Threshold was adjusted
                     adjusted = True
+
+                # Check convergence
+                if self.threshold <= self.thresh_limit:
+                    self.threshold = self.thresh_limit
+                    self.converged = True
                     
-                        
             if adjusted: 
                 print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
             if self.converged: 
