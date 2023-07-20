@@ -220,7 +220,7 @@ class Property(ABC):
                 elif (above_thr < self.reward_hook) and (self.threshold >= self.thresh_limit):
                     # Threshold is too tight, need to take a step back
                     adjusted = True
-                    print(f"{self.prop_name.upper()}:  Threshold too tight, taking a step back...")
+                    print(f"{self.prop_name.upper():25s}:  Threshold too tight, taking a step back...")
                     self.threshold = np.percentile(prop_values, 
                                                    100 - self.reward_hook*100, 
                                                    method='higher')
@@ -229,6 +229,8 @@ class Property(ABC):
                 if self.threshold >= self.thresh_limit:
                     self.threshold = self.thresh_limit
                     self.converged = True
+                    print(f"{self.prop_name.upper():25s}:  Hooray! Threshold converged!")
+
                         
 
             elif (self.direction == 'decreasing'):
@@ -248,7 +250,7 @@ class Property(ABC):
                 elif (below_thr < self.reward_hook) and (self.threshold <= self.thresh_limit):
                     # Threshold is too tight, need to take a step back
                     adjusted = True
-                    print(f"{self.prop_name.upper()}:  Threshold too tight, taking a step back...")
+                    print(f"{self.prop_name.upper():25s}:  Threshold too tight, taking a step back...")
                     self.threshold = np.percentile(prop_values,
                                                    self.reward_hook*100, 
                                                    method='lower')
@@ -257,10 +259,9 @@ class Property(ABC):
                 if self.threshold <= self.thresh_limit:
                     self.threshold = self.thresh_limit
                     self.converged = True
+                    print(f"{self.prop_name.upper():25s}:  Hooray! Threshold converged!")
                     
             if adjusted: 
-                print(f"{self.prop_name.upper()}:  Threshold adjusted to {self.threshold:6.2f}")
-            if self.converged: 
-                print(f"{self.prop_name.upper()}:  Hooray! Threshold converged!")
+                print(f"{self.prop_name.upper():25s}:  Threshold adjusted to {self.threshold:6.2f}")                
 
         return
