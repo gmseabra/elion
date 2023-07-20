@@ -197,19 +197,18 @@ class Property(ABC):
         Args:
             prop_values (float or list(floats)): The calculated value(s) of the property
         """
-
-        # TO-DO: Consider pushing BACK a threshold that has already converged, if needed
         
         if self.optimize:
-            adjusted = False
             prop_values = np.array(prop_values)
 
+            adjusted = False
             self.converged = False
             if (self.direction == 'increasing'):
                 above_thr = np.sum(prop_values > self.threshold) / len(prop_values)
 
-                if above_thr > self.reward_hook:
-                    
+                if (above_thr > self.reward_hook) and (self.threshold < self.thresh_limit):
+                    # Enough molecules are better than threshold, tighten it up
+                    adjusted = True
                     if self.allowed_threshold_jumps:
                         self.threshold = min(self.thresh_limit,
                                              np.percentile(prop_values, 
@@ -217,20 +216,27 @@ class Property(ABC):
                                                            method='higher'))
                     else:
                         self.threshold += self.thresh_step
-                    
-                    # Threshold was adjusted
+
+                elif (above_thr < self.reward_hook) and (self.threshold >= self.thresh_limit):
+                    # Threshold is too tight, need to take a step back
                     adjusted = True
-                        
-                # Check convergence
+                    print(f"{self.prop_name.upper()}:  Threshold too tight, taking a step back...")
+                    self.threshold = np.percentile(prop_values, 
+                                                   100 - self.reward_hook*100, 
+                                                   method='higher')
+
+                # Check convergence limit
                 if self.threshold >= self.thresh_limit:
                     self.threshold = self.thresh_limit
                     self.converged = True
+                        
 
             elif (self.direction == 'decreasing'):
                 below_thr = np.sum(prop_values < self.threshold) / len(prop_values)
 
-                if below_thr > self.reward_hook:
-
+                if (below_thr > self.reward_hook) and (self.threshold > self.thresh_limit):
+                    # Enough molecules are better than threshold, tighten it up
+                    adjusted = True
                     if self.allowed_threshold_jumps:
                         self.threshold = max(self.thresh_limit,
                                              np.percentile(prop_values,
@@ -238,9 +244,14 @@ class Property(ABC):
                                                            method='lower'))
                     else:
                         self.threshold += self.thresh_step
-                    
-                    # Threshold was adjusted
+
+                elif (below_thr < self.reward_hook) and (self.threshold <= self.thresh_limit):
+                    # Threshold is too tight, need to take a step back
                     adjusted = True
+                    print(f"{self.prop_name.upper()}:  Threshold too tight, taking a step back...")
+                    self.threshold = np.percentile(prop_values,
+                                                   self.reward_hook*100, 
+                                                   method='lower')
 
                 # Check convergence
                 if self.threshold <= self.thresh_limit:
