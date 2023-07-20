@@ -43,18 +43,21 @@ def main():
         reward_function.calculate(config)
         
     elif run_type == 'generate':
+        # Initialize
         generator = Generator(config['Generator']).generator
+        estimator = Estimators(config['Reward_function'])
+        
+        # Generate molecules
         smis = generator.generate_mols()
         mols = [ Chem.MolFromSmiles(x) for x in smis ] 
 
-        # Calculates Properties and Rewards
-        estimator = Estimators(config['Reward_function'])
+        # Calculates & prints Properties
         predictions = estimator.estimate_properties(mols)
-        rewards = estimator.estimate_rewards(predictions)
-
-        # Prints results
         print_results(smis, predictions, header="PROPERTIES")
-        print_results(smis, rewards, header="REWARDS")
+
+        # Calculates & prints Rewards
+        #rewards = estimator.estimate_rewards(predictions)
+        #print_results(smis, rewards, header="REWARDS")
 
     elif run_type == 'bias_generator':
         generator = Generator(config['Generator']).generator

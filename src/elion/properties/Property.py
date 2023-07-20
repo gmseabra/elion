@@ -153,12 +153,16 @@ class Property(ABC):
                 self.direction = 'increasing'
             else:
                 self.direction = 'decreasing'
+
+            # Done loading this property
+            # Finished loading this property.
+            print((f"{self.prop_name.upper()} loaded as a {self.direction} property\n"
+                   f"with inital threshold {self.thresh_ini} and limit {self.thresh_limit}."))
         else:
             # If not optimizing this property, don't count it in the total reward.
             self.rew_coeff = 0.0
-        # Finished loading this property.
-        print((f"{self.prop_name.upper()} loaded as a {self.direction} property\n"
-               f"with inital threshold {self.thresh_ini} and limit {self.thresh_limit}."))
+            # Finished loading this property.
+            print((f"{self.prop_name.upper()} loaded."))
 
     def bomb_input(self, msg):
         """For sending a message and quitting if there's an error in the input"""        
