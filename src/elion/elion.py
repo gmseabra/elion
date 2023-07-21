@@ -70,6 +70,11 @@ def main():
         
     elif run_type == 'post_process':
         pass
+
+    else:
+        raise ValueError((f"Invalid run_type: {run_type}\n"
+                          f"Valid options are: calculate_properties, generate, bias_generator, post_process")
+                         )
     
 if __name__ == '__main__':
     main()
