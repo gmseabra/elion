@@ -127,7 +127,7 @@ def save_smi_file(filename, smiles, predictions):
         output.write(line)
         i=1
         for smi, *pred in zip(smiles, *[predictions[x] for x in predictions]):
-            line = f"{smi}, Gen-{i:05d}," + ','.join([f"{x:.2f}" for x in pred]) +  "\n"
+            line = f"{smi},Gen-{i:05d}," + ','.join([f"{x:.2f}" for x in pred]) +  "\n"
             output.write(line)
             i += 1
 

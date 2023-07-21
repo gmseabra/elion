@@ -10,7 +10,7 @@ import argparse
 from rdkit import Chem
 import input_reader
 import reward_function
-from utils import print_results
+from utils import print_results, print_stats, save_smi_file
 from generators.Generator import Generator
 from properties.Estimators import Estimators
 
@@ -53,8 +53,12 @@ def main():
 
         # Calculates & prints Properties
         predictions = estimator.estimate_properties(mols)
-        print_results(smis, predictions, header="PROPERTIES")
-
+        if config['Control']['verbosity'] > 0:
+            print_results(smis, predictions, header="PROPERTIES")
+        else:
+            print_stats(predictions, header="STATISTICS", print_header=True)
+        save_smi_file(config['Control']['smiles_file'], smis, predictions)
+        
         # Calculates & prints Rewards
         #rewards = estimator.estimate_rewards(predictions)
         #print_results(smis, rewards, header="REWARDS")
