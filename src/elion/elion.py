@@ -6,11 +6,12 @@
 # accordingly.
 """
 import argparse
+from pathlib import Path
 
 from rdkit import Chem
 import input_reader
 import reward_function
-from utils import print_results, print_stats, save_smi_file
+import utils
 from generators.Generator import Generator
 from properties.Estimators import Estimators
 
@@ -39,11 +40,27 @@ def main():
 
     # Calculation Type
     run_type = config['Control']['run_type']
+
+    # Given a SMILES file, just calculate the properties
     if run_type == 'calculate_properties':
-        reward_function.calculate(config)
-        
+        smiles_file = Path(config['Control']['smiles_file'])
+        output_file = Path(config['Control']['output_smi_file'])
+        estimator = Estimators(config['Reward_function'])
+
+        mols, smis = utils.read_smi_file(smiles_file)
+        predictions = estimator.estimate_properties(mols)
+
+        if config['Control']['verbosity'] > 0:
+            utils.print_results(smis, predictions, header="PROPERTIES")
+        else:
+            utils.print_stats(predictions, header="STATISTICS", print_header=True)
+            
+        utils.save_smi_file(output_file, smis, predictions)
+
+    # Generate new molecules
     elif run_type == 'generate':
         # Initialize
+        output_file = Path(config['Control']['output_smi_file'])
         generator = Generator(config['Generator']).generator
         estimator = Estimators(config['Reward_function'])
         
@@ -54,15 +71,11 @@ def main():
         # Calculates & prints Properties
         predictions = estimator.estimate_properties(mols)
         if config['Control']['verbosity'] > 0:
-            print_results(smis, predictions, header="PROPERTIES")
+            utils.print_results(smis, predictions, header="PROPERTIES")
         else:
-            print_stats(predictions, header="STATISTICS", print_header=True)
-        save_smi_file(config['Control']['smiles_file'], smis, predictions)
+            utils.print_stats(predictions, header="STATISTICS", print_header=True)
+        utils.save_smi_file(output_file, smis, predictions)
         
-        # Calculates & prints Rewards
-        #rewards = estimator.estimate_rewards(predictions)
-        #print_results(smis, rewards, header="REWARDS")
-
     elif run_type == 'bias_generator':
         generator = Generator(config['Generator']).generator
         estimator = Estimators(config['Reward_function'])

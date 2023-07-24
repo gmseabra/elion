@@ -5,31 +5,10 @@ from utils import print_results
 from properties.Estimators import Estimators
 
 
-def calculate(config):
+def calculate_properties(config):
     # Read SMILES file
     # Filters out invalid SMILES
-    mols, smis = [], []
-    smiles_file = Path(config['Control']['smiles_file'])
 
-    if smiles_file.is_file():
-        with open(smiles_file,'r') as smif:
-            for line in smif.readlines():
-                if line.startswith("#") or "Smiles" in line or "SMILES" in line:
-                    continue
-                if "," in line:
-                    smi = line.split(",")[0]
-                else:
-                    smi = line.split()[0]
-                
-                mol = Chem.MolFromSmiles(smi)
-                
-                if mol is not None:
-                    mols.append(mol)
-                    smis.append(smi)
-    else:
-        msg = ( "ERROR when reading config file:\n"
-               f"Could not find the smiles_file <{smiles_file.absolute()}>.")
-        quit(msg)
     
     # Calculates Properties and Rewards
 

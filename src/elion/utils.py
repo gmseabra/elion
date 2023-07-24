@@ -116,6 +116,43 @@ def print_progress_table(reward_properties:Dict, predictions:Dict, rewards:Dict)
     print("-"*55)
     return
 
+# Reads a SMILES file
+def read_smi_file(smiles_file):
+    """Reads a SMILES file, and returns a list of RDKit ROMol molecules
+
+    Args:
+        smiles_file (str or Path): The path to the SMILES file
+
+    Returns:
+        [RDKit Mol]: A list of RDKit Mol objects
+        [str]: A list of SMILES strings
+    """
+    mols, smis = [], []
+    smiles_file = Path(smiles_file)
+    if smiles_file.is_file():
+        with open(smiles_file,'r') as smif:
+            for row, line in enumerate(smif.readlines()):
+                if line.startswith("#") or "Smiles" in line or "SMILES" in line:
+                    continue
+                if "," in line:
+                    smi = line.split(",")[0]
+                else:
+                    smi = line.split()[0]
+                
+                mol = Chem.MolFromSmiles(smi)
+                
+                if mol is None:
+                    print( f"WARNING: Invalid SMILES: <{smi}> in row {row}. Skipping.")
+                else:
+                    mols.append(mol)
+                    smis.append(smi)
+    else:
+        msg = ( "ERROR when reading config file:\n"
+               f"Could not find the smiles_file <{smiles_file.absolute()}>.")
+        quit(msg)
+        
+    return mols, smis
+
 # Save a SMILES file
 def save_smi_file(filename, smiles, predictions):
     """ Saves the molecules and predictions in a .smi file
