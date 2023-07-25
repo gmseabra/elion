@@ -54,34 +54,30 @@ class ADMET_Risk(Property):
 
         smiles_file = Path(tempfile.NamedTemporaryFile(suffix='.smi', delete=False).name)
         output_file = Path(tempfile.NamedTemporaryFile(suffix='.dat', delete=False).name)
-        with open(smiles_file.name,'w', encoding='utf-8') as nf:
+
+        with open(smiles_file,'w', encoding='utf-8') as nf:
             for seq, smi in enumerate(smiles):
                 nf.write(f"{smi}\tGen-{seq}\n")
-
-        print(f"smiles_file: {smiles_file}")
-        print(f"output_file: {output_file}")
-        
+                        
         # Now, runs ADMET-Predictor with this file
         # "-m","TOX,GLB,SimFaFb",
         _ = subprocess.run([self.executable,
                             "-t", "SMI",
-                            smiles_file.name,
+                            smiles_file,
                             "-m","GLB",
                             "-N","16",
-                            "-out",output_file.stem],
+                            "-out", Path(output_file.parent,output_file.stem)],
                            capture_output=True,
                            check=False)
 
         # now we read the output file to extract the ADMET Risk values
         with open(output_file, 'r', encoding='utf-8') as f:
             for line in f.readlines():
-                print(line)
-                print(float(line.split("\t")[9]))
+                if "SMILES" in line:
+                    continue
                 admet_risk.append(float(line.split("\t")[9]))
         # Finally, we delete the temporary files
         smiles_file.unlink()
         output_file.unlink()
-        print(f"ADMET Dimensions: {len(admet_risk)}")
-        print(f"ADMET Risk: {admet_risk}")
 
         return admet_risk
