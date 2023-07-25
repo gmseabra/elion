@@ -7,6 +7,11 @@ from pathlib import Path
 import rdkit
 from rdkit import Chem, DataStructs
 
+# Suppress RDKit output
+from rdkit import RDLogger
+rdkit_logger = RDLogger.logger()
+rdkit_logger.setLevel(RDLogger.CRITICAL)
+
 from properties.Property import Property
 
 class SimilarityScore(Property):
