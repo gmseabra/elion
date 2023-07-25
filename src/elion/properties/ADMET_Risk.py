@@ -53,7 +53,7 @@ class ADMET_Risk(Property):
         smiles = [Chem.MolToSmiles(x) for x in _mols]
 
         smiles_file = Path(tempfile.NamedTemporaryFile(suffix='.smi', delete=False).name)
-        output_file = Path(tempfile.NamedTemporaryFile(suffix='.dat', delete=False).name)
+        output_file = smiles_file.with_suffix('.dat')
 
         with open(smiles_file,'w', encoding='utf-8') as nf:
             for seq, smi in enumerate(smiles):
@@ -76,8 +76,11 @@ class ADMET_Risk(Property):
                 if "SMILES" in line:
                     continue
                 admet_risk.append(float(line.split("\t")[9]))
-        # Finally, we delete the temporary files
-        smiles_file.unlink()
-        output_file.unlink()
-
+        # Finally, we delete the temporary & junk files created by ADMET Predictor
+        junk = [smiles_file, output_file]
+        junk.extend(list(Path.cwd().glob('flex*.log')))
+        junk.extend(list(smiles_file.parent.glob('ADMET*.log')))
+        for j in junk:
+            Path(j).unlink(missing_ok=True)
+            
         return admet_risk
