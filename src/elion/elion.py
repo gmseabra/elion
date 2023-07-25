@@ -15,6 +15,52 @@ import utils
 from generators.Generator import Generator
 from properties.Estimators import Estimators
 
+
+def calculate_properties(config):
+    """Given a SMILES file, calculate the properties of the molecules.	"""	
+    smiles_file = Path(config['Control']['smiles_file'])
+    output_file = Path(config['Control']['output_smi_file'])
+    estimator = Estimators(config['Reward_function'])
+
+    mols, smis = utils.read_smi_file(smiles_file)
+    predictions = estimator.estimate_properties(mols)
+
+    if config['Control']['verbosity'] > 0:
+        utils.print_results(smis, predictions, header="PROPERTIES")
+    else:
+        utils.print_stats(predictions, header="STATISTICS", print_header=True)
+        
+    utils.save_smi_file(output_file, smis, predictions)
+    
+def generate_mols(config):
+    """Generate new molecules"""	
+    # Initialize
+    output_file = Path(config['Control']['output_smi_file'])
+    generator = Generator(config['Generator']).generator
+    estimator = Estimators(config['Reward_function'])
+    
+    # Generate molecules
+    smis = generator.generate_mols()
+    mols = [ Chem.MolFromSmiles(x) for x in smis ] 
+
+    # Calculates & prints Properties
+    predictions = estimator.estimate_properties(mols)
+    if config['Control']['verbosity'] > 0:
+        utils.print_results(smis, predictions, header="PROPERTIES")
+    else:
+        utils.print_stats(predictions, header="STATISTICS", print_header=True)
+    utils.save_smi_file(output_file, smis, predictions)
+
+def bias_generator(config):
+    """Biases a Generator"""
+    generator = Generator(config['Generator']).generator
+    estimator = Estimators(config['Reward_function'])
+    generator.bias_generator(config['Control'], estimator)
+
+def post_process(config):
+    """TO-DO"""
+    pass
+
 def main():
     """Elion: A Workflow for the Design of Small Molecules with Desired Properties
     """
@@ -38,51 +84,22 @@ def main():
         import pprint
         pprint.pprint(config)
 
-    # Calculation Type
+    #-- Calculation Type --#
     run_type = config['Control']['run_type']
 
-    # Given a SMILES file, just calculate the properties
     if run_type == 'calculate_properties':
-        smiles_file = Path(config['Control']['smiles_file'])
-        output_file = Path(config['Control']['output_smi_file'])
-        estimator = Estimators(config['Reward_function'])
+        # Given a SMILES file, just calculate the properties
+        calculate_properties(config)
 
-        mols, smis = utils.read_smi_file(smiles_file)
-        predictions = estimator.estimate_properties(mols)
-
-        if config['Control']['verbosity'] > 0:
-            utils.print_results(smis, predictions, header="PROPERTIES")
-        else:
-            utils.print_stats(predictions, header="STATISTICS", print_header=True)
-            
-        utils.save_smi_file(output_file, smis, predictions)
-
-    # Generate new molecules
     elif run_type == 'generate':
-        # Initialize
-        output_file = Path(config['Control']['output_smi_file'])
-        generator = Generator(config['Generator']).generator
-        estimator = Estimators(config['Reward_function'])
-        
-        # Generate molecules
-        smis = generator.generate_mols()
-        mols = [ Chem.MolFromSmiles(x) for x in smis ] 
-
-        # Calculates & prints Properties
-        predictions = estimator.estimate_properties(mols)
-        if config['Control']['verbosity'] > 0:
-            utils.print_results(smis, predictions, header="PROPERTIES")
-        else:
-            utils.print_stats(predictions, header="STATISTICS", print_header=True)
-        utils.save_smi_file(output_file, smis, predictions)
-        
+        # Generate new molecules
+        generate_mols(config)
+                
     elif run_type == 'bias_generator':
-        generator = Generator(config['Generator']).generator
-        estimator = Estimators(config['Reward_function'])
-        generator.bias_generator(config['Control'], estimator)
+        bias_generator(config)
         
     elif run_type == 'post_process':
-        pass
+        post_process(config)
 
     else:
         raise ValueError((f"Invalid run_type: {run_type}\n"
