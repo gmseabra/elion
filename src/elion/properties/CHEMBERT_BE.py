@@ -19,6 +19,12 @@ class CHEMBERT_BE(Property):
               fits our model. Later, we may come back to a more efficient implementation.
     """
 
+    CITATION = ( "  Kim, H., Lee, J., Ahn, S., & Lee, J. R. (2021).\n"
+                 "  \"A merged molecular representation learning for molecular \n"
+                 "  properties prediction with a web-based service.\" \n"
+                 "  Scientific Reports, 11(1), 11028.\n"
+                 "  https://doi.org/10.1038/s41598-021-90259-7" )
+
     def __init__(self, prop_name, **kwargs):
         # Initialize super
         super().__init__(prop_name, **kwargs)

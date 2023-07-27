@@ -22,6 +22,10 @@ class SAScore(Property):
         For details, see: http://www.doi.org/10.1186/1758-2946-1-8
     """
 
+    CITATION = (f" \"RDKit: Open-source cheminformatics version {rdkit.__version__} "
+                 "(www.rdkit.org)\"")
+
+
     def __init__(self, prop_name, **kwargs):
         # Initialize super
         super().__init__(prop_name, **kwargs)

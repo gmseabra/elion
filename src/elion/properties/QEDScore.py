@@ -20,6 +20,9 @@ class QEDScore(Property):
             0 == BAD  (all properties unfavourable) 
             1 == GOOD (all properties favourable)
     """
+    
+    CITATION = (f" \"RDKit: Open-source cheminformatics version {rdkit.__version__} "
+                 "(www.rdkit.org)\"")
 
     def predict(self,
                 mols,

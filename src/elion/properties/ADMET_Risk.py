@@ -19,19 +19,25 @@ class ADMET_Risk(Property):
             full path to the `RunAP.sh` executable.
     """
 
+    CITATION = (" ADMET Predictor v11,\n"
+                "  https://www.simulations-plus.com/software/admet-predictor/")
+
     def __init__(self, prop_name, **kwargs):
         # Initialize super
         super().__init__(prop_name, **kwargs)
-        print(kwargs)
         if 'RunAP_executable' not in kwargs:
             msg = "ERROR: ADMET Predictor executable not specified in config file."
             self.bomb_input(msg)
         else:
             self.executable = Path(kwargs['RunAP_executable'])
+            
         if not self.executable.is_file():
             msg = (f"ERROR: ADMET Predictor executable not found at {self.executable.absolute()}.\n"
                     "Please check the path to the executable in the config file.")
             self.bomb_input(msg)
+        else:
+            print("  Executable file: ", self.executable)
+
 
     def predict(self, mols, **kwargs):
         """Predict ADMET Risk property for molecules.

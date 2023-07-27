@@ -18,17 +18,19 @@ class Estimators:
         self.all_converged = False
         
         for prop in properties_cfg:
-            print("-"*50)
+            print("-"*80)
+            print(f"Loading Property: {prop.upper()}")	
             module = importlib.import_module(f'properties.{prop}')
             module = getattr(module, prop)
             self.properties[prop] = module(prop,**properties_cfg[prop])
+            print(f"Done Loading Property: {prop.upper()}")	
 
         # Maximum possible reward per molecule
         max_reward = 0.0
         for _prop, _cls in self.properties.items():
             max_reward += _cls.rew_coeff * _cls.max_reward
         self.max_reward = max_reward
-        print("-"*50)
+        print("-"*80)
         
         print("Done reading properties.")
         print(f"The maximum possible reward per molecule is: {self.max_reward:6.2f}")

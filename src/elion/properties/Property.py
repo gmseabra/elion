@@ -59,7 +59,7 @@ class Property(ABC):
         # Name the property
         self.prop_name = prop_name
         self.converged = False
-        print(f"Loading Property: {self.prop_name.upper()}")	
+        print(f"When using this property, please cite:\n {self.CITATION}\n")
         
         # All properties start with coeff = 1.0, but can be altered
         try:
@@ -161,8 +161,6 @@ class Property(ABC):
         else:
             # If not optimizing this property, don't count it in the total reward.
             self.rew_coeff = 0.0
-            # Finished loading this property.
-            print((f"{self.prop_name.upper()} loaded."))
 
     def bomb_input(self, msg):
         """For sending a message and quitting if there's an error in the input"""        

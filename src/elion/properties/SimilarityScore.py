@@ -27,6 +27,9 @@ class SimilarityScore(Property):
 
     """
 
+    CITATION = (f" \"RDKit: Open-source cheminformatics version {rdkit.__version__} "
+                 "(www.rdkit.org)\"")
+
     def __init__(self, prop_name, **kwargs):
 
         # Initialize super
