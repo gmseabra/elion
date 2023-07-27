@@ -40,9 +40,9 @@ def generate_mols(config):
     estimator = Estimators(config['Reward_function'])
     
     # Generate molecules
-    smis = generator.generate_mols()
-    mols = [ Chem.MolFromSmiles(x) for x in smis ] 
-
+    mols = generator.generate_mols()
+    smis = [Chem.MolToSmiles(mol) for mol in mols]
+    
     # Calculates & prints Properties
     predictions = estimator.estimate_properties(mols)
     if config['Control']['verbosity'] > 0:

@@ -72,7 +72,7 @@ class ReLeaSE(AbstractGenerator):
         self.generator.load_model(self.initial_state)
         print("Done.")
 
-    def generate_mols(self):
+    def generate_smis(self):
         """
         Generates a sample of n_to_generate molecules using the provided generator.
 
@@ -87,6 +87,12 @@ class ReLeaSE(AbstractGenerator):
         generated = self.generator.generate(self.batch_size, verbose=1)
         return generated
 
+    def generate_mols(self):
+        """Generate molecules using the generator, and returns them as RDKit molecules."""
+        generated = self.generate_smis()
+        mols = [Chem.MolFromSmiles(smi) for smi in generated]
+        return mols
+    
     def bias_generator(self, ctrl_opts, estimator):
         """Bias the generator.
 
@@ -164,7 +170,7 @@ class ReLeaSE(AbstractGenerator):
         # run.
         
         print("GENERATING INITIAL BATCH")
-        smis_unbiased = self.generate_mols()
+        smis_unbiased = self.generate_smis()
         mols_unbiased = [ Chem.MolFromSmiles(x) for x in smis_unbiased ] 
 
         # Predict properties for initial batch
@@ -300,7 +306,7 @@ class ReLeaSE(AbstractGenerator):
                     print("\n")
 
                     # 2. Generate new molecules and predictions
-                    smiles_cur = self.generate_mols()
+                    smiles_cur = self.generate_smis()
                     mols = [Chem.MolFromSmiles(smi) for smi in smiles_cur]
                     predictions_cur = estimator.estimate_properties(mols)
                     rewards_cur = estimator.estimate_rewards(predictions_cur)
@@ -401,7 +407,7 @@ class ReLeaSE(AbstractGenerator):
                 # --- END OF POLICY ITERATION.
 
                 # Generate some molecules for stats. No need to save.
-                smis = self.generate_mols()
+                smis = self.generate_smis()
                 mols = [Chem.MolFromSmiles(smi) for smi in smis]
                 predictions = estimator.estimate_properties(mols)
                 rewards = estimator.estimate_rewards(predictions)
@@ -462,7 +468,7 @@ class ReLeaSE(AbstractGenerator):
         smi_file="./chk/generated_smiles_final.smi"
         chk_path="./chk/biased_generator_final.chk"
 
-        smis = self.generate_mols()
+        smis = self.generate_smis()
         mols = [Chem.MolFromSmiles(smi) for smi in smis]
         predictions_final = estimator.estimate_properties(mols)
         rewards_final = estimator.estimate_rewards(predictions_final)
