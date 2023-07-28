@@ -8,20 +8,25 @@ from properties.Property import Property
 
 
 class Bioavailability(Property):
-    """ Estimation of Human bioavailability at 100mg/kg dose
+    """ Estimation of Human oral bioavailability at 100mg dose
         using SimulationsPlus ADMET Predictor.
 
         Note that AMDET Predictor is a commercial product, and must be
-         purchased separately. This class assumes that ADMET Predictor
-         is installed in the system.
+         purchased separately. This class assumes that:
 
-        It is expected that the ADMET Predictor executable is specified in the
-            config file in the entry 'RunAP_executable'. That would usually be the
-            full path to the `RunAP.sh` executable.
+        (i)    ADMET Predictor is installed in the system.
+        (ii)   A custom SimHIA-100.hia file exists in the 
+                `src/elion/properties/admet` folder, modified
+                 to use a 100 mg dose.
+        (iii)  The ADMET Predictor executable is specified in the
+                config file in the entry 'RunAP_executable'. 
+                That would usually be the full path to the `RunAP.sh` executable.
     """
 
     CITATION = (" ADMET Predictor v11,\n"
                 "  https://www.simulations-plus.com/software/admet-predictor/")
+
+    DOSE = 100.0  # mg
 
     def __init__(self, prop_name, **kwargs):
         # Initialize super
@@ -38,6 +43,9 @@ class Bioavailability(Property):
         else:
             print("  Executable file: ", self.executable)
 
+        # Modified Parameters File for 100 mg dose
+        self.params_file = Path(__file__).parent / 'admet' / 'SimHIA-100.hia'
+
     def predict(self, mols, **kwargs):
         """Predict Bioavailability property for molecules.
 
@@ -50,7 +58,7 @@ class Bioavailability(Property):
             mols: RDKit Mol or list of RDKit Mols
 
         Returns:
-            bioavailability: list of bioavailability values for each molecule
+            bioavailability: list of oral bioavailability values for each molecule
         """
 
         _mols, bioavail = [], []
@@ -59,7 +67,6 @@ class Bioavailability(Property):
 
         smiles_file = Path(tempfile.NamedTemporaryFile(suffix='.smi', delete=False).name)
         output_file = smiles_file.with_suffix('.dat')
-        params_file = Path(Path.cwd(),'admet','SimHIA-100.hia')
 
         with open(smiles_file,'w', encoding='utf-8') as nf:
             for seq, smi in enumerate(smiles):
@@ -70,18 +77,22 @@ class Bioavailability(Property):
                             "-t", "SMI",
                             smiles_file,
                             "-m","SimFaFb",
+                            "-SimHIA_hia", self.params_file,   
                             "-N","16",
-                            "-SimHIA_hia", params_file,   
                             "-out", Path(output_file.parent,output_file.stem)],
                            capture_output=True,
                            check=False)
 
         # now we read the output file to extract the ADMET Risk values
+        bioavail_column = None
         with open(output_file, 'r', encoding='utf-8') as f:
+            col_header = f"%Fb_hum-{self.DOSE:.1f}"
             for line in f.readlines():
-                if "SMILES" in line:
-                    continue
-                bioavail.append(float(line.split("\t")[4]))
+                if col_header in line:
+                    bioavail_column = line.split("\t").index(col_header)
+                    print("  ADMET Predictor column: ", bioavail_column)
+                    continue                
+                bioavail.append(float(line.split("\t")[bioavail_column]))
         # Finally, we delete the temporary & junk files created by ADMET Predictor
         junk = [smiles_file, output_file]
         junk.extend(list(Path.cwd().glob('flex*.log')))
