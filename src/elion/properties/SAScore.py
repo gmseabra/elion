@@ -9,7 +9,7 @@ from properties.Property import Property
 # Local 
 from .SA_Score.sascore import SA_Scorer
 
-class SA_Score(Property):
+class SAScore(Property):
     """
         Calculator class for SA_Score (synthetic acccessibility). 
 
