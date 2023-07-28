@@ -7,7 +7,7 @@ from rdkit.Chem import QED
 # properties must inherit.
 from properties.Property import Property
 
-class QEDScore(Property):
+class QED_Score(Property):
     """
         Calculator class for QED score (drug likeness). 
 

@@ -7,11 +7,11 @@ from rdkit import Chem
 from properties.Property import Property
 
 
-class Bioavailability(Property):
-    """ Estimation of Human oral bioavailability at 100mg dose
+class Intestinal_Absorption(Property):
+    """ Estimation of the fraction of compound absorbed at 100mg dose
         using SimulationsPlus ADMET Predictor.
 
-        ** 89% of the WDI drugs fall into %Fb > 30% cutoff **
+        ** 89% of the WDI drugs fall into %Fa > 80% cutoff **
 
         Note that AMDET Predictor is a commercial product, and must be
          purchased separately. This class assumes that:
@@ -49,7 +49,7 @@ class Bioavailability(Property):
         self.params_file = Path(__file__).parent / 'admet' / 'SimHIA-100.hia'
 
     def predict(self, mols, **kwargs):
-        """Predict Bioavailability property for molecules.
+        """Predict fraction of the compound absorbed (%Fa) property for molecules.
 
            At the moment, there is no interface to ADMET Predictor, so we 
            connect to it via the command line. This means that we need to
@@ -60,10 +60,10 @@ class Bioavailability(Property):
             mols: RDKit Mol or list of RDKit Mols
 
         Returns:
-            bioavailability: list of oral bioavailability values for each molecule
+            absorption: list of predicted fraction absorbed values for each molecule
         """
 
-        _mols, bioavail = [], []
+        _mols, absorbed = [], []
         _mols.extend(mols)
         smiles = [Chem.MolToSmiles(x) for x in _mols]
 
@@ -86,14 +86,14 @@ class Bioavailability(Property):
                            check=False)
 
         # now we read the output file to extract the ADMET Risk values
-        bioavail_column = None
+        absorbed_column = None
         with open(output_file, 'r', encoding='utf-8') as f:
-            col_header = f"%Fb_hum-{self.DOSE:.1f}"
+            col_header = f"%Fa_hum-{self.DOSE:.1f}"
             for line in f.readlines():
                 if col_header in line:
-                    bioavail_column = line.split("\t").index(col_header)
+                    absorbed_column = line.split("\t").index(col_header)
                     continue                
-                bioavail.append(float(line.split("\t")[bioavail_column]))
+                absorbed.append(float(line.split("\t")[absorbed_column]))
         # Finally, we delete the temporary & junk files created by ADMET Predictor
         junk = [smiles_file, output_file]
         junk.extend(list(Path.cwd().glob('flex*.log')))
@@ -101,4 +101,4 @@ class Bioavailability(Property):
         for j in junk:
             Path(j).unlink(missing_ok=True)
             
-        return bioavail
+        return absorbed

@@ -14,7 +14,7 @@ rdkit_logger.setLevel(RDLogger.CRITICAL)
 
 from properties.Property import Property
 
-class SimilarityScore(Property):
+class Similarity_Score(Property):
     """
         Similarity Score.
         

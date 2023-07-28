@@ -1,7 +1,7 @@
 # Predicts the VinaScore for a given Molecule
 from properties.Property import Property
 
-class VinaScore(Property):
+class Vina_Score(Property):
     """Estimation of Vina Scores
     """
 

@@ -9,9 +9,9 @@ from properties.Property import Property
 # Local 
 from .SA_Score.sascore import SA_Scorer
 
-class SAScore(Property):
+class SA_Score(Property):
     """
-        Calculator class for SAScore (synthetic acccessibility). 
+        Calculator class for SA_Score (synthetic acccessibility). 
 
         As implemented in RDKit SAS_scorer module, values are in the interval [1..10]:
              1 == GOOD (Easy to synthsize) 

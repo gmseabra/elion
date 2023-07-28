@@ -29,7 +29,7 @@ class CompareQueryAtoms(rdFMCS.MCSAtomCompare):
             match = False
         return match
 
-class ScaffoldMatch(Property):
+class Scaffold_Match(Property):
     """
         Calculator for Scaffold Match.
         
