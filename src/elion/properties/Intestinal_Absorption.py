@@ -92,8 +92,13 @@ class Intestinal_Absorption(Property):
             for line in f.readlines():
                 if col_header in line:
                     absorbed_column = line.split("\t").index(col_header)
-                    continue                
-                absorbed.append(float(line.split("\t")[absorbed_column]))
+                    continue
+                try:
+                    value = float(line.split("\t")[absorbed_column])
+                except ValueError:
+                    value = 0.0            
+                absorbed.append(value)
+
         # Finally, we delete the temporary & junk files created by ADMET Predictor
         junk = [smiles_file, output_file]
         junk.extend(list(Path.cwd().glob('flex*.log')))

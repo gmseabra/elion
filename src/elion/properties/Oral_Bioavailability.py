@@ -92,8 +92,12 @@ class Oral_Bioavailability(Property):
             for line in f.readlines():
                 if col_header in line:
                     bioavail_column = line.split("\t").index(col_header)
-                    continue                
-                bioavail.append(float(line.split("\t")[bioavail_column]))
+                    continue
+                try:
+                    value = float(line.split("\t")[bioavail_column])
+                except ValueError:
+                    value = 0.0            
+                bioavail.append(value)
         # Finally, we delete the temporary & junk files created by ADMET Predictor
         junk = [smiles_file, output_file]
         junk.extend(list(Path.cwd().glob('flex*.log')))

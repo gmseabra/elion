@@ -78,10 +78,17 @@ class ADMET_Risk(Property):
 
         # now we read the output file to extract the ADMET Risk values
         with open(output_file, 'r', encoding='utf-8') as f:
+            col_header = "ADMET_Risk"
             for line in f.readlines():
-                if "SMILES" in line:
+                if col_header in line:
+                    admet_risk_column = line.split("\t").index(col_header)
                     continue
-                admet_risk.append(float(line.split("\t")[9]))
+                try:
+                    value = float(line.split("\t")[admet_risk_column])
+                except ValueError:
+                    value = 10.0
+                admet_risk.append(value)
+                
         # Finally, we delete the temporary & junk files created by ADMET Predictor
         junk = [smiles_file, output_file]
         junk.extend(list(Path.cwd().glob('flex*.log')))
