@@ -35,7 +35,7 @@ def calculate_properties(config):
 def generate_mols(config):
     """Generate new molecules"""	
     # Initialize
-    output_file = Path(config['Control']['output_smi_file'])
+    output_file = Path(config['Control']['smiles_file'])
     generator = Generator(config['Generator']).generator
     estimator = Estimators(config['Reward_function'])
     
