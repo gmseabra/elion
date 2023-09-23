@@ -169,6 +169,113 @@ def save_smi_file(filename, smiles, predictions):
             output.write(line)
             i += 1
 
+
+# Read a SMILES file with properties
+def read_smi_file_with_properties(smiles_file, return_props=False):
+    """Reads a SMILES file, and returns a list of RDKit ROMol molecules
+
+    Args:
+        smiles_file (str or Path): The path to the SMILES file
+
+    Returns:
+        [RDKit Mol]: A list of RDKit Mol objects
+        [str]: A list of SMILES strings
+    """
+    mols, smis, props = [], [], {}
+    smiles_file = Path(smiles_file)
+    if not smiles_file.is_file():
+        msg = ( "ERROR when reading config file:\n"
+               f"Could not find the smiles_file <{smiles_file.absolute()}>.")
+        quit(msg)
+    
+    
+    with open(smiles_file,'r') as smif:
+        
+        # 1. Finds out the field separator
+        sep = " "
+        for line in smif.readlines():
+            if line.startswith("#"):
+                continue
+            elif "," in line:
+                sep = ","
+                break
+
+        # 2. Rewinds the file
+        smif.seek(0)
+
+        # 3. Finds out the column titles
+        smiles_col = 0 # default
+        column_names = []
+        lines_read = 0
+        for line in smif.readlines():
+            # Assuming that there may be comments in the first 10 lines,
+            # At least one of the lines should contain the column names.            
+            tokens = [ x.strip() for x in line.upper().split(sep) ]
+            if "SMILES" in tokens:
+                # We found a title row
+                column_names = [ x.strip() for x in line.split(sep) ]
+                smiles_col = tokens.index("SMILES")
+                column_names[smiles_col] = "SMILES"
+
+            # It is very unlikely that the SMILES column is not named, or that
+            # there's more than 10 comment lines.
+            lines_read += 1
+            if lines_read > 10:
+                break
+
+        # If we didnt find a title row, we assume that the first column is SMILES.
+        # If there's a second column, we assume that it's the name of the molecule.
+        if len(column_names) == 0:
+            # Means we didn't find a title row. Let's see how many columns there are.
+            smif.seek(0)
+            for row, line in enumerate(smif.readlines()):
+
+                # Skip possible comments
+                if line.startswith("#"):
+                    continue
+
+                column_names = ["SMILES"]
+                tokens = [ x.strip() for x in smif.readline().split(sep) ]
+                if len(tokens) > 1:
+                    column_names.append("Name")
+                if len(tokens) > 2: # There's more than 2 columns
+                    for i in range(2,len(tokens)):
+                        column_names.append(f"Prop-{i-1}")
+
+        # 4. Reads the rest of the file
+        smif.seek(0)
+        for row, line in enumerate(smif.readlines()):
+            if line.startswith("#") or "Smiles" in line or "SMILES" or "smiles" in line:
+                # This is either a title or a commnent. Skip.
+                continue
+            tokens = line.split(sep)
+            smi = tokens[smiles_col]
+            mol = Chem.MolFromSmiles(smi)
+            
+            if mol is None:
+                print( f"WARNING: Invalid SMILES: <{smi}> in row {row}. Skipping.")
+            elif len(tokens) != len(column_names):
+                print(f"WARNING: Mismatch in number of columns in row {row}.")
+                print(f"         Expected {len(column_names)}, got {len(tokens)}.")
+                print(f"         Skipping row.")
+                continue
+            else:
+                mols.append(mol)
+                smis.append(smi)
+                if len(tokens) > 1:
+                    for prop, value in zip(column_names,tokens):
+                        # No need to add the SMILES column
+                        if prop == "SMILES":
+                            continue
+                        if prop not in props:
+                            props[prop] = []
+                        props[prop].append(float(value))
+
+        result = (mols, smis, props) if return_props else (mols, smis)
+        
+    return result
+
+
 # Print results
 def print_results(mols, results, header="", LENGTH_LIM=30, include_stats=True):
     """Prints a table with results
