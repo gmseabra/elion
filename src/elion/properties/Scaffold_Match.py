@@ -42,6 +42,8 @@ class Scaffold_Match(Property):
 
     """
 
+    CITATION = "Gustavo Seabra, 2023"
+
 
     def __init__(self, prop_name, **kwargs):
 
