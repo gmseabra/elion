@@ -2,7 +2,6 @@
 An AI-based workflow for drug lead optimization
 
 ## Installation
-```
 ### Conda Environment
 Use the environemnt file provided, or the spec-file create for RHEL8.0
 
@@ -20,6 +19,7 @@ $ conda create --name myenv --file spec-file.txt
 
 
 ### Install Dependencies
+```
 $ cd to/project/folder/
 $ conda activate elion
 $ pip install --editable .
