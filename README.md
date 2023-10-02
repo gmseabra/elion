@@ -3,7 +3,23 @@ An AI-based workflow for drug lead optimization
 
 ## Installation
 ```
-[Install dependencies]
+### Conda Environment
+Use the environemnt file provided, or the spec-file create for RHEL8.0
+
+** Using the environemnt.yml file **
+Follwing the instructinos from Conda docs, [here](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#creating-an-environment-from-an-environment-yml-file).
+```
+$ conda env create -f environment.yml
+```
+
+** Using the spec file (RHEL 8)
+Follow th einstructions from the Conda docs, [here](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#building-identical-conda-environments).
+```
+$ conda create --name myenv --file spec-file.txt
+```
+
+
+### Install Dependencies
 $ cd to/project/folder/
 $ conda activate elion
 $ pip install --editable .
