@@ -6,12 +6,14 @@ An AI-based workflow for drug lead optimization
 Use the environment file provided or the spec-file (created for RHEL8.0)
 
 **Using the environemnt.yml file**
+
 Following the instructions from Conda docs, [here](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#creating-an-environment-from-an-environment-yml-file).
 ```
 $ conda env create -f environment.yml
 ```
 
-**Using the spec file (RHEL 8)
+**Using the spec file (RHEL 8)**
+
 Follow the instructions from the Conda docs, [here](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#building-identical-conda-environments).
 ```
 $ conda create --name myenv --file spec-file.txt
