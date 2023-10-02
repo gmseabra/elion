@@ -292,10 +292,11 @@ class ReLeaSE(AbstractGenerator):
                     print(f"(RL Iteration {reinforcement_iteration} of {gen_start + max_iterations - 1})")
                     print("-"*80, flush=True)
                     print(f"{'Property':<34s} {'Threshold'}\t{'Limit':>8s}\t{'Converged?'}")
-                    for prop in estimator.properties.keys():
-                        print((f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}"
-                               f"\t{estimator.properties[prop].thresh_limit:>8.3f}"
-                               f"\t{estimator.properties[prop].converged!s:>10s}"))
+                    for prop, cls in estimator.properties.items():
+                        if cls.optimize:
+                            print((f"    ---> {prop:<25s}: {estimator.properties[prop].threshold:>8.3f}"
+                                   f"\t{estimator.properties[prop].thresh_limit:>8.3f}"
+                                   f"\t{estimator.properties[prop].converged!s:>10s}"))
                     print("-"*80, flush=True)
 
                     # 1. Train the generator with the latest gen_data

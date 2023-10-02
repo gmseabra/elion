@@ -76,15 +76,18 @@ class Estimators:
 
         rew = {}
         for _prop, cls in self.properties.items():
-            _values = predictions[_prop]
+            if cls.optimize:
+                _values = predictions[_prop]
 
-            if len(_values) != self.n_mols:
-                msg = ( "ERROR: Something went wrong...\n"
-                       f"Expecting {self.n_mols} values, but got only {len(_values)}"
-                       f"for property {_prop}.")
-                quit(msg)
-                
-            rew[_prop] = cls.reward(_values)
+                if len(_values) != self.n_mols:
+                    msg = ( "ERROR: Something went wrong...\n"
+                        f"Expecting {self.n_mols} values, but got only {len(_values)}"
+                        f"for property {_prop}.")
+                    quit(msg)
+                    
+                rew[_prop] = cls.reward(_values)
+            else:
+                rew[_prop] = [0.0] * self.n_mols
         rew["TOTAL"] = self.total_reward(rew)
         return rew
 
@@ -94,8 +97,9 @@ class Estimators:
         for mol in range(self.n_mols):
             total_rew_mol = 0.0
             for _prop, cls in self.properties.items():
-                this_rew = rewards[_prop][mol] * cls.rew_coeff
-                total_rew_mol += this_rew
+                if cls.optimize:
+                    this_rew = rewards[_prop][mol] * cls.rew_coeff
+                    total_rew_mol += this_rew
                     
             total_rew.append(total_rew_mol)
         return total_rew
@@ -104,13 +108,14 @@ class Estimators:
         """Checks if the predictions are within the thresholds and adjusts them"""
         self.all_converged = True
         for _prop, cls in self.properties.items():
-            _values = predictions[_prop]
-            cls.check_and_adjust_property_threshold(_values)
+            if cls.optimize:
+                _values = predictions[_prop]
+                cls.check_and_adjust_property_threshold(_values)
 
-            # If anly property has not converged yet, 
-            # then the whole process has not converged
-            if not cls.converged:
-                self.all_converged = False
+                # If anly property has not converged yet, 
+                # then the whole process has not converged
+                if not cls.converged:
+                    self.all_converged = False
         return
 
     def smiles_reward_pipeline(self, smis, kwargs):
