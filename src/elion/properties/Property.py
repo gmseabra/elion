@@ -199,6 +199,19 @@ class Property(ABC):
         Args:
             prop_values (float or list(floats)): The calculated value(s) of the property
         """
+
+        debug = False
+        if debug:
+            print(f"{self.prop_name.upper():25s}:  Checking threshold...")
+            print(f"{self.prop_name.upper():25s}:  Current threshold = {self.threshold:6.2f}")
+            print(f"{self.prop_name.upper():25s}:  Current threshold limit = {self.thresh_limit:6.2f}")
+            print(f"{self.prop_name.upper():25s}:  Current threshold step = {self.thresh_step:6.2f}"   )
+            print(f"{self.prop_name.upper():25s}:  Current direction = {self.direction}")
+            print(f"{self.prop_name.upper():25s}:  Current reward hook = {self.reward_hook:6.2f}")
+            print(f"{self.prop_name.upper():25s}:  Current allowed threshold jumps = {self.allowed_threshold_jumps}")
+            print(f"{self.prop_name.upper():25s}:  Current reward class = {self.rew_class}")
+            print(f"{self.prop_name.upper():25s}:  Current optimize = {self.optimize}")
+            print(f"{self.prop_name.upper():25s}:  Current converged = {self.converged}")
         
         if self.optimize:
             prop_values = np.array(prop_values)
