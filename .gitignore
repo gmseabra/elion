@@ -35,3 +35,6 @@ src/elion.egg-info/entry_points.txt
 src/elion.egg-info/PKG-INFO
 src/elion.egg-info/SOURCES.txt
 src/elion.egg-info/top_level.txt
+
+# User docking score
+src/vina/docking_score/
