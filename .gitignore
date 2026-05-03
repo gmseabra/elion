@@ -38,3 +38,6 @@ src/elion.egg-info/top_level.txt
 
 # User docking score
 src/vina/docking_score/
+
+# HPG local scripts
+src/vina/internal_utils/

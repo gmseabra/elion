@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Define your file paths and reaction names
-file_path_1 = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_1_no_smile.csv"
-file_path_2 = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_2_no_smile.csv"
+file_path_1 = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_2_no_smile.csv"
+file_path_2 = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_3_no_smile.csv"
 label_1 = "Initial Vina"
 label_2 = "Optimized Vina"
-output_name = '/blue/lic/huangzihang/repos/elion/src/RL_feedback_loop/visualizatioin/LGBM_suzuki_1_vs_2.png'
+output_name = '/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/visualizatioin/LGBM_suzuki_2_vs_3.png'
 
 # Column name to visualize (adjust if different in your CSVs)
 label_col = 'Affinity' 

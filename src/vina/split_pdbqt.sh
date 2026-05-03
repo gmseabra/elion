@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Define paths
-SRC_DIR="/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki/3/pdbqt"
-OUT_BASE="/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki/3"
-NUM_SPLITS=224
+SRC_DIR="/blue/lic/huangzihang/repos/elion/src/vina/docking_score/LGBM_suzuki/3/pdbqt"
+OUT_BASE="/blue/lic/huangzihang/repos/elion/src/vina/docking_score/LGBM_suzuki/3"
+NUM_SPLITS=390
 
 # 1. Collect all pdbqt files into an array
 mapfile -t files < <(find "$SRC_DIR" -maxdepth 1 -name "*.pdbqt")

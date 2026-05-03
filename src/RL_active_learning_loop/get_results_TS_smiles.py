@@ -3,13 +3,13 @@ import os
 
 # 1. Path to the subset (contains the Name/ligand_id and the scores)
 # Based on your previous snippet, this is the subset file
-subset_path = '/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_2_no_smile.csv'
+subset_path = '/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki_vina_3_no_smile.csv'
 
 # 2. Path to the source file containing the SMILES strings
-reference_path = "/blue/lic/huangzihang/repos/elion/src/RL_feedback_loop/results_TS/LGBM_suzuki_TS_2.csv"
+reference_path = "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/LGBM_suzuki_TS_3.csv"
 
 # 3. Output path for the new training file
-output_path = "/blue/lic/huangzihang/repos/elion/src/RL_feedback_loop/results_vina/LGBM_suzuki_vina_2.csv"
+output_path = "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_vina/LGBM_suzuki_vina_3.csv"
 
 # Ensure the output directory exists
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
