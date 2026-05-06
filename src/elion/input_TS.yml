@@ -1,0 +1,44 @@
+control:
+  run_type: "generate"
+  smiles_file: "scored_lgbm_results.smi"
+  verbosity: 1
+
+generator:
+  batch_size: 200
+  name: "TS"
+  smiles_csv: "/blue/lic/huangzihang/repos/common_utils/elion/learned_distributions/Suzuki_Coupling/LGBM_init/LGBM_1.csv"
+
+reward_function: # FIX: Must be all lowercase so the parser reads it!
+  SAScore:
+    rew_coeff: 0.5
+    max_reward: 1.0
+    threshold: 8.0
+    optimize: True
+    threshold_limit: 3.0
+    threshold_step: -0.1
+    silence_rdkit: True
+  QED_Score:
+    rew_coeff: 0.5
+    max_reward: 1.0
+    optimize: True
+    threshold: 0.5        # The starting threshold for scoring
+    threshold_limit: 0.9  # The final goal for the score
+    threshold_step: 0.05
+  Vina_Score:
+    rew_coeff: 0.4
+    max_reward: 1.0
+    optimize: True
+    threshold: -7.0         # Example: starting threshold
+    threshold_limit: -9.5   # Example: goal affinity
+    threshold_step: -0.1
+    # Specify the file to read here:
+    score_file: "/blue/lic/huangzihang/repos/Vina-GPU-2.1/QuickVina2-GPU-2.1/docking_summary_LGBM_Suzuki_2.csv"
+  Price:
+    rew_coeff: 0.5
+    max_reward: 1000.0
+    optimize: True
+    threshold: 800.0              # starting allowed total price
+    threshold_limit: 200.0        # final target price you want to reach
+    threshold_step: -20.0         # how much stricter each iteration becomes
+    # Path to the folder containing rxn*_*.csv files
+    bb_directory: "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/TS/data/Building_Blocks/"

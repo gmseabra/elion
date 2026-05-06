@@ -23,6 +23,7 @@ trash/
 tests
 tests/
 tests/**
+src/vina/iag933
 
 # Systems dir is too heavy
 systems
@@ -41,3 +42,6 @@ src/vina/docking_score/
 
 # HPG local scripts
 src/vina/internal_utils/
+
+# debug
+src/TS/debug/

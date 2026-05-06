@@ -13,7 +13,7 @@ generator:
   batch_size: 200
   # Start with celecoxib
   seed_smi: "Cc1ccc(-c2cc(C(F)(F)F)nn2-c2ccc(S(N)(=O)=O)cc2)cc1"
-        
+
 properties:
   Prop1:
     rew_coeff: 0.3

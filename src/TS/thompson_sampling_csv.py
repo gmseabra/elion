@@ -135,6 +135,11 @@ class ThompsonSamplerCSV:
                 else:
                     res = self.evaluator.evaluate(prod_mol)
                 if np.isfinite(res):
+                    print('  [evaluate] score=%.6f being added to %d reagents: %s' % (
+                        res,
+                        len(selected_reagents),
+                        [r.reagent_name for r in selected_reagents],
+                    ))
                     [reagent.add_score(res) for reagent in selected_reagents]
             except Exception as e:
                 # 1. Print the actual error (e.g., AtomValenceException)
@@ -200,11 +205,16 @@ class ThompsonSamplerCSV:
         prior_mean = np.mean(warmup_scores)
         prior_std = np.std(warmup_scores)
         self._warmup_std = prior_std
+        print('[warm_up] prior_mean=%.6f | prior_std=%.6f | num_warmup_scores=%d' % (prior_mean, prior_std, len(warmup_scores)))
         for i in range(0, len(self.reagent_lists)):
             for j in range(0, len(self.reagent_lists[i])):
                 reagent = self.reagent_lists[i][j]
                 try:
                     reagent.init_given_prior(prior_mean=prior_mean, prior_std=prior_std)
+                    print('  [warm_up] component %d, reagent %d (%s): init mu=%.6f, std=%.6f, num_scores=%d' % (
+                        i, j, reagent.reagent_name,
+                        reagent.current_mean, reagent.current_std, reagent.num_scores,
+                    ))
                 except ValueError:
                     self.logger.info(f"Skipping reagent {reagent.reagent_name} because there were no successful evaluations during warmup")
                     self._disallow_tracker.retire_one_synthon(i, j)
@@ -226,17 +236,44 @@ class ThompsonSamplerCSV:
                 disallow_mask = self._disallow_tracker.get_disallowed_selection_mask(selected_reagents)
                 stds = np.array([r.current_std for r in reagent_list])
                 mu = np.array([r.current_mean for r in reagent_list])
+                score_counts = np.array([r.num_scores for r in reagent_list])
+                print('--- cycle_id (component being selected): %d ---' % cycle_id)
+                print('stds: %s' % stds)
+                print('mu: %s' % mu)
+                print('score_counts (how many times each reagent has been evaluated): %s' % score_counts)
+                print('mu range: [%.6f, %.6f], std range: [%.6f, %.6f]' % (mu.min(), mu.max(), stds.min(), stds.max()))
                 choice_row = rng.normal(size=len(reagent_list)) * stds + mu
+                print('choice_row: %s' % choice_row)
                 if disallow_mask:
                     choice_row[np.array(list(disallow_mask))] = np.nan
-                selected_reagents[cycle_id] = self.pick_function(choice_row)
+                    print('disallow_mask (retired/excluded reagent indices): %s' % disallow_mask)
+                winner_idx = self.pick_function(choice_row)
+                print('winner_idx: %d | winner mu: %.6f | winner std: %.6f | winner score_count: %d' % (
+                    winner_idx,
+                    reagent_list[winner_idx].current_mean,
+                    reagent_list[winner_idx].current_std,
+                    reagent_list[winner_idx].num_scores,
+                ))
+                selected_reagents[cycle_id] = winner_idx
+                print('selected_reagents: %s' % selected_reagents)
             self._disallow_tracker.update(selected_reagents)
+            print('self._disallow_tracker: %s' % self._disallow_tracker)
             # Select a reagent for each component, according to the choice function
             smiles, name, score = self.evaluate(selected_reagents)
+            print('=== iteration %d result ===' % i)
+            print('score: %s | smiles: %s | name: %s' % (score, smiles, name))
+            if np.isfinite(score):
+                # Print posterior belief AFTER update (add_score was called inside evaluate)
+                for comp_idx, reagent_idx in enumerate(selected_reagents):
+                    r = self.reagent_lists[comp_idx][reagent_idx]
+                    print('  post-update | component %d, reagent %d (%s): mu=%.6f, std=%.6f, num_scores=%d' % (
+                        comp_idx, reagent_idx, r.reagent_name,
+                        r.current_mean, r.current_std, r.num_scores,
+                    ))
+            print('')
             if np.isfinite(score):
                 out_list.append([score, smiles, name])
             if i % 100 == 0:
                 top_score, top_smiles, top_name = self._top_func(out_list)
                 self.logger.info(f"Iteration: {i} max score: {top_score:2f} smiles: {top_smiles} {top_name}")
         return out_list
-        
