@@ -1,3 +1,4 @@
+import numpy as np
 # Chemistry
 import rdkit
 from rdkit import Chem
@@ -46,4 +47,30 @@ class SAScore(Property):
         _mols.extend(mols)
         sa_scores = self.sascorer.predict(_mols)
         return sa_scores
+
+    def reward(self, prop_values, **kwargs):
+        """Given a property value, or list of values,
+           returns this property rewards list(float).
+
+        Args:
+            prop_value (float or list(floats)): The calculated value(s) of the property
+
+        Returns: 
+            list(float): This property rewards for each value passed in.
+        """
+        _prop_values, rewards = [], []
+        _prop_values.extend(prop_values)
+
+        sign = np.sign(self.thresh_step if self.optimize else self.threshold)
+        unsigned_threshold = sign * self.threshold
+
+        for value in _prop_values:
+            # Use 0-1 as reward standard
+            # SAScore
+            # 1 == GOOD (Easy to synthsize)
+            # 10 == BAD  (Impossible to synthesize)
+            # add '-' and normalize SAScore
+            rew = (- value) / 10
+            rewards.append(rew)
+        return rewards
     

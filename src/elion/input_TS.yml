@@ -7,6 +7,17 @@ generator:
   batch_size: 200
   name: "TS"
   smiles_csv: "/blue/lic/huangzihang/repos/common_utils/elion/learned_distributions/Suzuki_Coupling/LGBM_init/LGBM_1.csv"
+  TS:
+    reaction_smarts: "[#6;a;D3;$([#6](~[#6])~[#6]):2][#35;A;D1].[#6;a;D3;$([#6]([#6])[#6]):1]-[#5]([#8])[#8]>>[#6:2]-[#6:1]"
+    num_warmup_trials: 3
+    num_ts_iterations: 5000
+    ts_mode: "maximize"
+    reagent_file_list:
+      - "/blue/lic/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv"
+      - "/blue/lic/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
+    results_filename: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test1.csv"
+
+evaluator_class_name: "ElionEstimatorEvaluator"
 
 reward_function: # FIX: Must be all lowercase so the parser reads it!
   SAScore:
@@ -21,24 +32,22 @@ reward_function: # FIX: Must be all lowercase so the parser reads it!
     rew_coeff: 0.5
     max_reward: 1.0
     optimize: True
-    threshold: 0.5        # The starting threshold for scoring
-    threshold_limit: 0.9  # The final goal for the score
+    threshold: 0.5
+    threshold_limit: 0.9
     threshold_step: 0.05
-  Vina_Score:
+  CHEMBERT_BE:
     rew_coeff: 0.4
     max_reward: 1.0
     optimize: True
-    threshold: -7.0         # Example: starting threshold
-    threshold_limit: -9.5   # Example: goal affinity
+    threshold: -7.0
+    threshold_limit: -9.5
     threshold_step: -0.1
-    # Specify the file to read here:
-    score_file: "/blue/lic/huangzihang/repos/Vina-GPU-2.1/QuickVina2-GPU-2.1/docking_summary_LGBM_Suzuki_2.csv"
-  Price:
-    rew_coeff: 0.5
-    max_reward: 1000.0
-    optimize: True
-    threshold: 800.0              # starting allowed total price
-    threshold_limit: 200.0        # final target price you want to reach
-    threshold_step: -20.0         # how much stricter each iteration becomes
-    # Path to the folder containing rxn*_*.csv files
-    bb_directory: "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/TS/data/Building_Blocks/"
+    model_file: /blue/lic/huangzihang/repos/common_utils/elion/chembert/pre-trained/Finetuned_model_5.pt
+  # Price:
+  #   rew_coeff: 0.5
+  #   max_reward: 1000.0
+  #   optimize: True
+  #   threshold: 800.0
+  #   threshold_limit: 200.0
+  #   threshold_step: -20.0
+  #   bb_directory: "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/TS/data/Building_Blocks/"

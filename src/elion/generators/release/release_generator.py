@@ -55,7 +55,7 @@ class release_smiles_generator(StackAugmentedRNN):
     verbosity = 0
 
     # Those are defaults, and can be overridden when creating a generator object
-    gen_data_path = '/home/seabra/work/li/hitopt/hitopt/generator/release/data/chembl_22_clean_1576904_sorted_std_final.smi'
+    gen_data_path = '/blue/lic/huangzihang/repos/elion/src/elion/generators/release/data/chembl_22_clean_1576904_sorted_std_final.smi'
     gen_tokens = ['<', '>', '#', '%', ')', '(', '+', '-', '/', '.', '1', '0', '3', '2', '5', '4', '7',
                  '6', '9', '8', '=', 'A', '@', 'C', 'B', 'F', 'I', 'H', 'O', 'N', 'P', 'S', '[', ']',
                  '\\', 'c', 'e', 'i', 'l', 'o', 'n', 'p', 's', 'r', '\n']
@@ -71,7 +71,10 @@ class release_smiles_generator(StackAugmentedRNN):
     n_layers=1
     is_bidirectional=False
     has_stack=True
-    use_cuda=True,
+    use_cuda=None   # FIX: was hardcoded True, which bypasses stackRNN's auto-detect and crashes
+                    # on CPU-only PyTorch builds. None triggers the fallback:
+                    #   if self.use_cuda is None: self.use_cuda = torch.cuda.is_available()
+                    # -> False on CPU-only builds (works), True when CUDA PyTorch is installed (uses GPU)
 
 
     optimizer_instance = torch.optim.Adadelta
@@ -94,6 +97,16 @@ class release_smiles_generator(StackAugmentedRNN):
         self.gen_data = GeneratorData(training_data_path=data_path, delimiter='\t', 
                                 cols_to_read=[0], keep_header=True, tokens=tokens)
 
+        # [PRINT] Show vocabulary and architecture summary so you can see the
+        # full generative search space and model capacity before any learning.
+        print(f"[init] n_characters (vocab size) = {self.gen_data.n_characters}")
+        print(f"[init] tokens = {self.gen_data.all_characters}")
+        print(f"[init] architecture: layer_type={self.layer_type}, n_layers={self.n_layers}, "
+              f"hidden_size={self.hidden_size}, stack_width={self.stack_width}, "
+              f"stack_depth={self.stack_depth}, is_bidirectional={self.is_bidirectional}, "
+              f"has_stack={self.has_stack}")
+        print(f"[init] optimizer={self.optimizer_instance.__name__}, lr={self.lr}, use_cuda={self.use_cuda}")
+
         super().__init__(input_size=self.gen_data.n_characters, 
                          hidden_size=self.hidden_size,
                          output_size=self.gen_data.n_characters, 
@@ -106,6 +119,13 @@ class release_smiles_generator(StackAugmentedRNN):
                          use_cuda=self.use_cuda, 
                          optimizer_instance=self.optimizer_instance, 
                          lr=self.lr)
+
+        # [PRINT] Parameter count tells you the total number of learnable weights
+        # being updated during RL fine-tuning — the neural analogue of TS's reagent pool size.
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"[init] total parameters      = {total_params:,}")
+        print(f"[init] trainable parameters  = {trainable_params:,}")
         
         print(f"Generator ready to be used. Elapsed time: {time.time() - begin:.2f} seconds.")
 
@@ -114,6 +134,10 @@ class release_smiles_generator(StackAugmentedRNN):
         Generates n_to_generate number of SMILES strings
         """
         
+        # [PRINT] Generation session header — mirrors TS's "--- cycle_id ---" header.
+        # Shows what the policy is being asked to produce before the loop starts.
+        print(f"\n[generate] === generation session: requesting {n_to_generate} unique valid SMILES ===")
+
         generated, unique_smiles = [], []
         with tqdm(total=n_to_generate,leave=False, ncols=80, unit='mols') as pbar:
             pbar.set_description("Generating molecules")
@@ -125,6 +149,11 @@ class release_smiles_generator(StackAugmentedRNN):
                 # Generate a new SMILES string
                 new_smiles = self.evaluate(self.gen_data, predict_len=120)[1:-1]
                 total_generated += 1
+
+                # [PRINT] Raw policy output — the token sequence sampled from the GRU.
+                # Analogous to TS printing the winner_idx: you see what the neural policy
+                # actually produced before any chemistry validation filters it.
+                print(f"[generate] attempt={total_generated} | raw_smiles='{new_smiles}' | len={len(new_smiles)}")
 
                 # Check that this SMILES is valid.
                 # Sometimes a problem arises only after trying to
@@ -142,24 +171,68 @@ class release_smiles_generator(StackAugmentedRNN):
                     mol = Chem.MolFromSmiles(new_canonic, sanitize=True)
                 RDLogger.EnableLog('rdApp.*')
 
+                # [PRINT] Validity gate outcome — shows whether the policy's output
+                # was chemically valid. Tracking the invalid rate reveals whether
+                # RL fine-tuning is destabilizing the generator (mode collapse warning).
+                if not mol:
+                    print(f"[generate] attempt={total_generated} | INVALID (RDKit parse failed) | smiles='{new_smiles}'")
+                else:
+                    print(f"[generate] attempt={total_generated} | valid | canonical='{new_canonic}'")
+
                 if mol:
                     if self.filter_smiles(new_canonic):
                         generated.append(new_canonic)
                         unique_smiles = set(generated)
-                        #unique_smiles = list(np.unique(generated))
 
-                        # Only update the bar if we got a new molecule.
+                        # [PRINT] Filter pass + uniqueness tracking — mirrors TS's score_counts
+                        # (how many times each arm has been pulled). Here, n_total_accepted and
+                        # n_unique show exploitation breadth: a stagnant n_unique vs growing
+                        # n_total_accepted signals the policy is looping over the same molecules.
                         new_size = len(unique_smiles)
+                        duplicate = (new_size == total_unique)
+                        print(f"[generate] attempt={total_generated} | filter=PASS | "
+                              f"n_total_accepted={len(generated)} | n_unique={new_size} | "
+                              f"duplicate={'YES' if duplicate else 'NO'}")
+
                         if (new_size > total_unique):
                             total_unique = new_size
                             pbar.update(1)
+                    else:
+                        # [PRINT] Filter rejection — shows which valid-but-unwanted molecules
+                        # the policy is generating (e.g. too short). Frequent rejections here
+                        # suggest the policy is generating fragments, not drug-like molecules.
+                        print(f"[generate] attempt={total_generated} | filter=REJECT | canonical='{new_canonic}'")
 
                 if '' in unique_smiles:
                     unique_smiles.remove('')
 
+                # [PRINT] Running efficiency summary every 50 attempts — analogous to TS's
+                # mu/std range summary per cycle. Shows validity rate and uniqueness rate
+                # so you can track whether the policy is improving, stagnating, or collapsing.
+                if total_generated % 50 == 0:
+                    validity_rate = len(generated) / total_generated if total_generated > 0 else 0.0
+                    uniqueness_rate = total_unique / total_generated if total_generated > 0 else 0.0
+                    print(f"[generate] --- progress @ attempt {total_generated} ---")
+                    print(f"[generate]   valid_accepted / total_attempts = {len(generated)} / {total_generated} "
+                          f"({validity_rate:.2%})")
+                    print(f"[generate]   unique / total_attempts         = {total_unique} / {total_generated} "
+                          f"({uniqueness_rate:.2%})")
+                    print(f"[generate]   still needed                    = {n_to_generate - total_unique}")
+
 
         n_valid = len(generated)
         n_unique = len(unique_smiles)
+
+        # [PRINT] Session-end summary — mirrors TS's final posterior state printout.
+        # validity_rate and uniqueness_rate together diagnose policy health:
+        #   low validity   → RL has destabilized the chemical language model
+        #   low uniqueness → policy has collapsed to a narrow region of chemical space
+        print(f"\n[generate] === session complete ===")
+        print(f"[generate] total_attempted   = {total_generated}")
+        print(f"[generate] valid_accepted    = {n_valid}  ({(n_valid / total_generated):0.2%})")
+        print(f"[generate] unique_valid      = {n_unique} ({(n_unique / total_generated):0.2%})")
+        print(f"[generate] redundancy        = {n_valid - n_unique} duplicates discarded")
+
         print(f"Generated    : {total_generated}")
         print(f"Valid SMILES : {n_valid} ({(n_valid / total_generated):0.2%} of the total)")
         print(f"Unique SMILES: {n_unique} ({(n_unique / total_generated):0.2%} of the total)")
@@ -185,6 +258,12 @@ class release_smiles_generator(StackAugmentedRNN):
         if (not mol) or (len(smiles_string) < 6):
             approved = False
 
+        # [PRINT] Filter decision trace — shows exactly which criterion killed the molecule.
+        # When the policy starts generating many short fragments, this pinpoints the threshold.
+        if not approved:
+            reason = "mol_invalid" if not mol else f"len={len(smiles_string)}<6"
+            print(f"[filter_smiles] REJECT | smiles='{smiles_string}' | reason={reason}")
+
         return approved
 
     def train(self, model_path):
@@ -204,6 +283,18 @@ class release_smiles_generator(StackAugmentedRNN):
  
         """
 
+        # [PRINT] Pre-training parameter snapshot — records the weight distribution
+        # before any gradient updates. Comparing this to post-training norms reveals
+        # how much the RL loop has shifted the policy away from the pretrained prior.
+        # This is the ReLeaSE analogue of TS's warmup prior_mean/prior_std snapshot.
+        print(f"\n[train] === training session start ===")
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"[train] pre-train | layer={name} | "
+                      f"mean={param.data.mean().item():.6f} | "
+                      f"std={param.data.std().item():.6f} | "
+                      f"norm={param.data.norm().item():.4f}")
+
         # fit, evaluate and save_model are methods from the parent class, stackRNN.
         import warnings
         with warnings.catch_warnings():
@@ -211,7 +302,20 @@ class release_smiles_generator(StackAugmentedRNN):
             losses = self.fit(self.gen_data, 1500000)
             losses = self.fit(self.gen_data, 10)
         self.evaluate(self.gen_data)
+
+        # [PRINT] Post-training parameter snapshot — the delta between pre and post norms
+        # shows how much the RL loop has shifted the neural policy weights, analogous to
+        # watching delta_mu and delta_std in TS after add_score().
+        print(f"\n[train] === training session complete ===")
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"[train] post-train | layer={name} | "
+                      f"mean={param.data.mean().item():.6f} | "
+                      f"std={param.data.std().item():.6f} | "
+                      f"norm={param.data.norm().item():.4f}")
+
         self.save_model(model_path)
+        print(f"[train] model saved to {model_path}")
         return
 
 if __name__ == "__main__":

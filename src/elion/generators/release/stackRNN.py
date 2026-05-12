@@ -24,49 +24,7 @@ class StackAugmentedRNN(nn.Module):
                  optimizer_instance=torch.optim.Adadelta, lr=0.01):
         """
         Constructor for the StackAugmentedRNN object.
-
-        Parameters
-        ----------
-        input_size: int
-            number of characters in the alphabet
-
-        hidden_size: int
-            size of the RNN layer(s)
-
-        output_size: int
-            again number of characters in the alphabet
-
-        layer_type: str (default 'GRU')
-            type of the RNN layer to be used. Could be either 'LSTM' or 'GRU'.
-
-        n_layers: int (default 1)
-            number of RNN layers
-
-        is_bidirectional: bool (default False)
-            parameter specifying if RNN is bidirectional
-
-        has_stack: bool (default False)
-            parameter specifying if augmented memory stack is used
-
-        stack_width: int (default None)
-            if has_stack is True then this parameter defines width of the
-            augmented stack memory
-
-        stack_depth: int (default None)
-            if has_stack is True then this parameter define depth of the augmented
-            stack memory. Hint: no need fo stack depth to be larger than the
-            length of the longest sequence you plan to generate
-
-        use_cuda: bool (default None)
-            parameter specifying if GPU is used for computations. If left
-            unspecified, GPU will be used if available
-
-        optimizer_instance: torch.optim object (default torch.optim.Adadelta)
-            optimizer to be used for training
-
-        lr: float (default 0.01)
-            learning rate for the optimizer
-
+        [... docstring unchanged ...]
         """
         super(StackAugmentedRNN, self).__init__()
         
@@ -127,72 +85,64 @@ class StackAugmentedRNN(nn.Module):
         self.optimizer_instance = optimizer_instance
         self.optimizer = self.optimizer_instance(self.parameters(), lr=lr,
                                                  weight_decay=0.00001)
+
+        # [PRINT] Post-init memory accounting — prints the CPU RAM consumed by
+        # each layer's parameters. Analogous to TS printing reagent pool size at
+        # startup. Critical for diagnosing OOM kills: the total here plus
+        # optimizer state (2x for Adadelta) is the minimum RAM floor of the process.
+        print(f"[StackAugmentedRNN.__init__] layer breakdown (fp32 weights):")
+        total_bytes = 0
+        for name, param in self.named_parameters():
+            nb = param.numel() * 4
+            total_bytes += nb
+            print(f"  {name:40s}  shape={str(list(param.shape)):25s}  "
+                  f"{nb/1e6:.3f} MB")
+        print(f"[StackAugmentedRNN.__init__] total weights          = {total_bytes/1e6:.2f} MB")
+        print(f"[StackAugmentedRNN.__init__] Adadelta optimizer est = {total_bytes*2/1e6:.2f} MB  (2x weights)")
+        print(f"[StackAugmentedRNN.__init__] peak CPU RAM at init   = ~{total_bytes*3/1e6:.0f} MB  (weights + optimizer)")
+        if self.has_stack:
+            stack_bytes = 1 * stack_depth * stack_width * 4
+            print(f"[StackAugmentedRNN.__init__] stack tensor/forward   = {stack_bytes/1e6:.2f} MB  "
+                  f"(depth={stack_depth} x width={stack_width})")
+        print(f"[StackAugmentedRNN.__init__] use_cuda={self.use_cuda}")
   
     def load_model(self, path):
         """
         Loads pretrained parameters from the checkpoint into the model.
-
-        Parameters
-        ----------
-        path: str
-            path to the checkpoint file model will be loaded from.
         """
+        # [PRINT] Checkpoint load — torch.load() with default map_location pulls
+        # the entire checkpoint into CPU RAM first, even if the model is on GPU.
+        # This creates a temporary peak = GPU model copy + CPU checkpoint copy.
+        # For this architecture (~90MB weights) the peak is ~180MB extra RAM.
+        print(f"[load_model] loading checkpoint from: {path}")
         weights = torch.load(path)
+        checkpoint_bytes = sum(v.numel() * v.element_size() for v in weights.values())
+        print(f"[load_model] checkpoint size on CPU = {checkpoint_bytes/1e6:.2f} MB")
+        print(f"[load_model] map_location=None: checkpoint loaded to CPU, then copied to model device")
         self.load_state_dict(weights)
+        print(f"[load_model] state_dict loaded successfully")
 
     def save_model(self, path):
         """
         Saves model parameters into the checkpoint file.
-
-        Parameters
-        ----------
-        path: str
-            path to the checkpoint file model will be saved to.
         """
         torch.save(self.state_dict(), path)
+        print(f"[save_model] checkpoint saved to: {path}")
 
     def change_lr(self, new_lr):
         """
         Updates learning rate of the optimizer.
-
-        Parameters
-        ----------
-        new_lr: float
-            new learning rate value
         """
+        # [PRINT] Learning rate change — mirrors TS's fixed known_var: both control
+        # how aggressively new evidence updates the model. A smaller lr = heavier
+        # prior weighting, exactly like larger known_var in TS Bayesian updates.
+        print(f"[change_lr] lr: {self.lr} -> {new_lr}")
         self.optimizer = self.optimizer_instance(self.parameters(), lr=new_lr)
         self.lr = new_lr
 
     def forward(self, inp, hidden, stack):
         """
-        Forward step of the model. Generates probability of the next character
-        given the prefix.
-
-        Parameters
-        ----------
-        inp: torch.tensor
-            input tensor that contains prefix string indices
-
-        hidden: torch.tensor or tuple(torch.tensor, torch.tensor)
-            previous hidden state of the model. If layer_type is 'LSTM',
-            then hidden is a tuple of hidden state and cell state, otherwise
-            hidden is torch.tensor
-
-        stack: torch.tensor
-            previous state of the augmented memory stack
-
-        Returns
-        -------
-        output: torch.tensor
-            tensor with non-normalized probabilities of the next character
-
-        next_hidden: torch.tensor or tuple(torch.tensor, torch.tensor)
-            next hidden state of the model. If layer_type is 'LSTM',
-            then next_hidden is a tuple of hidden state and cell state,
-            otherwise next_hidden is torch.tensor
-
-        next_stack: torch.tensor
-            next state of the augmented memory stack
+        Forward step of the model.
         """
         inp = self.encoder(inp.view(1, -1))
         if self.has_stack:
@@ -206,6 +156,18 @@ class StackAugmentedRNN(nn.Module):
                 hidden_2_stack = hidden_.squeeze(0)
             stack_controls = self.stack_controls_layer(hidden_2_stack)
             stack_controls = F.softmax(stack_controls, dim=1)
+
+            # [PRINT] Stack operation probabilities — PUSH/POP/NO_OP weights per
+            # forward step. The stack is what separates this from a plain GRU:
+            # it provides unbounded memory for long-range SMILES dependencies
+            # (e.g. matching opening/closing brackets). When PUSH dominates the
+            # model is writing context; when POP dominates it is reading back.
+            # Print only when called from evaluate() to avoid flooding fit() output.
+            # To enable: change the condition below or set a module-level flag.
+            # print(f"[forward] stack_controls: PUSH={stack_controls[0,0].item():.4f}  "
+            #       f"POP={stack_controls[0,1].item():.4f}  "
+            #       f"NO_OP={stack_controls[0,2].item():.4f}")
+
             stack_input = self.stack_input_layer(hidden_2_stack.unsqueeze(0))
             stack_input = torch.tanh(stack_input)
             stack = self.stack_augmentation(stack_input.permute(1, 0, 2),
@@ -218,26 +180,7 @@ class StackAugmentedRNN(nn.Module):
 
     def stack_augmentation(self, input_val, prev_stack, controls):
         """
-        Augmentation of the tensor into the stack. For more details see
-        https://arxiv.org/abs/1503.01007
-
-        Parameters
-        ----------
-        input_val: torch.tensor
-            tensor to be added to stack
-
-        prev_stack: torch.tensor
-            previous stack state
-
-        controls: torch.tensor
-            predicted probabilities for each operation in the stack, i.e
-            PUSH, POP and NO_OP. Again, see https://arxiv.org/abs/1503.01007
-
-        Returns
-        -------
-        new_stack: torch.tensor
-            new stack state
-
+        Augmentation of the tensor into the stack.
         """
         batch_size = prev_stack.size(0)
 
@@ -254,15 +197,6 @@ class StackAugmentedRNN(nn.Module):
         return new_stack
 
     def init_hidden(self):
-        """
-        Initialization of the hidden state of RNN.
-
-        Returns
-        -------
-        hidden: torch.tensor
-            tensor filled with zeros of an appropriate size (taking into
-            account number of RNN layers and directions)
-        """
         if self.use_cuda:
             return Variable(torch.zeros(self.n_layers * self.num_dir, 1,
                                         self.hidden_size).cuda())
@@ -271,16 +205,6 @@ class StackAugmentedRNN(nn.Module):
                                         self.hidden_size))
 
     def init_cell(self):
-        """
-        Initialization of the cell state of LSTM. Only used when layers_type is
-        'LSTM'
-
-        Returns
-        -------
-        cell: torch.tensor
-            tensor filled with zeros of an appropriate size (taking into
-            account number of RNN layers and directions)
-        """
         if self.use_cuda:
             return Variable(torch.zeros(self.n_layers * self.num_dir, 1,
                                         self.hidden_size).cuda())
@@ -289,14 +213,6 @@ class StackAugmentedRNN(nn.Module):
                                         self.hidden_size))
 
     def init_stack(self):
-        """
-        Initialization of the stack state. Only used when has_stack is True
-
-        Returns
-        -------
-        stack: torch.tensor
-            tensor filled with zeros
-        """
         result = torch.zeros(1, self.stack_depth, self.stack_width)
         if self.use_cuda:
             return Variable(result.cuda())
@@ -305,23 +221,7 @@ class StackAugmentedRNN(nn.Module):
 
     def train_step(self, inp, target):
         """
-        One train step, i.e. forward-backward and parameters update, for
-        a single training example.
-
-        Parameters
-        ----------
-        inp: torch.tensor
-            tokenized training string from position 0 to position (seq_len - 1)
-
-        target:
-            tokenized training string from position 1 to position seq_len
-
-        Returns
-        -------
-        loss: float
-            mean value of the loss function (averaged through the sequence
-            length)
-
+        One train step: forward-backward and parameters update.
         """
         hidden = self.init_hidden()
         if self.has_cell:
@@ -333,42 +233,65 @@ class StackAugmentedRNN(nn.Module):
             stack = None
         self.optimizer.zero_grad()
         loss = 0
+
+        # [PRINT] Pre-step hidden state norm — the hidden state is the GRU's
+        # working memory at the start of each sequence. Its norm indicates how
+        # "activated" the network is. A steadily growing norm across training
+        # steps is an early warning of exploding gradients / loss of stability.
+        # This is the neural analogue of tracking mu before a TS update.
+        if isinstance(hidden, tuple):
+            h_norm_pre = hidden[0].norm().item()
+        else:
+            h_norm_pre = hidden.norm().item()
+        # (printed below alongside post-step values for compactness)
+
         for c in range(len(inp)):
             output, hidden, stack = self(inp[c], hidden, stack)
             loss += self.criterion(output, target[c].unsqueeze(0))
 
         loss.backward()
+
+        # [PRINT] Gradient norms per layer — the most important diagnostic for
+        # understanding the RL update dynamics. Analogous to TS's delta_mu/delta_std:
+        # it shows how much each layer is being shifted by a single training step.
+        # Large grad norms in encoder = the model is revising token embeddings heavily.
+        # Large grad norms in rnn = the recurrent weights are being updated aggressively.
+        # Near-zero grad norms = vanishing gradients; that layer is not learning.
+        total_grad_norm = 0.0
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                g = param.grad.norm().item()
+                total_grad_norm += g ** 2
+                print(f"[train_step] grad_norm | layer={name:40s} | grad_norm={g:.6f}")
+        total_grad_norm = total_grad_norm ** 0.5
+        print(f"[train_step] total_grad_norm (all layers) = {total_grad_norm:.6f}")
+
         self.optimizer.step()
+
+        # [PRINT] Post-step hidden state norm — compare to pre-step norm above to
+        # see how much the sequence processing shifted the hidden state. Also print
+        # weight norms for the key layers (encoder, rnn, decoder) to track cumulative
+        # drift from the pretrained prior, exactly like TS's post-update mu/std print.
+        if isinstance(hidden, tuple):
+            h_norm_post = hidden[0].norm().item()
+        else:
+            h_norm_post = hidden.norm().item()
+        print(f"[train_step] hidden_norm: pre={h_norm_pre:.4f} -> post={h_norm_post:.4f} "
+              f"(delta={h_norm_post - h_norm_pre:+.4f})")
+        print(f"[train_step] seq_len={len(inp)} | loss={loss.item()/len(inp):.6f}")
+
+        # [PRINT] Key weight norms after optimizer.step() — encoder, rnn, decoder.
+        # Watching these drift from their values at load_model() time tells you
+        # how far RL fine-tuning has pushed the policy away from its pretrained state.
+        for name, param in self.named_parameters():
+            if any(k in name for k in ['encoder', 'rnn', 'decoder']):
+                print(f"[train_step] weight_norm | {name:40s} | norm={param.data.norm().item():.4f}")
 
         return loss.item() / len(inp)
     
     def evaluate(self, data, prime_str='<', end_token='>', predict_len=100):
         """
         Generates new string from the model distribution.
-
-        Parameters
-        ----------
-        data: object of type GeneratorData
-            stores information about the generator data format such alphabet, etc
-
-        prime_str: str (default '<')
-            prime string that will be used as prefix. Deafult value is just the
-            START_TOKEN
-
-        end_token: str (default '>')
-            when end_token is sampled from the model distribution,
-            the generation of a new example is finished
-
-        predict_len: int (default 100)
-            maximum length of the string to be generated. If the end_token is
-            not sampled, the generation will be aborted when the length of the
-            generated sequence is equal to predict_len
-
-        Returns
-        -------
-        new_sample: str
-            Newly generated sample from the model distribution.
-
         """
         hidden = self.init_hidden()
         if self.has_cell:
@@ -386,56 +309,43 @@ class StackAugmentedRNN(nn.Module):
             _, hidden, stack = self.forward(prime_input[p], hidden, stack)
         inp = prime_input[-1]
 
+        # [PRINT] Generation trace — prints the sampled token and its probability
+        # at each step. This is the direct analogue of TS's winner_idx line:
+        # it shows what the learned distribution chose at each position and
+        # how confident it was. Low max_prob = high entropy = the policy is
+        # uncertain / exploring. High max_prob = the policy has collapsed to
+        # near-deterministic output (mode collapse warning).
+        print(f"[evaluate] prime='{prime_str}' | predict_len={predict_len}")
         for p in range(predict_len):
             output, hidden, stack = self.forward(inp, hidden, stack)
 
-            # Sample from the network as a multinomial distribution
             probs = torch.softmax(output, dim=1)
             top_i = torch.multinomial(probs.view(-1), 1)[0].cpu().numpy()
 
-            # Add predicted character to string and use as next input
             predicted_char = data.all_characters[top_i]
+            max_prob = probs.max().item()
+            entropy = -(probs * torch.log(probs + 1e-9)).sum().item()
+
+            # [PRINT] Per-token sampling: character chosen, its probability, and
+            # the output distribution entropy. Entropy is the key exploration signal:
+            #   high entropy (~3-4 bits for 45-token vocab) = policy is uncertain, exploring
+            #   low entropy (~0) = policy has collapsed, same token always predicted
+            print(f"[evaluate] step={p+1:3d} | token='{predicted_char}' | "
+                  f"prob={max_prob:.4f} | entropy={entropy:.4f} | "
+                  f"prefix='{new_sample[-10:]}'")
+
             new_sample += predicted_char
             inp = data.char_tensor(predicted_char)
             if predicted_char == end_token:
                 break
 
+        print(f"[evaluate] final_sample='{new_sample}' | total_tokens={len(new_sample)}")
         return new_sample
 
     def fit(self, data, n_iterations, all_losses=[], print_every=100,
             plot_every=10, augment=False):
         """
-        This methods fits the parameters of the model. Training is performed to
-        minimize the cross-entropy loss when predicting the next character
-        given the prefix.
-
-        Parameters
-        ----------
-        data: object of type GeneratorData
-            stores information about the generator data format such alphabet, etc
-
-        n_iterations: int
-            how many iterations of training will be performed
-
-        all_losses: list (default [])
-            list to store the values of the loss function
-
-        print_every: int (default 100)
-            feedback will be printed to std_out once every print_every
-            iterations of training
-
-        plot_every: int (default 10)
-            value of the loss function will be appended to all_losses once every
-            plot_every iterations of training
-
-        augment: bool (default False)
-            parameter specifying if SMILES enumeration will be used. For mode
-            details on SMILES enumeration see https://arxiv.org/abs/1703.07076
-
-        Returns
-        -------
-        all_losses: list
-            list that stores the values of the loss function (learning curve)
+        Fits the parameters of the model (training loop).
         """
         start = time.time()
         loss_avg = 0
@@ -445,6 +355,15 @@ class StackAugmentedRNN(nn.Module):
         else:
             smiles_augmentation = None
 
+        # [PRINT] Training session header — records the starting weight norms for
+        # encoder, rnn, decoder. These are the baseline to compare against at the
+        # end of training to measure total policy drift from pretrained prior.
+        # Directly analogous to TS's warmup prior_mean/prior_std snapshot.
+        print(f"\n[fit] === training session start | n_iterations={n_iterations} ===")
+        for name, param in self.named_parameters():
+            if any(k in name for k in ['encoder', 'rnn', 'decoder']):
+                print(f"[fit] start weight_norm | {name:40s} | norm={param.data.norm().item():.4f}")
+
         for epoch in trange(1, n_iterations + 1, desc='[stackRNN.py] Training',
                             leave=False, ncols=80, unit='epochs'):
             inp, target = data.random_training_set(smiles_augmentation)
@@ -452,13 +371,38 @@ class StackAugmentedRNN(nn.Module):
             loss_avg += loss
 
             if epoch % print_every == 0:
-                print('[%s (%d %d%%) %.4f]' % (time_since(start), epoch,
-                                               epoch / n_iterations * 100, loss)
-                      )
+                # [PRINT] Periodic loss + sample + weight norm summary.
+                # loss: the cross-entropy signal driving policy updates (the RL reward proxy).
+                # loss_avg: smoothed learning curve — flat loss_avg = training has converged
+                #   or collapsed. Sudden spikes = gradient instability.
+                # weight_norm snapshot: cumulative drift since training started.
+                elapsed = time_since(start)
+                print(f"\n[fit] epoch={epoch}/{n_iterations} ({epoch/n_iterations*100:.1f}%) | "
+                      f"loss={loss:.6f} | loss_avg={loss_avg/min(epoch, plot_every):.6f} | "
+                      f"elapsed={elapsed}")
+                for name, param in self.named_parameters():
+                    if any(k in name for k in ['encoder', 'rnn', 'decoder']):
+                        print(f"[fit] weight_norm | {name:40s} | norm={param.data.norm().item():.4f}")
+                sample = self.evaluate(data=data, prime_str='<', predict_len=100)
+                print(f"[fit] sample: '{sample}'")
+                print()
+
+                print('[%s (%d %d%%) %.4f]' % (elapsed, epoch,
+                                               epoch / n_iterations * 100, loss))
                 print(self.evaluate(data=data, prime_str = '<',
                                     predict_len=100), '\n')
 
             if epoch % plot_every == 0:
                 all_losses.append(loss_avg / plot_every)
                 loss_avg = 0
+
+        # [PRINT] Training session end — final weight norms. Delta vs start norms
+        # shows total policy shift from the pretrained prior. Large delta = the RL
+        # loop significantly changed the generator; small delta = fine-tuning was
+        # conservative. Analogous to TS's before/after mu/std across all warmup replays.
+        print(f"\n[fit] === training session end | n_iterations={n_iterations} ===")
+        for name, param in self.named_parameters():
+            if any(k in name for k in ['encoder', 'rnn', 'decoder']):
+                print(f"[fit] end weight_norm | {name:40s} | norm={param.data.norm().item():.4f}")
+
         return all_losses

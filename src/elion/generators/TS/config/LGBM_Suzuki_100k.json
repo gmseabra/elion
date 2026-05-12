@@ -1,0 +1,15 @@
+{
+    "reagent_file_list": [
+        "/blue/lic/huangzihang/repos/elion/src/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv",
+        "/blue/lic/huangzihang/repos/elion/src/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
+    ],
+    "reaction_smarts": "[#6;a;D3;$([#6](~[#6])~[#6]):2][#35;A;D1].[#6;a;D3;$([#6]([#6])[#6]):1]-[#5]([#8])[#8]>>[#6:2]-[#6:1]",
+    "num_warmup_trials": 3,
+    "num_ts_iterations": 5000,
+    "evaluator_class_name": "MLClassifierEvaluator",
+    "evaluator_arg": {
+        "model_filename": "/blue/lic/huangzihang/repos/elion/src/TS/LGBM_Classifier/LGBM_Suzuki_vina_3.pkl"
+    },
+    "ts_mode": "maximize",
+    "results_filename": "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/LGBM_suzuki_TS_test1.csv"
+}

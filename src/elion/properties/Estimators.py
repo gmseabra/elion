@@ -58,6 +58,8 @@ class Estimators:
         
         for _prop, _cls in self.properties.items():
             predictions = _cls.predict(mols)
+            print('_cls: %s' % _cls)
+            print('predictions: %s' % predictions)
             pred[_prop] = predictions
         return pred
 
@@ -86,8 +88,13 @@ class Estimators:
                     quit(msg)
                     
                 rew[_prop] = cls.reward(_values)
+                print('cls: %s' % cls)
+                print('cls.optimize: %s' % cls.optimize)
+                print('rew[_prop]: %s' % rew[_prop])
+                print('_values: %s' % _values)
             else:
                 rew[_prop] = [0.0] * self.n_mols
+
         rew["TOTAL"] = self.total_reward(rew)
         return rew
 
@@ -99,6 +106,11 @@ class Estimators:
             for _prop, cls in self.properties.items():
                 if cls.optimize:
                     this_rew = rewards[_prop][mol] * cls.rew_coeff
+                    print('cls: %s' % cls)
+                    print('cls.rew_coeff: %s' % cls.rew_coeff)
+                    print('rewards[_prop][mol]: %s' % rewards[_prop][mol])
+                    print('_prop: %s' % _prop)
+                    print('rewards[_prop]: %s' % rewards[_prop])
                     total_rew_mol += this_rew
                     
             total_rew.append(total_rew_mol)
