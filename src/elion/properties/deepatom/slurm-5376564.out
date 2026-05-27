@@ -1,0 +1,13 @@
+Date      = Mon Jun 16 03:29:58 PM EDT 2025
+host      = c0910a-s23
+Directory = /blue/lic/huangzihang/repos/deepatom
+Converting PDBQT files to PDB files
+Changed to directory:  /blue/lic/huangzihang/repos/TEAD3/pocketflow/ligands_in_bound_pose
+ls: cannot access '/blue/lic/huangzihang/repos/TEAD3/pocketflow/pdbqt': No such file or directory
+ls: cannot access '/blue/lic/huangzihang/repos/TEAD3/pocketflow/pdbqt/*.pdbqt': No such file or directory
+rename: *_*: not accessible: No such file or directory
+Done.
+Changed to directory:  /blue/lic/huangzihang/repos/TEAD3/pocketflow
+Running DeepAtom
+#####################################################################
+Done
