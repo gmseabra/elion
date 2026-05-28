@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Define paths
-SRC_DIR="/blue/lic/huangzihang/repos/elion/src/vina/docking_score/LGBM_suzuki/3/pdbqt"
-OUT_BASE="/blue/lic/huangzihang/repos/elion/src/vina/docking_score/LGBM_suzuki/3"
+SRC_DIR="docking_score/LGBM_suzuki/3/pdbqt"
+OUT_BASE="docking_score/LGBM_suzuki/3"
 NUM_SPLITS=390
 
 # 1. Collect all pdbqt files into an array

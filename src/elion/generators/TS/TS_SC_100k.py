@@ -1,7 +1,7 @@
 import sys
-sys.path.append('/blue/lic/huangzihang/repos/elion/src/elion')
+sys.path.append('../..')
 
 from ts_main import read_input_yml, run_ts
 
-ts_input_dict = read_input_yml('/blue/lic/huangzihang/repos/elion/src/elion/input_TS.yml')
+ts_input_dict = read_input_yml('../../input_TS.yml')
 score_df = run_ts(ts_input_dict)

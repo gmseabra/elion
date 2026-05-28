@@ -18,7 +18,7 @@ import os
 import sys
 
 # ── sys.path: make legacy packages importable ────────────────────────────────
-_ATTN_BASE = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization"
+_ATTN_BASE = "../../../Elion-AGI-Ecosystem/attention_visualization"
 if _ATTN_BASE not in sys.path:
     sys.path.insert(0, _ATTN_BASE)
 

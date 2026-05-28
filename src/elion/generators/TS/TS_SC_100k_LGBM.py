@@ -7,7 +7,7 @@ import numpy as np
 import joblib
 
 
-df = pd.read_csv('/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_vina/LGBM_suzuki_vina_3.csv')
+df = pd.read_csv('../../../RL_active_learning_loop/results_vina/LGBM_suzuki_vina_3.csv')
 df['fp'] = df.SMILES.apply(uru.smi2numpy_fp)
 # threshold = -8
 threshold = -9
@@ -16,9 +16,9 @@ df['Affinity'] = (df['Affinity'] <= threshold).astype(int)
 train, test = train_test_split(df)
 cls = LGBMClassifier()
 cls.fit(np.stack(train.fp),train.Affinity)
-joblib.dump(cls, '/blue/lic/huangzihang/repos/elion/src/TS/LGBM_Classifier/LGBM_Suzuki_vina_3.pkl')
+joblib.dump(cls, '../../../TS/LGBM_Classifier/LGBM_Suzuki_vina_3.pkl')
 
 from ts_main_csv import read_input, run_ts, parse_input_dict
 
-ts_input_dict = read_input('/blue/lic/huangzihang/repos/elion/src/TS/config/LGBM_Suzuki_100k.json')
+ts_input_dict = read_input('../../../TS/config/LGBM_Suzuki_100k.json')
 score_df = run_ts(ts_input_dict)

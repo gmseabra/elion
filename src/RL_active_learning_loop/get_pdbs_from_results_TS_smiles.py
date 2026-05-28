@@ -4,8 +4,8 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 # Define paths
-input_csv = "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/LGBM_suzuki_TS_4.csv"
-output_dir = "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/LGBM_suzuki/4/pdb"
+input_csv = "results_TS/LGBM_suzuki_TS_4.csv"
+output_dir = "../vina/docking_score/LGBM_suzuki/4/pdb"
 
 # Create output directory if it doesn't exist
 if not os.path.exists(output_dir):

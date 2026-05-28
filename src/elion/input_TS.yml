@@ -1,48 +1,71 @@
+# ============================================================
+#  Elion main Configuration
+#  Used by: elion.py
+# ============================================================
+
 control:
-  run_type: "generate"
+  run_type: "bias_generator"
   smiles_file: "scored_lgbm_results.smi"
   verbosity: 1
 
 generator:
   batch_size: 200
   name: "TS"
-  smiles_csv: "/blue/lic/huangzihang/repos/common_utils/elion/learned_distributions/Suzuki_Coupling/LGBM_init/LGBM_1.csv"
   TS:
     reaction_smarts: "[#6;a;D3;$([#6](~[#6])~[#6]):2][#35;A;D1].[#6;a;D3;$([#6]([#6])[#6]):1]-[#5]([#8])[#8]>>[#6:2]-[#6:1]"
-    num_warmup_trials: 3
-    num_ts_iterations: 5000
+    num_warmup_trials: 1
+    num_ts_iterations: 40000
     ts_mode: "maximize"
+    eval_batch_size: 256
+    log_level: DEBUG
     reagent_file_list:
-      - "/blue/lic/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv"
-      - "/blue/lic/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
-    results_filename: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test1.csv"
+      - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv"
+      - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
+    results_filename: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test2.csv"
 
 evaluator_class_name: "ElionEstimatorEvaluator"
 
-reward_function: # FIX: Must be all lowercase so the parser reads it!
+reward_function:
   SAScore:
-    rew_coeff: 0.5
+    rew_coeff: 0.05
     max_reward: 1.0
     threshold: 8.0
     optimize: True
     threshold_limit: 3.0
     threshold_step: -0.1
     silence_rdkit: True
+    # reward_hook: fraction of batch that must clear threshold before it tightens.
+    # Default 0.3 (30%). Lower = threshold tightens more aggressively.
+    reward_hook: 0.3
+    # allowed_threshold_jumps: true = jump to reward_hook-th percentile (ignores
+    # threshold_step). false = step by threshold_step each time.
+    allowed_threshold_jumps: true
+
   QED_Score:
-    rew_coeff: 0.5
+    rew_coeff: 0.05
     max_reward: 1.0
     optimize: True
     threshold: 0.5
     threshold_limit: 0.9
     threshold_step: 0.05
+    reward_hook: 0.3
+    allowed_threshold_jumps: true
+
   CHEMBERT_BE:
-    rew_coeff: 0.4
+    rew_coeff: 0.9
     max_reward: 1.0
     optimize: True
     threshold: -7.0
     threshold_limit: -9.5
     threshold_step: -0.1
-    model_file: /blue/lic/huangzihang/repos/common_utils/elion/chembert/pre-trained/Finetuned_model_5.pt
+    model_file: /home/huangzihang/repos/elion/src/visualizer/chembert/Finetuned_model_7.pt
+    # reward_hook: 0.3 means threshold tightens when >30% of batch scores below -7.0
+    # increase (e.g. 0.5) to require more molecules before tightening
+    # decrease (e.g. 0.2) to tighten more aggressively
+    reward_hook: 0.3
+    # allowed_threshold_jumps: true = jump directly to 30th percentile of batch
+    # (threshold_step is ignored). false = step by -0.1 each time.
+    allowed_threshold_jumps: true
   # Price:
   #   rew_coeff: 0.5
   #   max_reward: 1000.0
@@ -51,3 +74,51 @@ reward_function: # FIX: Must be all lowercase so the parser reads it!
   #   threshold_limit: 200.0
   #   threshold_step: -20.0
   #   bb_directory: "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/TS/data/Building_Blocks/"
+
+
+# ============================================================
+#  Elion TS Pipeline Configuration
+#  Used by: run_ts_pipeline.py
+# ============================================================
+
+# ── Step 1: SMILES → PDB ────────────────────────────────────
+smiles_to_pdb:
+  enabled: true
+  script: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/get_pdbs_from_TS_smiles_ProcessPool.py"
+  input_csv: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test2.csv"
+  output_dir: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1/pdb"
+  num_workers: null  # null = all available CPU cores
+
+# ── Step 2: PDB → PDBQT ─────────────────────────────────────
+pdb_to_pdbqt:
+  enabled: true
+  script: "/blue/lic/huangzihang/repos/elion/src/vina/pdb_to_pdbqt_cpu_thread.py"
+  input_dir: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1/pdb"
+  output_base: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1"
+
+# ── Step 3: Split PDBQT into batches ────────────────────────
+split_pdbqt:
+  enabled: true
+  script: "/blue/lic/huangzihang/repos/elion/src/vina/split_pdbqt.py"
+  src_dir: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1/pdbqt"
+  out_base: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1"
+  num_splits: 390
+
+# ── Step 4: AutoDock Vina GPU docking ───────────────────────
+vina_docking:
+  enabled: true
+  script: "/blue/lic/huangzihang/repos/elion/src/vina/internal_utils/run_vina_in_loop.py"
+  vina_exec: "/blue/lic/huangzihang/repos/elion/src/vina/AutoDock-Vina-GPU-2-1"
+  receptor: "/blue/lic/huangzihang/repos/elion/src/vina/TEAD3/TEAD38P0M.pdbqt"
+  ligand_base: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1/"
+  output_base: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1"
+  split_range_start: 1    # first split_part index to dock
+  split_range_end: 98    # last split_part index to dock (inclusive)
+  center_x: -25.7
+  center_y: 0.22
+  center_z: 28.39
+  size_x: 20
+  size_y: 20
+  size_z: 20
+  thread: 16000
+  search_depth: 5

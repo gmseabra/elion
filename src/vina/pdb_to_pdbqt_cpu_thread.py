@@ -4,8 +4,8 @@ from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
 # Configuration derived from your original script
-INPUT_DIR = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki/3/pdb"
-OUTPUT_BASE = "/blue/lic/huangzihang/repos/elion/src/vina/LGBM_suzuki/3"
+INPUT_DIR = "LGBM_suzuki/3/pdb"
+OUTPUT_BASE = "LGBM_suzuki/3"
 
 def convert_molecule(pdb_file):
     """Worker function to process a single molecule."""

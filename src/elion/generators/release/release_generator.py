@@ -55,7 +55,7 @@ class release_smiles_generator(StackAugmentedRNN):
     verbosity = 0
 
     # Those are defaults, and can be overridden when creating a generator object
-    gen_data_path = '/blue/lic/huangzihang/repos/elion/src/elion/generators/release/data/chembl_22_clean_1576904_sorted_std_final.smi'
+    gen_data_path = 'data/chembl_22_clean_1576904_sorted_std_final.smi'
     gen_tokens = ['<', '>', '#', '%', ')', '(', '+', '-', '/', '.', '1', '0', '3', '2', '5', '4', '7',
                  '6', '9', '8', '=', 'A', '@', 'C', 'B', 'F', 'I', 'H', 'O', 'N', 'P', 'S', '[', ']',
                  '\\', 'c', 'e', 'i', 'l', 'o', 'n', 'p', 's', 'r', '\n']

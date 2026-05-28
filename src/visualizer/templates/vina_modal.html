@@ -1,0 +1,229 @@
+<div id="vinaModal"
+     onclick="if(event.target.id==='vinaModal')_adjHide()"
+     class="hidden fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center">
+
+  <div onclick="event.stopImmediatePropagation()"
+       class="bg-slate-900 w-[97%] max-w-7xl h-[93vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
+       style="animation:modalPop .25s cubic-bezier(.34,1.56,.64,1)">
+
+    <!-- ── Modal header (Image 2 top bar) ── -->
+    <div class="px-6 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span class="text-xl">🧠</span>
+        <div>
+          <h2 class="font-semibold text-white text-sm title-font leading-tight">
+            Vina Score Decomposition — per-atom contribution
+          </h2>
+          <p class="text-[10px] text-slate-400 mt-0.5">
+            Atom colour &amp; size =
+            <code class="text-cyan-300">this_e</code> contribution ·
+            <span class="text-blue-400">■</span> unfavourable → <span class="text-red-400">■</span> favourable
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <!-- Ligand/Protein view toggle -->
+        <div class="flex rounded-xl border border-slate-700 overflow-hidden text-xs font-medium">
+          <button id="modeLigand" onclick="_setView('ligand')"
+                  class="px-4 py-1.5 border-r border-slate-700 bg-cyan-800 text-cyan-100">Ligand</button>
+          <button id="modeProtein" onclick="_setView('protein')"
+                  class="px-4 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800">🧪 Protein</button>
+        </div>
+        <button onclick="_vinaHide()"
+                class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white ml-2">✕</button>
+      </div>
+    </div>
+
+    <!-- ── Files bar (receptor + ligand load + vina dock) ── -->
+    <div class="px-6 py-2 bg-slate-950 border-b border-slate-800 flex items-center gap-3 flex-shrink-0 flex-wrap">
+
+      <!-- Receptor -->
+      <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Receptor</span>
+      <input id="recPath" class="path-input" style="width:360px"
+             placeholder="Loading default…" value="">
+      <button id="recLoadBtn" onclick="_loadFile('rec')" style="display:none;"></button>
+      <span id="recStatus" style="display:none;">—</span>
+
+      <div class="w-px h-4 bg-slate-700 mx-1 flex-shrink-0"></div>
+
+      <!-- Ligand -->
+      <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Ligand</span>
+      <input id="ligPath" class="path-input" style="width:380px"
+             placeholder="Loading default…" value="">
+      <button id="ligLoadBtn" onclick="_loadFile('lig')" style="display:none;"></button>
+      <span id="ligStatus" style="display:none;">—</span>
+
+      <div class="flex-1"></div>
+
+      <!-- Vina Dock button -->
+      <button onclick="_vinaDock()"
+              id="vinaDockBtn"
+              class="text-[10px] font-semibold px-3 py-1.5 bg-cyan-900 hover:bg-cyan-800 border border-cyan-700 text-cyan-300 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5">
+        <span id="vinaDockIcon">⚗️</span> Vina Dock
+      </button>
+    </div>
+
+    <!-- ── Visualize row ── -->
+    <div class="px-6 py-2.5 border-b border-slate-800 bg-slate-950 flex items-center gap-3 flex-shrink-0">
+      <span class="text-[10px] text-slate-500 flex-1">
+        Reads
+        <code class="text-cyan-400 text-[9px]">vina_non_cache.log</code>
+        · best pose · per-atom <code class="text-emerald-400 text-[9px]">this_e</code> = Σ pair_e
+      </span>
+      <!-- Grid box toggle -->
+      <button id="gridBoxBtn" onclick="_toggleGridBox()"
+              class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-400 hover:text-white font-semibold rounded-xl text-xs transition-all active:scale-95">
+        <span id="gridBoxIcon">⬜</span> Grid Box
+      </button>
+      <!-- Voxel inspector -->
+      <button id="voxelInspectBtn" onclick="_toggleVoxelPick()"
+              class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-400 hover:text-white font-semibold rounded-xl text-xs transition-all active:scale-95">
+        <span id="voxelInspectIcon">🔬</span> Voxel
+      </button>
+      <button id="vizBtn" onclick="_vinaVisualize()"
+              class="flex-shrink-0 flex items-center gap-1.5 px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold rounded-xl text-xs transition-all active:scale-95">
+        ⚡ Visualize
+      </button>
+    </div>
+
+    <!-- ── Body: 3D plot + right sidebar ── -->
+    <div class="flex flex-1 min-h-0 overflow-hidden">
+
+      <!-- LEFT: 3D molecule plot (Image 2 main area) -->
+      <div class="flex-1 relative bg-[#05070f]">
+        <div id="vSpinnerA" class="mol-spinner">
+          <div class="spinner-ring"></div>
+          <span id="vSpinnerAMsg" class="text-xs">Click ⚡ Visualize to load from log file</span>
+        </div>
+        <div id="vPlotA" class="mol-plot"></div>
+      </div>
+
+      <!-- RIGHT: sidebar — exactly as Image 2 ── -->
+      <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:264px">
+
+        <!-- Score (Image 2: "PREDICTED BINDING SCORE") -->
+        <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
+          <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Predicted Binding Score</p>
+          <div class="score-card">
+            <div id="vScoreA" class="score-val score-neutral">—</div>
+            <div id="vScoreANote" class="text-[10px] text-slate-500 mt-0.5">kcal/mol</div>
+          </div>
+        </div>
+
+        <!-- Bar chart — toggled between weight_a and Vina this_e -->
+        <div class="px-4 pt-3 pb-1 flex-shrink-0">
+          <div class="flex items-center justify-between mb-1">
+            <p id="vBarLabel" class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">weight_a · top 50</p>
+            <!-- Vina toggle -->
+            <button id="vinaToggleBtn" onclick="_toggleVina()"
+                    class="text-[9px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-500 hover:border-emerald-500 hover:text-emerald-400 transition-colors whitespace-nowrap">
+                ⚗️ Vina
+            </button>
+          </div>
+          <div id="vBarA" style="height:150px"></div>
+        </div>
+
+        <!-- Scale -->
+        <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
+          <div class="flex items-center gap-2 text-[10px] text-slate-500">
+            <span>Low</span><div class="cw-bar"></div><span>High</span>
+          </div>
+          <p id="vBarNote" class="text-[10px] text-slate-600 mt-1">
+            <code class="text-cyan-400">weight_a[i+1]</code> from <code class="text-slate-400">Adjacency_embedding</code>
+          </p>
+        </div>
+
+        <!-- Atom table (Image 2: "ATOMS ↓ — CLICK TO LOCATE IN CHART + 3D") -->
+        <div id="vTableA" class="side-panel px-4 pb-3 flex-1 overflow-y-auto space-y-0.5 text-[11px] text-slate-400">
+          <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1 pt-2">
+            Atoms ↓ — click to locate in chart + 3D
+          </p>
+        </div>
+
+        <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
+          <p id="vStatusA" class="text-[10px] text-slate-600 truncate">—</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Status bar ── -->
+    <div class="px-6 py-1.5 border-t border-slate-800 bg-slate-950 flex-shrink-0 flex items-center gap-2">
+      <div id="vinaSpinner" class="hidden spinner-ring" style="width:12px;height:12px;border-width:2px"></div>
+      <p id="vinaStatus" class="text-[10px] text-slate-600 flex-1 truncate">Paste log and click ⚡ Parse. Or click Vina Dock to run docking first.</p>
+    </div>
+
+  </div><!-- /modal inner -->
+</div>
+
+<!-- ══ Pair detail side-drawer (slides in from right when atom clicked in Vina mode) ══ -->
+<div id="pairDrawer"
+     class="hidden fixed right-0 top-0 h-full bg-slate-900 border-l border-slate-700 z-[10000] flex flex-col shadow-2xl"
+     style="width:480px">
+  <div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+    <div>
+      <p id="drawerTitle" class="font-semibold text-white text-sm title-font">Atom pairs</p>
+      <p id="drawerSub"   class="text-[10px] text-slate-400 mt-0.5"></p>
+    </div>
+    <button onclick="_closeDrawer()"
+            class="text-slate-400 hover:text-white px-2 py-1 hover:bg-slate-800 rounded-lg text-sm transition-colors">✕</button>
+  </div>
+  <div class="flex flex-1 min-h-0 overflow-hidden">
+    <!-- Pair list -->
+    <div id="pairList" class="side-panel flex-1 overflow-y-auto px-4 py-2 text-[11px]"></div>
+    <!-- Term breakdown -->
+    <div class="flex-shrink-0 border-l border-slate-700 flex flex-col overflow-hidden" style="width:192px">
+      <p class="text-[9px] font-semibold text-slate-500 uppercase tracking-wider px-3 pt-2 pb-1">Term breakdown</p>
+      <div id="termPanel" class="side-panel flex-1 overflow-y-auto px-3 pb-3 space-y-1.5">
+        <p class="text-[9px] text-slate-700">Click a pair.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══ Voxel inspector panel ══════════════════════════════════════════════════ -->
+<div id="voxelPanel"
+     class="hidden fixed z-[10002] bg-slate-900 border border-cyan-800 rounded-2xl shadow-2xl overflow-hidden"
+     style="width:380px; bottom:32px; left:32px;">
+  <div class="px-4 py-2.5 border-b border-slate-700 flex items-center justify-between bg-slate-950">
+    <div class="flex items-center gap-2">
+      <span class="text-sm">🔬</span>
+      <span id="voxelPanelTitle" class="text-xs font-semibold text-cyan-300 title-font">Voxel Inspector</span>
+    </div>
+    <button onclick="_closeVoxelPanel()"
+            class="text-slate-500 hover:text-white text-xs px-2 py-0.5 hover:bg-slate-700 rounded transition-colors">✕</button>
+  </div>
+  <div id="voxelPanelBody" class="px-4 py-3 text-[11px] space-y-2 font-mono text-slate-300 overflow-y-auto" style="max-height:420px">
+    <p class="text-slate-600 text-[10px]">Click a protein atom to inspect.</p>
+  </div>
+</div>
+
+<!-- pick-mode cursor overlay -->
+<div id="voxelPickOverlay"
+     class="hidden fixed inset-0 z-[10001] cursor-crosshair"
+     style="background:rgba(34,211,238,0.04); pointer-events:none">
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
+              bg-slate-900/90 border border-cyan-500 rounded-xl px-5 py-3 text-center pointer-events:none">
+    <p class="text-cyan-300 text-xs font-semibold">🔬 Click a protein atom</p>
+    <p class="text-slate-500 text-[10px] mt-0.5">Switch to Protein view first, then click any atom</p>
+  </div>
+</div>
+
+<div id="miniChat" style="display:none;position:fixed;bottom:20px;left:20px;z-index:10200;
+     width:340px;background:#0f172a;border:1px solid #1e293b;border-radius:16px;
+     box-shadow:0 8px 32px rgba(0,0,0,.6);flex-direction:column;overflow:hidden;">
+    <div data-drag-handle="miniChat" style="padding:10px 14px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;background:#080d18;cursor:grab;">
+        <div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#22d3ee,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;">🔬</div>
+        <span style="font-size:12px;font-weight:600;color:#f1f5f9;flex:1;">Elion · Vina Docking</span>
+        <button onclick="_miniChatClose()" style="background:none;border:none;cursor:pointer;color:#475569;font-size:14px;padding:2px 4px;" onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#475569'">✕</button>
+    </div>
+    <div id="miniChatOutput" style="max-height:220px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#1e3a5f #0f172a;"></div>
+    <div style="padding:8px 12px;border-top:1px solid #1e293b;display:flex;gap:6px;align-items:center;">
+        <input id="miniChatInput" type="text" placeholder="Ask about docking…"
+            style="flex:1;font-size:12px;background:#111827;color:#e2e8f0;border:1px solid #1e293b;border-radius:8px;padding:6px 10px;outline:none;transition:border-color .2s;"
+            onfocus="this.style.borderColor='#22d3ee'" onblur="this.style.borderColor='#1e293b'"
+            onkeydown="if(event.key==='Enter')_miniChatSend()">
+        <button onclick="_miniChatSend()" style="width:28px;height:28px;background:#0e7490;border:none;border-radius:8px;cursor:pointer;color:#fff;font-size:12px;flex-shrink:0;"
+                onmouseover="this.style.background='#0891b2'" onmouseout="this.style.background='#0e7490'">→</button>
+    </div>
+</div>

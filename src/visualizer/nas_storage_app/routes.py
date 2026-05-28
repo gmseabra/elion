@@ -8,9 +8,21 @@
 
 import os
 import sys as _sys, os as _os
+from pathlib import Path as _Path
+
+# ── Anchor all paths relative to THIS file's location ─────────────────────────
+# routes.py lives at:  .../visualizer/routes/<this_file>.py
+# (or directly at      .../visualizer/routes.py depending on project layout)
+# _HERE  = directory containing routes.py
+# _VIZ   = visualizer/          (one level up from routes/)
+# _ROOT  = project root         (two levels up; adjust if layout differs)
+_HERE = _Path(__file__).resolve().parent          # .../visualizer/routes/
+_VIZ  = _HERE.parent                              # .../visualizer/
+_ROOT = _VIZ.parent                               # .../
+
 # Ensure the original attention_visualization package is on sys.path
 # so nas_storage_app.CHEMBERT imports resolve correctly
-_ATTN_BASE = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization"
+_ATTN_BASE = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization")
 if _ATTN_BASE not in _sys.path:
     _sys.path.insert(0, _ATTN_BASE)
 
@@ -62,7 +74,7 @@ import threading
 import uuid
 import queue
 
-from flask import jsonify, render_template, request, Response, stream_with_context
+from flask import jsonify, render_template, request, Response, stream_with_context, current_app
 from nas_storage_app import app
 
 logger = logging.getLogger(__name__)
@@ -70,20 +82,22 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # Default model paths (shown as presets in the UI)
 # ==============================================================================
-DEFAULT_FINETUNED   = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization/nas_storage_app/CHEMBERT/Finetuned_model_5.pt"
-DEFAULT_PRETRAINED  = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization/nas_storage_app/CHEMBERT/pretrained_model.pt"
+DEFAULT_FINETUNED  = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization" /
+                         "nas_storage_app" / "CHEMBERT" / "Finetuned_model_5.pt")
+DEFAULT_PRETRAINED = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization" /
+                         "nas_storage_app" / "CHEMBERT" / "pretrained_model.pt")
 
 CHEMBERT_BASE = "nas_storage_app.CHEMBERT"   # import root for chembert modules
 
 # ==============================================================================
 # Vina paths  (single source of truth — change here to relocate everything)
 # ==============================================================================
-VINA_BASE    = "/blue/lic/huangzihang/repos/elion/src/visualizer/vina"
-VINA_BIN     = f"{VINA_BASE}/vina"
-VINA_LOG     = f"{VINA_BASE}/vina_non_cache.log"
+VINA_BASE = str(_VIZ / "vina")               # .../visualizer/vina/
+VINA_BIN  = str(_VIZ / "vina" / "vina")     # .../visualizer/vina/vina
+VINA_LOG  = str(_VIZ / "vina" / "vina_non_cache.log")
 
 # Persistent PDBQT storage for user-converted files
-CONVERTED_ROOT = "/blue/lic/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt"
+CONVERTED_ROOT = str(_VIZ / "nas_storage_app" / "converted_pdbqt")
 
 
 # ==============================================================================
@@ -103,7 +117,8 @@ CONVERTED_ROOT = "/blue/lic/huangzihang/repos/elion/src/visualizer/nas_storage_a
 # load via chembert_model (which wraps in BERT_base).  Otherwise load the raw
 # Smiles_BERT state dict directly into a freshly constructed BERT_base.
 
-ATTN_ACTION_KB_PATH = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization/nas_storage_app/.qwen/attn_action_kb.md"
+ATTN_ACTION_KB_PATH = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization" /
+                          "nas_storage_app" / ".qwen" / "attn_action_kb.md")
 os.makedirs(os.path.dirname(ATTN_ACTION_KB_PATH), exist_ok=True)
 _attn_kb_cache: str | None = None
 _attn_chat_history: list = []
@@ -411,11 +426,14 @@ def _get_viz(model_path: str) -> AdjacencyWeightVisualizer:
 # Routes
 # ==============================================================================
 
-VINA_ACTION_KB_PATH = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/vina_visualization/nas_storage_app/.qwen/vina_action_kb.md"
+VINA_ACTION_KB_PATH = str(_ROOT / "Elion-AGI-Ecosystem" / "vina_visualization" /
+                          "nas_storage_app" / ".qwen" / "vina_action_kb.md")
 os.makedirs(os.path.dirname(VINA_ACTION_KB_PATH), exist_ok=True)
 
-DEFAULT_FINETUNED   = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization/nas_storage_app/CHEMBERT/Finetuned_model_5.pt"
-DEFAULT_PRETRAINED  = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/attention_visualization/nas_storage_app/CHEMBERT/pretrained_model.pt"
+DEFAULT_FINETUNED   = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization" /
+                          "nas_storage_app" / "CHEMBERT" / "Finetuned_model_5.pt")
+DEFAULT_PRETRAINED  = str(_ROOT / "Elion-AGI-Ecosystem" / "attention_visualization" /
+                          "nas_storage_app" / "CHEMBERT" / "pretrained_model.pt")
 
 CHEMBERT_BASE = "nas_storage_app.CHEMBERT"   # import root for chembert modules
 
@@ -674,6 +692,28 @@ def _get_viz(model_path: str) -> AdjacencyWeightVisualizer:
 # ==============================================================================
 # ── HUB LANDING PAGE ──────────────────────────────────────────────────────────
 # ==============================================================================
+
+
+@app.route('/debug_static')
+def debug_static():
+    """
+    Temporary debug endpoint — remove after confirming static file paths.
+    GET /debug_static  → JSON showing Flask's static_folder and whether the JS files exist.
+    """
+    import os as _os2
+    sf = current_app.static_folder or ''
+    return jsonify({
+        "static_folder":           sf,
+        "static_url_path":         current_app.static_url_path,
+        "static_folder_exists":    _os2.path.isdir(sf),
+        "js_dir_exists":           _os2.path.isdir(_os2.path.join(sf, 'js')),
+        "deepatom_js_exists":      _os2.path.isfile(_os2.path.join(sf, 'js', 'deepatom.js')),
+        "vina_welcome_js_exists":  _os2.path.isfile(_os2.path.join(sf, 'js', 'vina_mini_chat_welcome.js')),
+        "js_dir_contents":         _os2.listdir(_os2.path.join(sf, 'js')) if _os2.path.isdir(_os2.path.join(sf, 'js')) else [],
+        "cwd":                     _os2.getcwd(),
+        "routes_py_location":      __file__,
+        "_VIZ":                    str(_VIZ),
+    })
 
 @app.route('/')
 def hub():
@@ -1301,6 +1341,179 @@ def attn_chat_clear_ep():
 # ==============================================================================
 # ══ VINA VISUALIZER  /vina_visualization/* ════════════════════════════════════
 # ==============================================================================
+@app.route('/vina_visualization/vina_defaults', methods=['GET'])
+def vina_defaults():
+    """
+    GET /vina_visualization/vina_defaults
+    Returns default receptor/ligand paths and box parameters from input_routes.yml
+    (loaded into app.config['VINA'] by app.py at startup).
+    Used by the frontend to pre-fill the receptor/ligand path fields.
+    """
+    cfg = current_app.config.get("VINA", {})
+    return jsonify({
+        "status":           "success",
+        "default_receptor": cfg.get("default_receptor", ""),
+        "default_ligand":   cfg.get("default_ligand",   ""),
+        "center_x":         cfg.get("center_x", -25.7),
+        "center_y":         cfg.get("center_y",   0.22),
+        "center_z":         cfg.get("center_z",  28.39),
+        "size_x":           cfg.get("size_x", 20),
+        "size_y":           cfg.get("size_y", 20),
+        "size_z":           cfg.get("size_z", 20),
+        "exhaustiveness":   cfg.get("exhaustiveness", 8),
+    })
+
+
+# ==============================================================================
+# ── Vina Protein Library  (reads input_routes.yml) ────────────────────────────
+# ==============================================================================
+import yaml as _yaml  # noqa: E402  (placed here to keep top-of-file clean)
+
+# Absolute path to the YAML config — same file app.py reads at startup.
+_INPUT_ROUTES_YML = str(_VIZ / "input_routes.yml")
+
+
+def _load_proteins_from_yml() -> list:
+    """
+    Parse input_routes.yml and return the vina.proteins list.
+    Falls back to a single synthetic entry built from app.config['VINA']
+    if the file is missing or has no proteins key (backwards-compat).
+    """
+    try:
+        with open(_INPUT_ROUTES_YML, "r", encoding="utf-8") as _f:
+            raw = _yaml.safe_load(_f)
+        proteins = raw.get("vina", {}).get("proteins")
+        if proteins and isinstance(proteins, list):
+            return proteins
+    except Exception as _e:
+        logger.warning("[vina_proteins] Could not read YAML: %s", _e)
+
+    # Fallback: synthesise one entry from whatever is already in app.config
+    cfg = current_app.config.get("VINA", {})
+    return [{
+        "id":               cfg.get("id", "default"),
+        "label":            cfg.get("id", "Default protein"),
+        "description":      "",
+        "default_receptor": cfg.get("default_receptor", ""),
+        "default_ligand":   cfg.get("default_ligand",   ""),
+        "center_x":         cfg.get("center_x",  0),
+        "center_y":         cfg.get("center_y",  0),
+        "center_z":         cfg.get("center_z",  0),
+        "size_x":           cfg.get("size_x",   20),
+        "size_y":           cfg.get("size_y",   20),
+        "size_z":           cfg.get("size_z",   20),
+        "exhaustiveness":   cfg.get("exhaustiveness", 8),
+        "num_modes":        cfg.get("num_modes",       9),
+        "energy_range":     cfg.get("energy_range",    3),
+    }]
+
+
+@app.route('/vina_visualization/vina_proteins', methods=['GET'])
+def vina_proteins():
+    """
+    GET /vina_visualization/vina_proteins
+    Returns all protein targets defined in input_routes.yml so the
+    mini-chat welcome screen can render one button per protein.
+
+    Response:
+    {
+      "status":         "success",
+      "active_protein": "8P0M",
+      "proteins": [
+        {
+          "id": "8P0M", "label": "TEAD3 / 8P0M",
+          "description": "...",
+          "default_receptor": "...", "default_ligand": "...",
+          "center_x": -25.7, "center_y": 0.22, "center_z": 28.39,
+          "size_x": 20, "size_y": 20, "size_z": 20
+        }, ...
+      ]
+    }
+    """
+    try:
+        proteins = _load_proteins_from_yml()
+        cfg      = current_app.config.get("VINA", {})
+        active   = cfg.get("id", proteins[0]["id"] if proteins else "")
+        return jsonify({"status": "success", "active_protein": active, "proteins": proteins})
+    except Exception as exc:
+        logger.error("[vina_proteins] error: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@app.route('/vina_visualization/vina_select_protein', methods=['POST'])
+def vina_select_protein():
+    """
+    POST /vina_visualization/vina_select_protein
+    Body: { "protein_id": "8P0M" }
+
+    Finds the matching entry in input_routes.yml and merges its fields
+    into app.config['VINA'] so all subsequent vina_dock calls use the
+    chosen target without any restart.
+
+    Response:
+    {
+      "status": "success", "protein_id": "8P0M",
+      "default_receptor": "...", "default_ligand": "...",
+      "center_x": ..., "center_y": ..., "center_z": ...,
+      "size_x": ..., "size_y": ..., "size_z": ...,
+      "exhaustiveness": 8
+    }
+    """
+    try:
+        body       = request.get_json(force=True) or {}
+        protein_id = (body.get("protein_id") or "").strip()
+        if not protein_id:
+            return jsonify({"status": "error", "message": "protein_id is required"}), 400
+
+        proteins = _load_proteins_from_yml()
+        match    = next((p for p in proteins if p.get("id") == protein_id), None)
+        if match is None:
+            ids = [p.get("id") for p in proteins]
+            return jsonify({
+                "status":  "error",
+                "message": f"protein_id '{protein_id}' not found. Available: {ids}"
+            }), 404
+
+        # Merge chosen protein fields into the live VINA config so vina_dock
+        # picks them up immediately without a server restart.
+        cfg = current_app.config.setdefault("VINA", {})
+        cfg.update({
+            "id":               match["id"],
+            "default_receptor": match.get("default_receptor", cfg.get("default_receptor", "")),
+            "default_ligand":   match.get("default_ligand",   cfg.get("default_ligand",   "")),
+            "center_x":         match.get("center_x",         cfg.get("center_x",    0)),
+            "center_y":         match.get("center_y",         cfg.get("center_y",    0)),
+            "center_z":         match.get("center_z",         cfg.get("center_z",    0)),
+            "size_x":           match.get("size_x",           cfg.get("size_x",     20)),
+            "size_y":           match.get("size_y",           cfg.get("size_y",     20)),
+            "size_z":           match.get("size_z",           cfg.get("size_z",     20)),
+            "exhaustiveness":   match.get("exhaustiveness",   cfg.get("exhaustiveness", 8)),
+            "num_modes":        match.get("num_modes",        cfg.get("num_modes",       9)),
+            "energy_range":     match.get("energy_range",     cfg.get("energy_range",    3)),
+            "cpu":              match.get("cpu",              cfg.get("cpu",          None)),
+        })
+        logger.info("[vina_select_protein] switched to protein_id=%s", protein_id)
+
+        return jsonify({
+            "status":           "success",
+            "protein_id":       cfg["id"],
+            "default_receptor": cfg["default_receptor"],
+            "default_ligand":   cfg["default_ligand"],
+            "center_x":         cfg["center_x"],
+            "center_y":         cfg["center_y"],
+            "center_z":         cfg["center_z"],
+            "size_x":           cfg["size_x"],
+            "size_y":           cfg["size_y"],
+            "size_z":           cfg["size_z"],
+            "exhaustiveness":   cfg["exhaustiveness"],
+        })
+
+    except Exception as exc:
+        logger.error("[vina_select_protein] error: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+
 @app.route('/vina_visualization')
 def vina_home():
     return render_template('hub.html')
@@ -1947,19 +2160,25 @@ def vina_dock():
         lig_stem  = Path(lig_path).stem
         OUT_LIG   = str(Path(lig_path).parent / f"{lig_stem}_out.pdbqt")
 
+        # ── All hyperparameters from input_routes.yml via app.config["VINA"] ──────
+        # Loaded by app.py at startup — zero hardcoding here.
+        _vcfg = current_app.config.get("VINA", {})
+        _cpu  = _vcfg.get("cpu") or os.cpu_count() or 4
         cmd = [
             VINA_BIN,
-            '--receptor',     rec_path,
-            '--ligand',       lig_path,
-            '--center_x',     '-25.7',
-            '--center_y',     '0.22',
-            '--center_z',     '28.39',
-            '--size_x',       '20',
-            '--size_y',       '20',
-            '--size_z',       '20',
-            '--exhaustiveness', '8',
-            '--cpu',          str(os.cpu_count() or 4),
-            '--out',          OUT_LIG,
+            '--receptor',       rec_path,
+            '--ligand',         lig_path,
+            '--center_x',       str(_vcfg.get('center_x', -25.7)),
+            '--center_y',       str(_vcfg.get('center_y',   0.22)),
+            '--center_z',       str(_vcfg.get('center_z',  28.39)),
+            '--size_x',         str(_vcfg.get('size_x',      20)),
+            '--size_y',         str(_vcfg.get('size_y',      20)),
+            '--size_z',         str(_vcfg.get('size_z',      20)),
+            '--exhaustiveness', str(_vcfg.get('exhaustiveness', 8)),
+            '--num_modes',      str(_vcfg.get('num_modes',      9)),
+            '--energy_range',   str(_vcfg.get('energy_range',   3)),
+            '--cpu',            str(_cpu),
+            '--out',            OUT_LIG,
         ]
 
         logger.info(f'vina_dock: running {" ".join(cmd)}')
@@ -1970,10 +2189,20 @@ def vina_dock():
             try: _vina_progress_q.get_nowait()
             except: pass
 
+        # Ensure conda lib dir is in LD_LIBRARY_PATH so the instrumented
+        # vina binary finds libboost_system.so.1.84.0 at runtime.
+        _conda_lib = os.path.join(os.environ.get("CONDA_PREFIX", ""), "lib")
+        _proc_env  = os.environ.copy()
+        if _conda_lib and _conda_lib not in _proc_env.get("LD_LIBRARY_PATH", ""):
+            _proc_env["LD_LIBRARY_PATH"] = (
+                _conda_lib + ":" + _proc_env.get("LD_LIBRARY_PATH", "")
+            ).strip(":")
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             bufsize=0,   # unbuffered — essential for live progress bar
+            env=_proc_env,
         )
 
         lines = []
@@ -3414,3 +3643,9 @@ def tools_pdb_to_pdbqt():
     finally:
         # Always clean up the temp upload dir (output is already in CONVERTED_ROOT)
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ══ DeepAtom Property Estimators ══════════════════════════════════════════════
+# Implementation moved to deepatom_routes.py
+from nas_storage_app import deepatom_routes as _deepatom_routes_mod
+_deepatom_routes_mod.configure(input_routes_yml=_INPUT_ROUTES_YML)

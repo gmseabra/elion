@@ -1,0 +1,141 @@
+# ============================================================
+#  Vina Docking Configuration
+#  Used exclusively by:
+#    /home/huangzihang/repos/elion/src/visualizer/nas_storage_app/routes.py
+#
+#  All vina hyperparameters, paths, and defaults live here.
+#  Zero hardcoding allowed in routes.py.
+# ============================================================
+
+vina:
+  # ── Binary ────────────────────────────────────────────────
+  bin: "/home/huangzihang/repos/elion/src/visualizer/vina/vina"
+  log: "/home/huangzihang/repos/elion/src/visualizer/vina/vina_non_cache.log"
+
+  # ── Active protein (used by the docking engine at runtime) ───────────────────
+  # Set this to one of the `id` values from the `proteins` list below.
+  # The frontend also reads `proteins` directly via GET /vina_visualization/vina_proteins
+  # and lets the user pick; selecting a protein POSTs to /vina_visualization/vina_select_protein
+  # which writes the chosen entry's fields back into app.config["VINA"].
+  active_protein: "8P0M"
+
+  # ── Default ligand directory (shared across all proteins) ─────────────────────
+  ligand_pdbqt_dir: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand"
+
+  # ── Protein library ──────────────────────────────────────────────────────────
+  # Each entry is a self-contained docking target.
+  # Fields per entry:
+  #   id              – unique short identifier shown in the UI
+  #   label           – human-friendly name shown in the mini-chat buttons
+  #   description     – one-line blurb shown below the button
+  #   default_receptor – absolute path to the prepared receptor .pdbqt
+  #   default_ligand   – absolute path to the default ligand .pdbqt
+  #   center_x/y/z    – Vina grid box centre (Å)
+  #   size_x/y/z      – Vina grid box dimensions (Å)
+  #   exhaustiveness  – sampling exhaustiveness (8 = standard)
+  #   num_modes       – max binding modes to output
+  #   energy_range    – modes within this kcal/mol of best are kept
+  #   cpu             – null = auto-detect (os.cpu_count())
+  proteins:
+
+    - id: "8P0M"
+      label: "TEAD3 / 8P0M"
+      description: "TEAD3 YAP-binding domain — active site near Phe-338"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/Elion_8P0M.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/Elion_iag933.pdbqt"
+      center_x: -25.7
+      center_y:   0.22
+      center_z:  28.39
+      size_x: 20
+      size_y: 20
+      size_z: 20
+      exhaustiveness: 8
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+    - id: "1P9M"
+      label: "IL-6 / gp130 hexamer"
+      description: "Interleukin-6 receptor subunit beta"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/IL-6_gp130.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/G001a_IL-6_gp130_SP_Score_-4.214.pdbqt"
+      center_x:  -0.127
+      center_y:  2.204
+      center_z:  -12.08
+      size_x: 20
+      size_y: 20
+      size_z: 20
+      exhaustiveness: 8
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+    - id: "1ERR"
+      label: "ERα / 1ERR"
+      description: "Estrogen Receptor Alpha"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/EAlphaReceptor_1ERR.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/G001a_EAlphaReceptor_pocket1_SP_Score_-11.880.pdbqt"
+      center_x:  67.872
+      center_y:  34.6
+      center_z:  74.321
+      size_x: 24
+      size_y: 24
+      size_z: 24
+      exhaustiveness: 12
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+  # ── Sampling hyperparameters (global fallback if a protein entry omits them) ──
+  exhaustiveness: 8
+  num_modes: 9
+  energy_range: 3
+  cpu: null
+# ============================================================
+#  DeepAtom Virtual Screening Configuration
+#  Used by: nas_storage_app/routes.py  (deepatom_datasets route)
+#
+#  Each dataset entry maps to one run of:
+#    predict_binding_affinity_v4_2_data_split_ZccE_elion.sh
+#      -t <test_type>   (e.g. "vs" for virtual screening)
+#      -d <data_dir>    (absolute path to the dataset root)
+#
+#  Fields per entry:
+#    id          – unique short identifier shown in the UI buttons
+#    label       – human-friendly name shown in the mini-chat buttons
+#    description – one-line blurb shown below the button
+#    test_type   – maps to the script's -t flag (e.g. "vs", "train")
+#    data_dir    – maps to the script's -d flag (absolute path)
+#    active      – set true on one entry to pre-select it on load
+# ============================================================
+
+deepatom:
+  # ── Script ────────────────────────────────────────────────────────────────
+  script: "/home/huangzihang/repos/deepatom/bin/predict_binding_affinity_v4_2_data_split_ZccE_elion.sh"
+
+  # ── Active dataset (pre-selected in the UI on load) ───────────────────────
+  active_dataset: "ZccE_VS"
+
+  # ── Dataset library ───────────────────────────────────────────────────────
+  datasets:
+
+    - id: "ZccE_VS"
+      label: "ZccE · Virtual Screening"
+      description: "ZccE compound library — virtual screening mode"
+      test_type: "vs"
+      data_dir: "/blue/lic/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: true
+
+    - id: "ZccE_Train"
+      label: "ZccE · Training Set"
+      description: "ZccE benchmark — training split evaluation"
+      test_type: "train"
+      data_dir: "/blue/lic/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: false
+
+    - id: "ZccE_Test"
+      label: "ZccE · Test Set"
+      description: "ZccE benchmark — held-out test split"
+      test_type: "test"
+      data_dir: "/blue/lic/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: false

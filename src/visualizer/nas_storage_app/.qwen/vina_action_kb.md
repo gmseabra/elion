@@ -8,3 +8,15 @@
 # Old entries below (### action_id: format) are IGNORED by the router.
 # Only ## action: format entries appended below are valid.
 # ─────────────────────────────────────────────────────────────────────────────
+## action: optimize_vina_docking_performance
+**btnId:** vinaDockBtn
+**auto-learned:** 2026-05-27 12:35
+**triggers:**
+- this is very slow
+- it's taking too long
+- can you speed it up?
+- is there a faster way?
+- how can I make it quicker?
+- why is it so slow?
+- can you optimize the docking process?
+**response:** To improve performance, try optimizing your docking settings using the {btn} button.

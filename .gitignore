@@ -5,6 +5,8 @@
 *.jpg
 *.png
 *.pt
+*.pdbqt
+*.pyc
 chk*
 
 # Model checkpoint files
@@ -37,11 +39,13 @@ src/elion.egg-info/PKG-INFO
 src/elion.egg-info/SOURCES.txt
 src/elion.egg-info/top_level.txt
 
-# User docking score
+# User data
 src/vina/docking_score/
+src/elion/properties/deepatom/data/
+src/elion/generators/TS/data/
 
 # HPG local scripts
 src/vina/internal_utils/
 
-# debug
-src/TS/debug/
+# temp
+src/TS/

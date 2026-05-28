@@ -61,7 +61,7 @@ DOCS_PATH    = INDEX_PATH + ".json"
 # Encoder: try relative path first (same layout as ElionKnowledgeBase)
 ENCODER_PATH = os.path.join(_BASE, "..", "LLM", "all-MiniLM-L6-v2")
 if not os.path.exists(ENCODER_PATH):
-    ENCODER_PATH = "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/LLM/all-MiniLM-L6-v2"
+    ENCODER_PATH = "../../../Elion-AGI-Ecosystem/LLM/all-MiniLM-L6-v2"
 
 CONFIDENCE_THRESHOLD = 0.42   # cosine similarity floor (0–1, empirically tuned)
 

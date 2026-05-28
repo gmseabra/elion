@@ -10,7 +10,7 @@ control:
 generator:
   name: "ReLeaSE"
   author: "Isayev"
-  initial_state: "/blue/lic/huangzihang/repos/elion/src/elion/generators/release/checkpoints/generator/checkpoint_biggest_rnn"
+  initial_state: "generators/release/checkpoints/generator/checkpoint_biggest_rnn"
   batch_size: 200
   # Start with celecoxib
   seed_smi: "Cc1ccc(-c2cc(C(F)(F)F)nn2-c2ccc(S(N)(=O)=O)cc2)cc1"
@@ -33,7 +33,7 @@ reward_function:
     threshold_limit: 0.9
     threshold_step: 0.1
   CHEMBERT_BE:
-    model_file: '/blue/lic/huangzihang/repos/elion/src/elion/properties/CHEMBERT/Finetuned_model_5.pt'
+    model_file: 'properties/CHEMBERT/Finetuned_model_5.pt'
     rew_coeff: 5.0
     optimize: True
     threshold: -8.0

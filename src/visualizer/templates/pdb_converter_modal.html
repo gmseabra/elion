@@ -1,0 +1,103 @@
+<div id="pdb2pdbqtModal" style="
+    display:none;position:fixed;inset:0;z-index:10100;
+    background:transparent;
+    align-items:center;justify-content:center;
+    pointer-events:none;
+">
+    <div style="
+        background:#0b1120;border:1px solid #1e293b;border-radius:20px;
+        width:min(560px,94vw);max-height:85vh;overflow-y:auto;
+        box-shadow:0 0 0 1px rgba(34,211,238,.08), 0 32px 100px rgba(0,0,0,.9), 0 0 60px rgba(0,0,0,.6);
+        font-family:'Inter',system-ui,sans-serif;
+        animation:modalPop .2s ease both;
+        pointer-events:auto;
+    ">
+        <!-- Header -->
+        <div style="padding:20px 24px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:36px;height:36px;border-radius:10px;background:#052e1c;border:1px solid #064e3b;
+                            display:flex;align-items:center;justify-content:center;font-size:18px;">⚙️</div>
+                <div>
+                    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;color:#f1f5f9;">PDB → PDBQT Converter</div>
+                    <div style="font-size:11px;color:#475569;margin-top:1px;">Prepare structures for AutoDock Vina</div>
+                </div>
+            </div>
+            <button onclick="_pdb2pdbqtClose()" style="
+                background:none;border:none;cursor:pointer;color:#475569;font-size:20px;
+                line-height:1;padding:4px;border-radius:6px;transition:color .15s;
+            " onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#475569'">✕</button>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:24px;">
+
+            <!-- Molecule type toggle -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Molecule Type</div>
+                <div style="display:flex;border:1px solid #1e293b;border-radius:10px;overflow:hidden;width:fit-content;">
+                    <button id="p2p_ligand_btn" onclick="_p2pSetType('ligand')" style="
+                        padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer;border:none;
+                        background:#064e3b;color:#6ee7b7;font-family:inherit;transition:all .15s;
+                    ">Ligand</button>
+                    <button id="p2p_receptor_btn" onclick="_p2pSetType('receptor')" style="
+                        padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer;border:none;
+                        background:#111827;color:#475569;font-family:inherit;transition:all .15s;
+                        border-left:1px solid #1e293b;
+                    ">Receptor</button>
+                </div>
+                <div id="p2p_type_hint" style="font-size:11px;color:#334155;margin-top:6px;">
+                    Ligand: adds hydrogens, assigns Gasteiger charges, writes AutoDock atom types.
+                </div>
+            </div>
+
+            <!-- File drop zone -->
+            <div id="p2p_dropzone" onclick="document.getElementById('p2p_file_input').click()" style="
+                border:2px dashed #1e3a2a;border-radius:14px;padding:32px 20px;
+                text-align:center;cursor:pointer;transition:border-color .2s,background .2s;
+                background:#060e08;margin-bottom:16px;
+            " onmouseover="this.style.borderColor='#34d399';this.style.background='#071410'"
+               onmouseout="this.style.borderColor='#1e3a2a';this.style.background='#060e08'"
+               ondragover="event.preventDefault();this.style.borderColor='#34d399';this.style.background='#071410'"
+               ondragleave="this.style.borderColor='#1e3a2a';this.style.background='#060e08'"
+               ondrop="_p2pHandleDrop(event)">
+                <input id="p2p_file_input" type="file" accept=".pdb" style="display:none;"
+                       onchange="_p2pHandleFile(this.files[0])">
+                <div id="p2p_drop_icon" style="font-size:32px;margin-bottom:8px;">📂</div>
+                <div id="p2p_drop_label" style="font-size:14px;color:#64748b;font-weight:500;">
+                    Drop a <code style="background:#0f172a;padding:2px 6px;border-radius:4px;color:#34d399;font-size:13px;">.pdb</code> file here, or click to browse
+                </div>
+                <div id="p2p_drop_file" style="display:none;margin-top:10px;font-size:13px;color:#6ee7b7;font-weight:600;"></div>
+            </div>
+
+            <!-- Optional output dir -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+                    Output Directory <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#334155;">(optional — defaults to temp)</span>
+                </div>
+                <input id="p2p_out_dir" type="text" placeholder="/blue/lic/yourname/docking/outputs"
+                    style="width:100%;box-sizing:border-box;
+                           font-family:'Courier New',monospace;font-size:12px;
+                           background:#0a0f1a;border:1px solid #1e293b;border-radius:8px;
+                           padding:8px 12px;color:#94a3b8;outline:none;transition:border-color .2s;"
+                    onfocus="this.style.borderColor='#34d399'" onblur="this.style.borderColor='#1e293b'">
+            </div>
+
+            <!-- Convert button -->
+            <button id="p2p_convert_btn" onclick="_p2pConvert()" style="
+                width:100%;padding:12px;border:none;border-radius:12px;
+                background:linear-gradient(135deg,#065f46,#047857);
+                color:#ecfdf5;font-size:14px;font-weight:700;cursor:pointer;
+                font-family:inherit;transition:opacity .15s,transform .1s;
+                display:flex;align-items:center;justify-content:center;gap:8px;
+            " onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'"
+               onmousedown="this.style.transform='scale(.98)'" onmouseup="this.style.transform='scale(1)'">
+                <span id="p2p_btn_icon">⚙️</span>
+                <span id="p2p_btn_label">Convert to PDBQT</span>
+            </button>
+
+            <!-- Status / result -->
+            <div id="p2p_status" style="display:none;margin-top:16px;"></div>
+
+        </div>
+    </div>
+</div>

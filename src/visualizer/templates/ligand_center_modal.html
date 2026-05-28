@@ -1,0 +1,179 @@
+<div id="ligandCenterModal" style="
+    display:none;position:fixed;inset:0;z-index:10100;
+    background:transparent;
+    align-items:center;justify-content:center;
+    pointer-events:none;
+">
+    <div style="
+        background:#0b1120;border:1px solid #1e293b;border-radius:20px;
+        width:min(520px,94vw);max-height:85vh;overflow-y:auto;
+        box-shadow:0 0 0 1px rgba(34,211,238,.08), 0 32px 100px rgba(0,0,0,.9), 0 0 60px rgba(0,0,0,.6);
+        font-family:'Inter',system-ui,sans-serif;
+        animation:modalPop .2s ease both;
+        pointer-events:auto;
+    ">
+        <!-- Header -->
+        <div style="padding:20px 24px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:36px;height:36px;border-radius:10px;background:#052e1c;border:1px solid #064e3b;
+                            display:flex;align-items:center;justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                         stroke="#34d399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <line x1="12" y1="2"  x2="12" y2="7"/>
+                        <line x1="12" y1="17" x2="12" y2="22"/>
+                        <line x1="2"  y1="12" x2="7"  y2="12"/>
+                        <line x1="17" y1="12" x2="22" y2="12"/>
+                    </svg>
+                </div>
+                <div>
+                    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;color:#f1f5f9;">Get Ligand Center</div>
+                    <div style="font-size:11px;color:#475569;margin-top:1px;">Compute grid box center &amp; size from a ligand PDB</div>
+                </div>
+            </div>
+            <button onclick="_ligandCenterClose()" style="
+                background:none;border:none;cursor:pointer;color:#475569;font-size:20px;
+                line-height:1;padding:4px;border-radius:6px;transition:color .15s;
+            " onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#475569'">✕</button>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:24px;">
+
+            <!-- Hint -->
+            <div style="font-size:12px;color:#475569;margin-bottom:20px;line-height:1.6;
+                        background:#0a0f1a;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;">
+                Upload the <strong style="color:#6ee7b7;">ligand .pdb</strong> file.
+                The geometric center and bounding box of all heavy HETATM atoms are computed
+                and shown below — ready to paste into Vina's
+                <code style="background:#0f172a;padding:1px 5px;border-radius:4px;color:#34d399;font-size:11px;">center_x/y/z</code>
+                and
+                <code style="background:#0f172a;padding:1px 5px;border-radius:4px;color:#34d399;font-size:11px;">size_x/y/z</code>
+                fields.
+            </div>
+
+            <!-- File drop zone -->
+            <div id="lc_dropzone" onclick="document.getElementById('lc_file_input').click()" style="
+                border:2px dashed #1e3a2a;border-radius:14px;padding:32px 20px;
+                text-align:center;cursor:pointer;transition:border-color .2s,background .2s;
+                background:#060e08;margin-bottom:20px;
+            " onmouseover="this.style.borderColor='#34d399';this.style.background='#071410'"
+               onmouseout="this.style.borderColor='#1e3a2a';this.style.background='#060e08'"
+               ondragover="event.preventDefault();this.style.borderColor='#34d399';this.style.background='#071410'"
+               ondragleave="this.style.borderColor='#1e3a2a';this.style.background='#060e08'"
+               ondrop="_lcHandleDrop(event)">
+                <input id="lc_file_input" type="file" accept=".pdb" style="display:none;"
+                       onchange="_lcHandleFile(this.files[0])">
+                <div id="lc_drop_icon" style="font-size:32px;margin-bottom:8px;">📂</div>
+                <div id="lc_drop_label" style="font-size:14px;color:#64748b;font-weight:500;">
+                    Drop a <code style="background:#0f172a;padding:2px 6px;border-radius:4px;color:#34d399;font-size:13px;">.pdb</code> file here, or click to browse
+                </div>
+                <div id="lc_drop_file" style="display:none;margin-top:10px;font-size:13px;color:#6ee7b7;font-weight:600;"></div>
+            </div>
+
+            <!-- Results grid (hidden until computed) -->
+            <div id="lc_result" style="display:none;">
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
+
+                    <!-- Center -->
+                    <div style="background:#0a0f1a;border:1px solid #1e293b;border-radius:12px;padding:14px;">
+                        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+                                    color:#34d399;margin-bottom:10px;">Center (Å)</div>
+                        <div style="display:flex;flex-direction:column;gap:7px;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:58px;flex-shrink:0;">center_x</span>
+                                <input id="lc_cx" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_cx',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:58px;flex-shrink:0;">center_y</span>
+                                <input id="lc_cy" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_cy',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:58px;flex-shrink:0;">center_z</span>
+                                <input id="lc_cz" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_cz',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Size -->
+                    <div style="background:#0a0f1a;border:1px solid #1e293b;border-radius:12px;padding:14px;">
+                        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+                                    color:#34d399;margin-bottom:10px;">Box Size (Å)</div>
+                        <div style="display:flex;flex-direction:column;gap:7px;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:46px;flex-shrink:0;">size_x</span>
+                                <input id="lc_sx" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_sx',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:46px;flex-shrink:0;">size_y</span>
+                                <input id="lc_sy" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_sy',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="font-size:11px;color:#64748b;width:46px;flex-shrink:0;">size_z</span>
+                                <input id="lc_sz" type="number" readonly step="0.001" style="
+                                    flex:1;background:#060e08;border:1px solid #1e3a2a;border-radius:7px;
+                                    color:#6ee7b7;padding:5px 8px;font-size:12px;font-family:'Courier New',monospace;outline:none;">
+                                <button onclick="_lcCopy('lc_sz',this)" style="
+                                    font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;
+                                    background:#052e1c;border:1px solid #064e3b;color:#34d399;
+                                    white-space:nowrap;transition:background .15s;">Copy</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Residue info -->
+                <div id="lc_residue_info" style="font-size:11px;color:#334155;font-family:'Courier New',monospace;
+                                                  margin-bottom:16px;padding:8px 12px;background:#060a10;
+                                                  border-radius:8px;border:1px solid #1e293b;"></div>
+
+                <!-- Auto-fill button -->
+                <button onclick="_lcAutoFill()" style="
+                    width:100%;padding:12px;border:none;border-radius:12px;
+                    background:linear-gradient(135deg,#065f46,#047857);
+                    color:#ecfdf5;font-size:14px;font-weight:700;cursor:pointer;
+                    font-family:inherit;transition:opacity .15s,transform .1s;
+                    display:flex;align-items:center;justify-content:center;gap:8px;
+                " onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'"
+                   onmousedown="this.style.transform='scale(.98)'" onmouseup="this.style.transform='scale(1)'">
+                    ⚡ Auto-fill Vina Grid Box
+                </button>
+            </div>
+
+            <!-- Status -->
+            <div id="lc_status" style="display:none;margin-top:16px;font-size:13px;border-radius:10px;padding:10px 14px;"></div>
+
+        </div>
+    </div>
+</div>

@@ -380,10 +380,10 @@ def test_Elion_classifier_eval():
     """
     import sys
     # Add the directory containing 'input_reader.py'
-    sys.path.append('/blue/lic/huangzihang/repos/elion/src/elion')
+    sys.path.append('../..')
     import input_reader
     from pathlib import Path
-    config = input_reader.read_input_file('/blue/lic/huangzihang/repos/elion/src/elion/input_TS.yml')
+    config = input_reader.read_input_file('../../input_TS.yml')
     #-- Calculation Type --#
     run_type = config['Control']['run_type']
     elion_cls_eval = ElionEstimatorEvaluator(config['Reward_function'])

@@ -20,7 +20,7 @@ def setup_distributed_env():
     except Exception as e:
         print(f"⚠️  InfiniBand setup error: {e}")
 
-    ray_tmp = "/blue/lic/huangzihang/raytmp"
+    ray_tmp = "../../../../raytmp"
     os.makedirs(ray_tmp, exist_ok=True)
     for k in ("RAY_TMPDIR", "TMPDIR", "TEMP", "TMP"):
         os.environ[k] = ray_tmp

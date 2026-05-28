@@ -38,7 +38,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_REPO_ROOT = "/blue/lic/huangzihang/repos/elion/src/visualizer"
+_REPO_ROOT = "."
 
 # Shadow KB: auto-generated, human-auditable
 _QWEN_DIR    = os.path.join(_REPO_ROOT, "nas_storage_app", ".qwen")
