@@ -1,39 +1,34 @@
+import logging
 import numpy as np
-# Chemistry
 import rdkit
 from rdkit import Chem
 from rdkit.Chem import QED
 
-# Property is the abstract class from which all
-# properties must inherit.
 from properties.Property import Property
+
 
 class QED_Score(Property):
     """
-        Calculator class for QED score (drug likeness). 
+    Calculator class for QED score (drug likeness).
 
-        Uses the method described in:
-        _'Quantifying the chemical beauty of drugs'_
-        Nature Chemistry volume 4, pages90–98(2012)
-        https://doi.org/10.1038/nchem.1243
-        
-        As implemented in RDKit QED module, QED values are in the interval [0,1]:
-            0 == BAD  (all properties unfavourable) 
-            1 == GOOD (all properties favourable)
+    As implemented in RDKit QED module, values are in the interval [0, 1]:
+        0 == BAD  (all properties unfavourable)
+        1 == GOOD (all properties favourable)
     """
-    
+
     CITATION = (f" \"RDKit: Open-source cheminformatics version {rdkit.__version__} "
-                 "(www.rdkit.org)\"")
+                "(www.rdkit.org)\"")
 
-    def predict(self,
-                mols,
-                **kwargs):
+    def __init__(self, prop_name, logger: logging.Logger | None = None, **kwargs):
+        super().__init__(prop_name, **kwargs)
+        self._logger = logger or logging.getLogger(__name__)
+
+    def predict(self, mols, **kwargs):
         """
-            Args:
-                mols: RDKit Mol or list of RDKit Mols
-
-            Returns:
-                list(float): Drug likeness scores
+        Args:
+            mols: RDKit Mol or list of RDKit Mols
+        Returns:
+            list(float): Drug likeness scores
         """
         _mols, qed_scores = [], []
         _mols.extend(mols)
@@ -42,8 +37,8 @@ class QED_Score(Property):
             score = -1.0
             try:
                 score = QED.qed(query_mol)
-            except:
-                # RDKit gives exception when the molecules are weird. 
+            except Exception:
+                # RDKit gives exception when the molecules are weird.
                 # Here we just ignore them and pass a score of -1.
                 pass
             qed_scores.append(score)
@@ -55,25 +50,13 @@ class QED_Score(Property):
 
         Args:
             prop_value (float or list(floats)): The calculated value(s) of the property
-
-        Returns: 
+        Returns:
             list(float): This property rewards for each value passed in.
         """
         _prop_values, rewards = [], []
         _prop_values.extend(prop_values)
 
-        sign = np.sign(self.thresh_step if self.optimize else self.threshold)
-        unsigned_threshold = sign * self.threshold
-
         for value in _prop_values:
-            # Use 0-1 as reward standard
-            # QED
-            # 0 == BAD  (all properties unfavourable) 
-            # 1 == GOOD (all properties favourable)
-            # Nothing needs to be added
-            rew = value
-            rewards.append(rew)
+            # QED: 0 == BAD, 1 == GOOD — use value directly
+            rewards.append(value)
         return rewards
-
-
- 

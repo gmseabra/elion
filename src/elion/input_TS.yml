@@ -14,14 +14,14 @@ generator:
   TS:
     reaction_smarts: "[#6;a;D3;$([#6](~[#6])~[#6]):2][#35;A;D1].[#6;a;D3;$([#6]([#6])[#6]):1]-[#5]([#8])[#8]>>[#6:2]-[#6:1]"
     num_warmup_trials: 1
-    num_ts_iterations: 40000
+    num_ts_iterations: 5000
     ts_mode: "maximize"
     eval_batch_size: 256
-    log_level: DEBUG
+    log_level: INFO
     reagent_file_list:
       - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv"
       - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
-    results_filename: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test2.csv"
+    results_filename: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test1.csv"
 
 evaluator_class_name: "ElionEstimatorEvaluator"
 

@@ -1,62 +1,47 @@
+import logging
 import numpy as np
-# Chemistry
-import rdkit
 from rdkit import Chem
 
-# Property is the abstract class from which all
-# properties must inherit.
 from properties.Property import Property
-
-# Local
 from .CHEMBERT.chembert import chembert_model, SMILES_Dataset
+
 
 class CHEMBERT_BE(Property):
     """
-        Calculator class for CHEM-BERT binding energies 
-        Estimates binding energies given a CHEM-BERT model and a SMILES file.
-
-        Note: This calculates the property of only ONE molecule, which is definately *not*
-              the most efficient use of the CHEM-BERT implementation, but is one that
-              fits our model. Later, we may come back to a more efficient implementation.
+    Calculator class for CHEM-BERT binding energies.
+    Estimates binding energies given a CHEM-BERT model and a SMILES file.
     """
 
-    CITATION = ( "  Kim, H., Lee, J., Ahn, S., & Lee, J. R. (2021).\n"
-                 "  \"A merged molecular representation learning for molecular \n"
-                 "  properties prediction with a web-based service.\" \n"
-                 "  Scientific Reports, 11(1), 11028.\n"
-                 "  https://doi.org/10.1038/s41598-021-90259-7" )
+    CITATION = ("  Kim, H., Lee, J., Ahn, S., & Lee, J. R. (2021).\n"
+                "  \"A merged molecular representation learning for molecular \n"
+                "  properties prediction with a web-based service.\" \n"
+                "  Scientific Reports, 11(1), 11028.\n"
+                "  https://doi.org/10.1038/s41598-021-90259-7")
 
-    def __init__(self, prop_name, **kwargs):
-        # Initialize super
+    def __init__(self, prop_name, logger: logging.Logger | None = None, **kwargs):
         super().__init__(prop_name, **kwargs)
         self.model_file = kwargs['model_file']
+        self._logger = logger or logging.getLogger(__name__)
 
-        print("Initializing CHEMBERT model... ", end="")
+        self._logger.info("Initializing CHEMBERT model...")
         self.model = chembert_model(self.model_file)
-        print("Done.")
+        self._logger.info("CHEMBERT model ready.")
 
-    def predict(self, 
-                mols,
-                **kwargs):
+    def predict(self, mols, **kwargs):
         """
-            Args:
-                mol (rdkit.Chem.ROMol or list): molecule to be evaluated
-
-            Returns:
-                float: Predicted binding energy from the model
+        Args:
+            mols (rdkit.Chem.ROMol or list): molecule(s) to be evaluated
+        Returns:
+            list(float): Predicted binding energies from the model
         """
-
-        _mols, chembert_scores = [], []
-        _mols.extend(mols)
-
-        smis = []
-        for mol in _mols:
-            smis.append(Chem.MolToSmiles(mol))
-                   
+        import warnings
+        _mols = list(mols)
+        smis = [Chem.MolToSmiles(mol) for mol in _mols]
         dataset = SMILES_Dataset(smis)
-        chembert_scores = self.model.predict(dataset)
-
-        return chembert_scores
+        # Suppress DataLoader worker count warning — we accept the default worker config
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='.*DataLoader will create.*worker.*')
+            return self.model.predict(dataset)
 
     def reward(self, prop_values, **kwargs):
         """Given a property value, or list of values,
@@ -64,20 +49,14 @@ class CHEMBERT_BE(Property):
 
         Args:
             prop_value (float or list(floats)): The calculated value(s) of the property
-
-        Returns: 
+        Returns:
             list(float): This property rewards for each value passed in.
         """
         _prop_values, rewards = [], []
         _prop_values.extend(prop_values)
 
-        sign = np.sign(self.thresh_step if self.optimize else self.threshold)
-        unsigned_threshold = sign * self.threshold
-
         for value in _prop_values:
-            # Use 0-1 as reward standard
-            # CHEMBERT_BE learn from vina 
-            # the less the better
-            rew = - value
+            # CHEMBERT_BE learned from vina: the less the better
+            rew = -value
             rewards.append(rew)
         return rewards

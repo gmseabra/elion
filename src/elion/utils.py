@@ -12,7 +12,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 from rdkit.Chem.rdmolops import RDKFingerprint
-from rdkit.Chem.AllChem import GetMorganFingerprintAsBitVect
+from rdkit.Chem import rdFingerprintGenerator
 
 # Add Fingerprints
 def get_morganfingerprints(mol):
@@ -26,7 +26,7 @@ def get_morganfingerprints(mol):
         np.array: Fingerprint
     """
     
-    fp = GetMorganFingerprintAsBitVect(mol,2)
+    fp = rdFingerprintGenerator.GetMorganGenerator(radius=2).GetFingerprint(mol)
     return np.array(list(map(int,fp.ToBitString())))
 
 def get_fingerprint_from_smiles(smi):
@@ -349,4 +349,3 @@ def print_stats(results, header="", LENGTH_LIM=30, print_header=False):
         stdev = np.std(results[prop])
         print(f"  {stdev:>{title_len}.2f}", end="")
     print("")
-

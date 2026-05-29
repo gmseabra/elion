@@ -123,7 +123,7 @@ deepatom:
       label: "ZccE · Virtual Screening"
       description: "ZccE compound library — virtual screening mode"
       test_type: "vs"
-      data_dir: "/blue/lic/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      data_dir: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
       active: true
 
     - id: "ZccE_Train"

@@ -2386,23 +2386,7 @@ _adjShow = function() {
 <!-- ══ Thompson Sampling Generator Modal ════════════════════════════════════ -->
 {% include 'ts_modal.html' %}
 
-<script>
-// ── Thompson Sampling show / hide ─────────────────────────────────────────
-function _tsShow() {
-    const modal = document.getElementById('tsModal');
-    if (modal) modal.classList.remove('hidden');
-    const header = document.querySelector('[data-drag-handle="miniChat"] span');
-    if (header) header.textContent = 'Elion · Thompson Sampling';
-    if (typeof _miniChatShow === 'function') _miniChatShow();
-    if (typeof _miniChatSetWelcome === 'function') {
-        _miniChatSetWelcome('🎲 Thompson Sampling generator ready. Paste a reaction SMARTS or run with defaults.');
-    }
-}
-function _tsHide() {
-    const modal = document.getElementById('tsModal');
-    if (modal) modal.classList.add('hidden');
-}
-</script>
+<script src="{{ url_for('static', filename='js/ts.js') }}"></script>
 
 </body>
 </html>

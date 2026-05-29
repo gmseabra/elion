@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from reagent_csv import Reagent
+from reagent import Reagent
 
 
 def create_reagents(filename: str, num_to_select: Optional[int] = None) -> List[Reagent]:
@@ -46,7 +46,6 @@ def create_reagents_csv(filename: str, db_name: str ="SYNPLE", num_to_select: Op
     reagent_list = []
     with open(filename, 'r') as f:
         for idx, line in enumerate(f.readlines()):
-            print('line: %s' % line.split())
             if idx != 0:
                 if db_name == 'SYNPLE':
                     reagent_name, smiles, price = line.split(',')

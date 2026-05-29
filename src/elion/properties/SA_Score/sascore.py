@@ -29,7 +29,7 @@
 
 
 from rdkit import Chem
-from rdkit.Chem import rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors, rdFingerprintGenerator
 import pickle
 
 import math
@@ -75,7 +75,7 @@ class SA_Scorer:
         # fragment score
         # Scores are calculated on Morgan circular fnigerprints of radius = 2
         _fscores = self.fscores
-        fp = rdMolDescriptors.GetMorganFingerprint(m,2)
+        fp = rdFingerprintGenerator.GetMorganGenerator(radius=2).GetSparseCountFingerprint(m)
         fps = fp.GetNonzeroElements()
         score1 = 0.
         nf = 0

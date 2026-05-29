@@ -3,7 +3,7 @@
      class="hidden fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center">
 
   <div onclick="event.stopImmediatePropagation()"
-       class="bg-slate-900 w-[97%] max-w-6xl h-[90vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
+       class="bg-slate-900 w-[97%] max-w-7xl h-[93vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
        style="animation:modalPop .25s cubic-bezier(.34,1.56,.64,1)">
 
     <!-- ── Header ── -->
@@ -19,77 +19,209 @@
           </p>
         </div>
       </div>
+      <!-- Tab switcher — each tab gets its own active colour -->
+      <div class="flex rounded-xl border border-slate-700 overflow-hidden text-xs font-medium mx-4">
+        <button id="tsTabWarmup" data-tab="warmup" onclick="_tsTab('warmup')"
+                class="px-4 py-1.5 border-r border-slate-700">⚡ Warmup</button>
+        <button id="tsTabTs" data-tab="ts" onclick="_tsTab('ts')"
+                class="px-4 py-1.5 border-r border-slate-700">🧬 TS Belief</button>
+        <button id="tsTabResults" data-tab="results" onclick="_tsTab('results')"
+                class="px-4 py-1.5">📋 Results</button>
+      </div>
       <button onclick="_tsHide()"
-              class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white ml-2">✕</button>
+              class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white">✕</button>
     </div>
 
     <!-- ── Config bar ── -->
     <div class="px-6 py-2 bg-slate-950 border-b border-slate-800 flex items-center gap-3 flex-shrink-0 flex-wrap">
       <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">SMARTS</span>
-      <input id="tsSmartsInput" class="path-input" style="width:420px"
+      <input id="tsSmartsInput" class="path-input" style="width:400px"
              placeholder="Reaction SMARTS  e.g. [#6:1][Br].[#7:2]>>[#6:1][#7:2]" value="">
       <div class="w-px h-4 bg-slate-700 mx-1 flex-shrink-0"></div>
       <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Iterations</span>
-      <input id="tsIterInput" class="path-input" style="width:80px" placeholder="5000" value="5000">
+      <input id="tsIterInput" class="path-input" style="width:72px" placeholder="5000" value="5000">
       <div class="flex-1"></div>
-      <button onclick="_tsRun()"
-              id="tsRunBtn"
+      <!-- Speed -->
+      <span class="text-[10px] text-slate-600 whitespace-nowrap">Viz speed</span>
+      <input type="range" min="1" max="5" value="3" step="1" id="tsSpeedSlider"
+             oninput="_tsSetSpeed(this.value)"
+             style="width:64px;accent-color:#7c3aed;cursor:pointer">
+      <div class="w-px h-4 bg-slate-700 mx-1 flex-shrink-0"></div>
+      <button onclick="_tsRun()" id="tsRunBtn"
               class="text-[10px] font-semibold px-3 py-1.5 bg-violet-900 hover:bg-violet-800 border border-violet-700 text-violet-300 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5">
         <span id="tsRunIcon">🎲</span> Run TS
       </button>
     </div>
 
-    <!-- ── Body ── -->
+    <!-- ── Body (all three panes, only one visible) ── -->
     <div class="flex flex-1 min-h-0 overflow-hidden">
 
-      <!-- LEFT: results table -->
-      <div class="flex-1 relative bg-[#05070f] flex flex-col">
-        <div id="tsSpinner" class="mol-spinner">
-          <div class="spinner-ring"></div>
-          <span class="text-xs">Configure and click 🎲 Run TS to generate molecules</span>
+      <!-- ══ PANE: Warmup ══════════════════════════════════════════════════ -->
+      <div id="tsPaneWarmup" class="flex flex-1 min-h-0 overflow-hidden">
+
+        <!-- LEFT: split — bars (top) + raw log terminal (bottom) -->
+        <div class="flex-1 bg-[#05070f] flex flex-col min-h-0 overflow-hidden">
+
+          <!-- Top: bar chart (60%) -->
+          <div class="flex flex-col overflow-hidden px-5 py-4 flex-1">
+            <div class="flex items-center gap-2 mb-3 flex-shrink-0">
+              <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Reagent buffered scores — belief forming</span>
+              <span id="tsWuLiveBadge" class="text-[9px] px-2 py-0.5 rounded-full bg-violet-900/60 border border-violet-700 text-violet-300 animate-pulse">live</span>
+            </div>
+            <div class="flex items-center gap-4 mb-3 flex-shrink-0 text-[10px] text-slate-500">
+              <span class="flex items-center gap-1.5"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#7c3aed"></span>mean (μ)</span>
+              <span class="flex items-center gap-1.5"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(180,180,80,0.45)"></span>uncertainty (±σ)</span>
+            </div>
+            <div id="tsWuBars" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
+          </div>
+
+          <!-- Raw log terminal -->
+          <div class="flex flex-col border-t border-slate-800 overflow-hidden flex-shrink-0" style="height:160px">
+            <div class="flex items-center justify-between px-5 py-1.5 flex-shrink-0 bg-slate-950/80">
+              <span class="text-[9px] font-semibold text-slate-600 uppercase tracking-wider">Raw log stream</span>
+              <button onclick="document.getElementById('tsWuLog').innerHTML=''"
+                      class="text-[9px] text-slate-700 hover:text-slate-400 transition-colors">clear</button>
+            </div>
+            <div id="tsWuLog"
+                 class="flex-1 overflow-y-auto px-5 py-2 font-mono text-[10px] leading-relaxed"
+                 style="color:#475569;scrollbar-width:thin;scrollbar-color:#1e3a5f #05070f"></div>
+          </div>
+
         </div>
-        <div id="tsResultsWrap" class="hidden flex-1 overflow-y-auto px-6 py-4">
-          <table class="w-full text-[11px] text-slate-300 border-collapse">
-            <thead>
-              <tr class="text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800">
-                <th class="text-left py-2 pr-4">#</th>
-                <th class="text-left py-2 pr-4">SMILES</th>
-                <th class="text-right py-2 pr-4">Score</th>
-                <th class="text-right py-2">Reward</th>
-              </tr>
-            </thead>
-            <tbody id="tsResultsBody" class="divide-y divide-slate-800/60"></tbody>
-          </table>
+
+        <!-- RIGHT: warmup sidebar -->
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:256px">
+          <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Warmup Progress</p>
+            <div class="space-y-2 text-[11px]">
+              <div class="flex justify-between"><span class="text-slate-500">Phase</span><span id="tsWuPhase" class="text-violet-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Combos evaluated</span><span id="tsWuEvals" class="text-slate-300">0</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Active reagents</span><span id="tsWuReagents" class="text-slate-300">0</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Best score</span><span id="tsWuBest" class="text-emerald-400 font-semibold">—</span></div>
+            </div>
+          </div>
+          <!-- Config block -->
+          <div class="px-4 pt-3 pb-2 border-t border-slate-800 flex-shrink-0 flex-1 overflow-y-auto">
+            <p class="text-[9px] font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Config · input_TS.yml</p>
+            <div id="tsConfigBlock" class="font-mono text-[9px] text-slate-600 leading-relaxed space-y-0.5">
+              <div><span class="text-slate-700">log_level:</span> <span id="tsCfgLogLevel" class="text-cyan-700">—</span></div>
+              <div><span class="text-slate-700">mode:</span> <span id="tsCfgMode" class="text-violet-700">—</span></div>
+              <div><span class="text-slate-700">iterations:</span> <span id="tsCfgIter" class="text-slate-500">—</span></div>
+              <div><span class="text-slate-700">warmup:</span> <span id="tsCfgWarmup" class="text-slate-500">—</span></div>
+              <div><span class="text-slate-700">batch:</span> <span id="tsCfgBatch" class="text-slate-500">—</span></div>
+              <div class="mt-1"><span class="text-slate-700">smarts:</span></div>
+              <div id="tsCfgSmarts" class="text-cyan-800 break-all pl-2">—</div>
+              <div class="mt-1"><span class="text-slate-700">reagents:</span></div>
+              <div id="tsCfgReagents" class="text-slate-600 pl-2 space-y-0.5">—</div>
+              <div class="mt-1"><span class="text-slate-700">results:</span></div>
+              <div id="tsCfgResults" class="text-slate-600 break-all pl-2">—</div>
+            </div>
+          </div>
+          <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
+            <p id="tsWuStatus" class="text-[10px] text-slate-600 truncate">Waiting for run…</p>
+          </div>
         </div>
       </div>
 
-      <!-- RIGHT: sidebar summary -->
-      <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:240px">
-        <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
-          <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Run Summary</p>
-          <div class="space-y-2 text-[11px]">
-            <div class="flex justify-between"><span class="text-slate-500">Status</span><span id="tsStatusBadge" class="text-slate-400">—</span></div>
-            <div class="flex justify-between"><span class="text-slate-500">Molecules</span><span id="tsMolCount" class="text-violet-400 font-semibold">—</span></div>
-            <div class="flex justify-between"><span class="text-slate-500">Best score</span><span id="tsBestScore" class="text-emerald-400 font-semibold">—</span></div>
-            <div class="flex justify-between"><span class="text-slate-500">Iterations</span><span id="tsIterDone" class="text-slate-400">—</span></div>
+      <!-- ══ PANE: TS Belief ═══════════════════════════════════════════════ -->
+      <div id="tsPaneTs" class="hidden flex flex-1 min-h-0 overflow-hidden">
+
+        <!-- LEFT: belief bars -->
+        <div class="flex-1 bg-[#05070f] flex flex-col min-h-0 overflow-hidden px-5 py-4">
+          <div class="flex items-center gap-2 mb-3 flex-shrink-0">
+            <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Belief distribution — key reagents updating per iteration</span>
+            <span id="tsTsLiveBadge" class="text-[9px] px-2 py-0.5 rounded-full bg-cyan-900/60 border border-cyan-700 text-cyan-300 animate-pulse">live</span>
+          </div>
+          <div class="flex items-center gap-4 mb-3 flex-shrink-0 text-[10px] text-slate-500">
+            <span class="flex items-center gap-1.5"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#0891b2"></span>mean (μ) — posterior belief</span>
+            <span class="flex items-center gap-1.5"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(180,180,80,0.45)"></span>±σ uncertainty</span>
+          </div>
+          <div id="tsTsBars" class="overflow-y-auto space-y-1.5 pr-1" style="flex:0 0 55%;"></div>
+
+          <!-- Raw log for TS inference -->
+          <div class="flex flex-col border-t border-slate-800 overflow-hidden flex-shrink-0" style="flex:1">
+            <div class="flex items-center justify-between px-5 py-1.5 flex-shrink-0 bg-slate-950/80">
+              <span class="text-[9px] font-semibold text-slate-600 uppercase tracking-wider">TS iteration log</span>
+              <button onclick="document.getElementById('tsTsLog').innerHTML=''"
+                      class="text-[9px] text-slate-700 hover:text-slate-400 transition-colors">clear</button>
+            </div>
+            <div id="tsTsLog"
+                 class="flex-1 overflow-y-auto px-5 py-2 font-mono text-[10px] leading-relaxed"
+                 style="color:#475569;scrollbar-width:thin;scrollbar-color:#1e3a5f #05070f"></div>
           </div>
         </div>
-        <div class="px-4 pt-3 pb-3 flex-1 overflow-y-auto text-[11px] text-slate-500">
-          <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Config</p>
-          <div class="space-y-1.5">
-            <div><span class="text-slate-600">yml path</span><br>
-              <code class="text-cyan-400 text-[10px] break-all">input_TS.yml</code>
-            </div>
-            <div class="mt-2"><span class="text-slate-600">Estimators</span><br>
-              <span class="text-slate-400">SAScore · QED · ChemBERT</span>
+
+        <!-- RIGHT: TS sidebar -->
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:256px">
+          <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Iteration</p>
+            <div class="space-y-2 text-[11px]">
+              <div class="flex justify-between"><span class="text-slate-500">Current iter</span><span id="tsTsIter" class="text-cyan-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Score</span><span id="tsTsScore" class="text-emerald-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Winner idx</span><span id="tsTsWinner" class="text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Winner μ</span><span id="tsTsWinnerMu" class="text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Masked reagents</span><span id="tsTsMasked" class="text-slate-500">—</span></div>
             </div>
           </div>
-        </div>
-        <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
-          <p id="tsStatusMsg" class="text-[10px] text-slate-600 truncate">—</p>
+          <!-- Best so far -->
+          <div class="px-4 pt-3 pb-1 flex-shrink-0">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Best molecules</p>
+          </div>
+          <div id="tsTsWinners" class="side-panel flex-1 overflow-y-auto px-4 pb-3 space-y-1.5 text-[10px]"></div>
+          <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
+            <p id="tsTsStatus" class="text-[10px] text-slate-600 truncate">—</p>
+          </div>
         </div>
       </div>
-    </div>
+
+      <!-- ══ PANE: Results ══════════════════════════════════════════════════ -->
+      <div id="tsPaneResults" class="hidden flex flex-1 min-h-0 overflow-hidden">
+        <div class="flex-1 relative bg-[#05070f] flex flex-col">
+          <div id="tsResultsSpinner" class="mol-spinner">
+            <div class="spinner-ring"></div>
+            <span class="text-xs text-slate-400">Results will appear here after run completes</span>
+          </div>
+          <div id="tsResultsWrap" class="hidden flex-1 overflow-y-auto px-6 py-4">
+            <table class="w-full text-[11px] text-slate-300 border-collapse">
+              <thead>
+                <tr class="text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800">
+                  <th class="text-left py-2 pr-4 w-8">#</th>
+                  <th class="text-left py-2 pr-4">SMILES</th>
+                  <th class="text-right py-2 pr-4 w-20">Score</th>
+                  <th class="text-right py-2 w-20">Reward</th>
+                </tr>
+              </thead>
+              <tbody id="tsResultsBody" class="divide-y divide-slate-800/60"></tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Results sidebar -->
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:256px">
+          <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Run Summary</p>
+            <div class="space-y-2 text-[11px]">
+              <div class="flex justify-between"><span class="text-slate-500">Status</span><span id="tsStatusBadge" class="text-slate-400">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Molecules</span><span id="tsMolCount" class="text-violet-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Best score</span><span id="tsBestScore" class="text-emerald-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Iterations</span><span id="tsIterDone" class="text-slate-400">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Elapsed</span><span id="tsElapsed" class="text-slate-400">—</span></div>
+            </div>
+          </div>
+          <div class="px-4 pt-3 pb-3 flex-1 text-[11px] text-slate-500">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Config</p>
+            <div class="space-y-1.5">
+              <div><span class="text-slate-600">yml path</span><br>
+                <code class="text-cyan-400 text-[10px] break-all">input_TS.yml</code>
+              </div>
+              <div class="mt-2"><span class="text-slate-600">Estimators</span><br>
+                <span class="text-slate-400">SAScore · QED · ChemBERT</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /body -->
 
     <!-- ── Status bar ── -->
     <div class="px-6 py-1.5 border-t border-slate-800 bg-slate-950 flex-shrink-0 flex items-center gap-2">
@@ -99,62 +231,3 @@
 
   </div>
 </div>
-
-<script>
-function _tsRun() {
-    const smarts = document.getElementById('tsSmartsInput').value.trim();
-    const iters  = document.getElementById('tsIterInput').value.trim() || '5000';
-    const btn    = document.getElementById('tsRunBtn');
-    const icon   = document.getElementById('tsRunIcon');
-    const bar    = document.getElementById('tsStatusBar');
-    const spinner= document.getElementById('tsSpinnerBar');
-
-    btn.disabled = true; icon.textContent = '⏳'; spinner.classList.remove('hidden');
-    bar.textContent = 'Running Thompson Sampling…';
-    document.getElementById('tsStatusBadge').textContent = 'Running';
-    document.getElementById('tsMolCount').textContent = '—';
-    document.getElementById('tsBestScore').textContent = '—';
-    document.getElementById('tsIterDone').textContent = '—';
-
-    fetch('/vina_visualization/ts_run', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ reaction_smarts: smarts, num_ts_iterations: parseInt(iters) })
-    })
-    .then(r => r.json())
-    .then(data => {
-        btn.disabled = false; icon.textContent = '🎲'; spinner.classList.add('hidden');
-        if (data.status === 'error') {
-            bar.textContent = '❌ ' + data.message;
-            document.getElementById('tsStatusBadge').textContent = 'Error';
-            return;
-        }
-        const mols = data.molecules || [];
-        document.getElementById('tsMolCount').textContent = mols.length;
-        document.getElementById('tsBestScore').textContent = mols.length ? mols[0].score.toFixed(3) : '—';
-        document.getElementById('tsIterDone').textContent = data.iterations || iters;
-        document.getElementById('tsStatusBadge').textContent = 'Done ✓';
-        bar.textContent = `✓ Generated ${mols.length} molecules in ${data.elapsed || '?'}s`;
-
-        const tbody = document.getElementById('tsResultsBody');
-        tbody.innerHTML = '';
-        mols.forEach((m, i) => {
-            const tr = document.createElement('tr');
-            tr.className = 'hover:bg-slate-800/40 transition-colors';
-            tr.innerHTML = `
-                <td class="py-2 pr-4 text-slate-500">${i+1}</td>
-                <td class="py-2 pr-4 font-mono text-[10px] text-cyan-300 max-w-[260px] truncate" title="${m.smiles}">${m.smiles}</td>
-                <td class="py-2 pr-4 text-right ${m.score >= 0 ? 'text-emerald-400' : 'text-red-400'}">${m.score.toFixed(3)}</td>
-                <td class="py-2 text-right text-violet-400">${(m.reward ?? '—')}</td>`;
-            tbody.appendChild(tr);
-        });
-        document.getElementById('tsSpinner').classList.add('hidden');
-        document.getElementById('tsResultsWrap').classList.remove('hidden');
-    })
-    .catch(e => {
-        btn.disabled = false; icon.textContent = '🎲'; spinner.classList.add('hidden');
-        bar.textContent = '❌ ' + e.message;
-        document.getElementById('tsStatusBadge').textContent = 'Error';
-    });
-}
-</script>

@@ -39,7 +39,7 @@ def read_input_yml(yml_filename: str) -> dict:
     :param yml_filename: path to the Elion input_TS.yml
     :return: input_data dict compatible with run_ts()
     """
-    sys.path.append('../..')
+    sys.path.append('/blue/lic/huangzihang/repos/elion/src/elion')
     import input_reader
     config = input_reader.read_input_file(yml_filename)
 
