@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# process / server logs
+*.log
+nohup.out
+.raytmp/
+
+# generated UI-action-router FAISS index (rebuilt on startup)
+uiapp/router/ui_action_router.index
+uiapp/router/ui_action_router.index.json
+
+# auto-generated shadow KB + CoT logs (keep the folder, ignore contents)
+data/kb_shadow/*
+!data/kb_shadow/.gitkeep
+
+# runtime docking data (keep the folders, ignore contents)
+data/converted_pdbqt/receptor/*
+data/converted_pdbqt/ligand/*
+!data/converted_pdbqt/receptor/.gitkeep
+!data/converted_pdbqt/ligand/.gitkeep
+
+# external model weights (never commit large binaries)
+models/
+*.gguf
+*.pt
+
+.DS_Store
