@@ -1,5 +1,5 @@
 # ==============================================================================
-# pdb_converter.py — PDB → PDBQT conversion + Ligand Center Calculator
+# pdb_converter.py — PDB → PDBQT conversion
 #
 # Bug fixes vs original routes.py:
 #   1. Strip forbidden header records (TITLE, REMARK, MODEL, etc.) from both
@@ -8,7 +8,12 @@
 #
 # Flask routes registered:
 #   POST /tools/pdb_to_pdbqt
-#   POST /tools/ligand_center
+#
+# NOTE: this module is NOT imported by routes/__init__.py -- the live
+# /tools/pdb_to_pdbqt handler is uiapp/routes/tools_routes.py. It is kept
+# verbatim from the base tree except that the Get Ligand Center tool
+# (_compute_ligand_center + POST /tools/ligand_center) has been removed along
+# with its sidebar button, modal and ligand_center.js.
 # ==============================================================================
 
 from __future__ import annotations
@@ -268,97 +273,6 @@ def _pdb_to_pdbqt_rdkit(pdb_path: str, out_path: str,
 
 
 # ==============================================================================
-# Ligand Center Calculator — pure PDB parsing, no RDKit needed
-# ==============================================================================
-
-def _compute_ligand_center(pdb_path: str) -> dict:
-    """
-    Parse all HETATM records from a PDB file (excluding water HOH/WAT),
-    compute the geometric center (centroid) of all heavy atoms, and also
-    return the bounding-box dimensions — directly usable as Vina's
-    center_x/y/z and as a starting suggestion for size_x/y/z.
-
-    Returns:
-        {
-          "center_x": float, "center_y": float, "center_z": float,
-          "size_x":   float, "size_y":   float, "size_z":   float,
-          "n_atoms":  int,
-          "residues": [{"resname": str, "chain": str, "resseq": str}, ...]
-        }
-    """
-    xs, ys, zs = [], [], []
-    residues_seen: dict[str, dict] = {}
-
-    with open(pdb_path) as fh:
-        for line in fh:
-            if not line.startswith('HETATM'):
-                continue
-            resname = line[17:20].strip()
-            # Skip water molecules
-            if resname in ('HOH', 'WAT', 'H2O', 'SOL'):
-                continue
-            # Skip hydrogens
-            atom_name = line[12:16].strip()
-            element   = line[76:78].strip() if len(line) > 77 else ''
-            if element == 'H' or (not element and atom_name.startswith('H')):
-                continue
-            try:
-                x = float(line[30:38])
-                y = float(line[38:46])
-                z = float(line[46:54])
-            except ValueError:
-                continue
-            xs.append(x)
-            ys.append(y)
-            zs.append(z)
-
-            chain  = line[21].strip() or 'A'
-            resseq = line[22:26].strip()
-            key    = f"{resname}_{chain}_{resseq}"
-            if key not in residues_seen:
-                residues_seen[key] = {"resname": resname, "chain": chain, "resseq": resseq}
-
-    if not xs:
-        # Fall back: try ATOM records (e.g. the ligand was labelled ATOM not HETATM)
-        with open(pdb_path) as fh:
-            for line in fh:
-                if not line.startswith('ATOM  '):
-                    continue
-                try:
-                    x = float(line[30:38])
-                    y = float(line[38:46])
-                    z = float(line[46:54])
-                except ValueError:
-                    continue
-                xs.append(x)
-                ys.append(y)
-                zs.append(z)
-
-    if not xs:
-        return {"status": "error",
-                "message": "No HETATM (non-water) or ATOM records found. "
-                           "Is this a ligand PDB file?"}
-
-    cx = round(sum(xs) / len(xs), 3)
-    cy = round(sum(ys) / len(ys), 3)
-    cz = round(sum(zs) / len(zs), 3)
-
-    # Bounding box — add 8 Å padding on each side for a sensible search box
-    _PAD = 8.0
-    sx = round(max(xs) - min(xs) + _PAD, 3)
-    sy = round(max(ys) - min(ys) + _PAD, 3)
-    sz = round(max(zs) - min(zs) + _PAD, 3)
-
-    return {
-        "status":   "success",
-        "center_x": cx, "center_y": cy, "center_z": cz,
-        "size_x":   sx, "size_y":   sy, "size_z":   sz,
-        "n_atoms":  len(xs),
-        "residues": list(residues_seen.values()),
-    }
-
-
-# ==============================================================================
 # Flask routes
 # ==============================================================================
 
@@ -446,47 +360,6 @@ def tools_pdb_to_pdbqt():
 
     except Exception as exc:
         logger.exception("tools_pdb_to_pdbqt error")
-        return jsonify({"status": "error", "message": str(exc)}), 500
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@app.route('/tools/ligand_center', methods=['POST'])
-def tools_ligand_center():
-    """
-    POST /tools/ligand_center
-    Accepts multipart/form-data:
-        file – a ligand .pdb file
-
-    Parses all HETATM heavy atoms (skipping water), computes the geometric
-    centroid and bounding-box dimensions, and returns values ready to paste
-    directly into Vina's center_x/y/z and size_x/y/z fields.
-
-    Returns JSON:
-        { "status":   "success" | "error",
-          "center_x": float, "center_y": float, "center_z": float,
-          "size_x":   float, "size_y":   float, "size_z":   float,
-          "n_atoms":  int,
-          "residues": [{"resname": str, "chain": str, "resseq": str}] }
-    """
-    if 'file' not in request.files:
-        return jsonify({"status": "error", "message": "No file part in request."}), 400
-
-    f = request.files['file']
-    if not f.filename:
-        return jsonify({"status": "error", "message": "Empty filename."}), 400
-    if not f.filename.lower().endswith('.pdb'):
-        return jsonify({"status": "error",
-                        "message": "Only .pdb files are accepted."}), 400
-
-    tmp_dir = tempfile.mkdtemp(prefix="elion_ligcenter_")
-    try:
-        pdb_path = os.path.join(tmp_dir, f.filename)
-        f.save(pdb_path)
-        result = _compute_ligand_center(pdb_path)
-        return jsonify(result), (200 if result["status"] == "success" else 400)
-    except Exception as exc:
-        logger.exception("tools_ligand_center error")
         return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

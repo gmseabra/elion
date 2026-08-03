@@ -8,7 +8,7 @@ from timeit import default_timer as timer
 
 import pandas as pd
 
-from thompson_sampling_csv import ThompsonSamplerCSV
+from thompson_sampling import ThompsonSampler
 from ts_logger import get_logger
 
 
@@ -90,7 +90,7 @@ def run_ts(input_dict: dict, hide_progress: bool = False) -> None:
     ts_mode = input_dict["ts_mode"]
     log_filename = input_dict.get("log_filename")
     logger = get_logger(__name__, filename=log_filename)
-    ts = ThompsonSamplerCSV(mode=ts_mode, db_name="eXplore")
+    ts = ThompsonSampler(mode=ts_mode, db_name="eXplore")
     ts.set_hide_progress(hide_progress)
     ts.set_evaluator(evaluator)
     ts.read_reagents_csv(reagent_file_list=reagent_file_list, num_to_select=None)

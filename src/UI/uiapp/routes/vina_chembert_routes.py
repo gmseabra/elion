@@ -5,6 +5,8 @@
 # =============================================================================
 
 import os, sys, threading, uuid, queue
+from pathlib import Path
+from rdkit import Chem
 from flask import jsonify, render_template, request, Response, stream_with_context, current_app
 from uiapp import app
 from uiapp.llm.qwen_client import qwen_stream, qwen_compat, QwenParams
@@ -42,28 +44,42 @@ def vina_defaults():
 
 
 # ==============================================================================
-# ── Vina Protein Library  (reads input_routes.yml) ────────────────────────────
+# ── Vina Protein Library  (reads input_TS.yml) ────────────────────────────────
 # ==============================================================================
 import yaml as _yaml  # noqa: E402  (placed here to keep top-of-file clean)
 
-# Absolute path to the YAML config — same file app.py reads at startup.
-_INPUT_ROUTES_YML = str(_VIZ / "input_routes.yml")
+# YAML sources for the protein library, in priority order:
+#   1. _INPUT_ROUTES_YML (routes.shared) = .../elion/input_TS.yml — the merged
+#      config app.py loads into app.config["VINA"] at startup. This is the file
+#      to edit; it is the one the docking engine's defaults come from.
+#   2. .../visualizer/input_routes.yml — the pre-merge location, kept only so an
+#      older checkout that has not merged its vina: section still lists proteins.
+# This module used to hardcode (2), which meant edits to input_TS.yml never
+# reached the protein buttons.
+_PROTEIN_YML_CANDIDATES = [
+    _INPUT_ROUTES_YML,
+    str(_VIZ / "input_routes.yml"),
+]
 
 
 def _load_proteins_from_yml() -> list:
     """
-    Parse input_routes.yml and return the vina.proteins list.
+    Parse the vina.proteins list out of the first candidate YAML that has one.
     Falls back to a single synthetic entry built from app.config['VINA']
-    if the file is missing or has no proteins key (backwards-compat).
+    if no file is readable or none has a proteins key (backwards-compat).
     """
-    try:
-        with open(_INPUT_ROUTES_YML, "r", encoding="utf-8") as _f:
-            raw = _yaml.safe_load(_f)
-        proteins = raw.get("vina", {}).get("proteins")
-        if proteins and isinstance(proteins, list):
-            return proteins
-    except Exception as _e:
-        logger.warning("[vina_proteins] Could not read YAML: %s", _e)
+    for _path in _PROTEIN_YML_CANDIDATES:
+        try:
+            with open(_path, "r", encoding="utf-8") as _f:
+                raw = _yaml.safe_load(_f) or {}
+            proteins = (raw.get("vina") or {}).get("proteins")
+            if proteins and isinstance(proteins, list):
+                return proteins
+            logger.info("[vina_proteins] no vina.proteins in %s", _path)
+        except FileNotFoundError:
+            continue
+        except Exception as _e:
+            logger.warning("[vina_proteins] Could not read %s: %s", _path, _e)
 
     # Fallback: synthesise one entry from whatever is already in app.config
     cfg = current_app.config.get("VINA", {})

@@ -7,13 +7,15 @@
 # =============================================================================
 
 import os, re, json as _json, datetime, queue
+import math          # _term_breakdown() below calls math.exp but math was never
+                     # imported — _build_response() raised NameError on the dock path.
 from pathlib import Path
 from flask import jsonify, request, Response, stream_with_context, current_app
 from uiapp import app
 
 from uiapp.routes.shared import (
     logger, VINA_BASE, VINA_BIN, VINA_LOG, _INPUT_ROUTES_YML,
-    _vina_progress_q,
+    _vina_progress_q, ensure_vina_safe_pdbqt,
 )
 
 _XS_META = {
@@ -114,8 +116,154 @@ def _term_breakdown(xs1, xs2, r):
     }
 
 
+# AutoDock atom type → element symbol (for the PDB element column when converting).
+_ADT_ELEM = {
+    'A':'C', 'C':'C', 'N':'N', 'NA':'N', 'NS':'N', 'O':'O', 'OA':'O', 'OS':'O',
+    'S':'S', 'SA':'S', 'H':'H', 'HD':'H', 'HS':'H', 'P':'P', 'B':'B', 'SE':'Se',
+    'F':'F', 'CL':'Cl', 'BR':'Br', 'I':'I', 'MG':'Mg', 'ZN':'Zn', 'MN':'Mn',
+    'CA':'Ca', 'FE':'Fe', 'CU':'Cu', 'NI':'Ni', 'CO':'Co', 'K':'K', 'NA_':'Na',
+}
+
+
+def _adt_to_elem(adt):
+    a = (adt or '').strip().upper()
+    return _ADT_ELEM.get(a, ((adt or '').strip().capitalize() or 'C')[:2])
+
+
+def _pdbqt_best_pose_to_pdb(pdbqt_text, src_name='', conect=None):
+    """
+    Convert the BEST (first) pose of a Vina .pdbqt to a plain .pdb string.
+    Vina writes poses best-first as MODEL 1..N; we keep only MODEL 1. For each
+    ATOM/HETATM we keep the standard PDB columns 1-66 (through tempFactor), drop the
+    PDBQT-only trailing partial-charge + AutoDock-type columns, and set the PDB
+    element symbol (cols 77-78) from the AutoDock type. ROOT/BRANCH/TORSDOF topology
+    records are dropped. A REMARK header carries the source name and the pose affinity.
+    """
+    def _atom(line):
+        toks = line.rstrip().split()
+        elem = _adt_to_elem(toks[-1] if toks else '')
+        return line[:66].ljust(76) + f"{elem:>2}"
+
+    atoms, affinity, model_seen = [], None, 0
+    for line in pdbqt_text.splitlines():
+        rec = line[:6].strip()
+        if rec == 'MODEL':
+            model_seen += 1
+            if model_seen > 1:
+                break                     # keep only the best (first) pose
+            continue
+        if rec == 'ENDMDL':
+            break
+        if line.startswith('REMARK VINA RESULT') and affinity is None:
+            try: affinity = float(line.split()[3])
+            except (IndexError, ValueError): pass
+            continue
+        if rec in ('ATOM', 'HETATM'):
+            atoms.append(_atom(line))
+
+    if not atoms:                          # single-pose file with no MODEL wrapper
+        for line in pdbqt_text.splitlines():
+            if line[:6].strip() in ('ATOM', 'HETATM'):
+                atoms.append(_atom(line))
+            elif line.startswith('REMARK VINA RESULT') and affinity is None:
+                try: affinity = float(line.split()[3])
+                except (IndexError, ValueError): pass
+
+    header = []
+    if src_name:
+        header.append(f"REMARK    Best Vina pose exported from {src_name}")
+    if affinity is not None:
+        header.append(f"REMARK    VINA RESULT affinity (kcal/mol): {affinity:.3f}")
+    # CONECT goes after the coordinates and before END, per the PDB spec.
+    return '\n'.join(header + atoms + list(conect or []) + ['END']) + '\n'
+
+
+def _conect_from_pdbqt(path):
+    """CONECT records for the exported PDB, carrying bond ORDER.
+
+    Without any CONECT the exported ligand opens in PyMOL / Chimera / Discovery
+    Studio as a cloud of unbonded atoms: the residue is UNK, so their own residue
+    templates have nothing to match and they fall back to their own guesswork.
+
+    A PDB has no bond-order column. The convention every major viewer follows —
+    and what Open Babel and PyMOL write — is to repeat the partner's serial once
+    per bond order, so a double bond lists its partner twice and a triple three
+    times. Orders come from the same perception the 3-D viewer uses, so an
+    exported file and the on-screen structure agree.
+    """
+    atoms = _load_pdbqt_all(path)
+    if not atoms:
+        return []
+    for a in atoms:
+        a['elem'] = _adt_to_elem(a['atype'])
+    heavy_pos = [i for i, a in enumerate(atoms) if a['elem'] != 'H']
+
+    partners = {}
+
+    def _add(i, j, order):
+        si, sj = atoms[i]['serial'], atoms[j]['serial']
+        partners.setdefault(si, []).extend([sj] * order)
+        partners.setdefault(sj, []).extend([si] * order)
+
+    for b in _infer_bonds_from_pdbqt(path):
+        try:
+            order = max(1, min(3, int(b.get('order', 1))))
+        except (TypeError, ValueError):
+            order = 1
+        _add(heavy_pos[b['begin']], heavy_pos[b['end']], order)
+
+    # Polar hydrogens (the only H a PDBQT keeps): bond each to its nearest heavy
+    # atom, so an -OH or -NH exports as a real hydroxyl / amine rather than a
+    # floating H.
+    for i, a in enumerate(atoms):
+        if a['elem'] != 'H':
+            continue
+        best, best_d = None, 1e9
+        for j in heavy_pos:
+            d = _xyz_dist(a, atoms[j])
+            if d < best_d:
+                best, best_d = j, d
+        if best is not None and \
+           best_d < _RCOV['H'] + _RCOV.get(atoms[best]['elem'], 0.77) + 0.45:
+            _add(i, best, 1)
+
+    out = []
+    for serial in sorted(partners):
+        lst = partners[serial]
+        for k in range(0, len(lst), 4):          # max 4 partner fields per record
+            out.append('CONECT' + f'{serial:>5}' +
+                       ''.join(f'{t:>5}' for t in lst[k:k + 4]))
+    return out
+
+
+def _count_pdbqt_models(path):
+    """How many MODEL records a PDBQT holds (Vina _out.pdbqt = one per docked mode).
+
+    The viewer renders MODEL 1 only (see _load_pdbqt_all, which breaks at the first
+    ENDMDL). Returning the count lets the UI state 'pose 1 of N' so the displayed
+    coordinates can't be mistaken for a different mode's coordinates in the same file.
+    Returns 1 for a single-pose / MODEL-less file.
+    """
+    try:
+        with open(path) as fh:
+            n = sum(1 for line in fh if line.startswith("MODEL"))
+        return n if n > 0 else 1
+    except Exception as e:
+        logger.warning(f"_count_pdbqt_models({path}): {e}")
+        return 1
+
+
 def _load_pdbqt_all(path):
-    """Load ALL atoms from PDBQT MODEL 1 (including H, for index alignment)."""
+    """Load ALL atoms from PDBQT MODEL 1 (including H, for index alignment).
+
+    Accepts BOTH record names. MGLTools' prepare_ligand4.py emits HETATM for a
+    ligand; Open Babel emits ATOM. Vina parses either (see parse_pdbqt.cpp) and
+    echoes the original record name back into <stem>_out.pdbqt, so a file that
+    docks fine can still be invisible here. The old test was
+    `line[:4] not in ("ATOM","HEAT")` — "HEAT" is a typo for "HETA", so every
+    HETATM line was dropped, leaving zero atoms and a bogus
+    "No heavy atoms found in ligand PDBQT" for MGLTools-prepared ligands.
+    """
     atoms = []
     try:
         with open(path) as fh:
@@ -125,7 +273,7 @@ def _load_pdbqt_all(path):
                 if line.startswith("ENDMDL"): break
                 if not has_model: in_model = True
                 if not in_model:  continue
-                if line[:4] not in ("ATOM","HEAT"): continue
+                if line[:6].rstrip() not in ("ATOM", "HETATM"): continue
                 try:
                     atoms.append({
                         "serial":  int(line[6:11]),
@@ -156,13 +304,18 @@ def _load_rec_heavy(path):
     CRITICAL: idx stored here must match the rec_atom index in the Vina log,
     which is the position in m.grid_atoms[] — i.e. the ALL-atom line index
     (H atoms included in the count, just skipped for scoring).
+
+    Vina's rigid-receptor parser accepts ATOM *and* HETATM, so both must be
+    counted here. The old "HEAT" typo dropped HETATM lines without incrementing
+    all_atom_idx, which silently shifted every rec_idx after the first
+    cofactor/metal/water and mislabelled contacts in the pair table.
     """
     atoms = []
     all_atom_idx = 0   # counts every ATOM/HETATM line including H
     try:
         with open(path) as fh:
             for line in fh:
-                if line[:4] not in ("ATOM","HEAT"): continue
+                if line[:6].rstrip() not in ("ATOM", "HETATM"): continue
                 atype = line[77:].strip()
                 is_h  = atype in ("HD", "H")
                 try:
@@ -293,7 +446,13 @@ def vina_dock():
     Runs AutoDock Vina, streams stdout progress via SSE, writes a log file,
     parses the non_cache::eval output, and returns structured score data.
 
-    Body: { "receptor_path": str, "ligand_path": str }
+    Body: {
+      "receptor_path": str, "ligand_path": str,
+      # optional docking box (from the UI Box ctr / len inputs); each falls back
+      # to input_routes.yml then a built-in default if omitted:
+      "center_x": float, "center_y": float, "center_z": float,
+      "size_x": float, "size_y": float, "size_z": float
+    }
     """
     import subprocess, re, datetime
     try:
@@ -307,6 +466,24 @@ def vina_dock():
             if not Path(p).is_file():
                 return jsonify({'status': 'error', 'message': f'File not found: {p}'}), 404
 
+        # ── Self-healing pre-flight ───────────────────────────────────────────
+        # Vina rejects TITLE/REMARK/etc. in either input and returns best=None.
+        # These paths can arrive already-converted from anywhere (the modal
+        # converter, an older route, Glide/MGLTools, a hand-placed file), so
+        # clean both in place right before docking no matter their origin.
+        # No-op if already clean.
+        try:
+            rec_clean = ensure_vina_safe_pdbqt(rec_path, 'receptor')
+            lig_clean = ensure_vina_safe_pdbqt(lig_path, 'ligand')
+            for tag, r in (('receptor', rec_clean), ('ligand', lig_clean)):
+                if r['was_dirty']:
+                    logger.info('vina_dock: auto-cleaned %s PDBQT (%d illegal '
+                                'line(s) stripped) before docking: %s',
+                                tag, r['stripped_lines'], r['path'])
+        except Exception as _san_exc:
+            logger.warning('vina_dock: PDBQT pre-flight sanitize failed '
+                           '(continuing): %s', _san_exc)
+
         LOG_FILE  = VINA_LOG
 
         # Output alongside the ligand file, named after it
@@ -317,16 +494,31 @@ def vina_dock():
         # Loaded by app.py at startup — zero hardcoding here.
         _vcfg = current_app.config.get("VINA", {})
         _cpu  = _vcfg.get("cpu") or os.cpu_count() or 4
+
+        # Docking box: prefer the values POSTed from the UI (the "Box ctr / len"
+        # inputs in the Visualize row → center_x/y/z + size_x/y/z), then fall back
+        # to the input_routes.yml config, then to the built-in default. This is what
+        # lets the editable grid box actually drive the vina --center/--size flags;
+        # previously the box was read only from _vcfg, so the UI value was ignored.
+        def _box(key, default):
+            v = data.get(key, None)
+            if v is None or v == '':
+                v = _vcfg.get(key, default)
+            try:
+                return str(float(v))
+            except (TypeError, ValueError):
+                return str(default)
+
         cmd = [
             VINA_BIN,
             '--receptor',       rec_path,
             '--ligand',         lig_path,
-            '--center_x',       str(_vcfg.get('center_x', -25.7)),
-            '--center_y',       str(_vcfg.get('center_y',   0.22)),
-            '--center_z',       str(_vcfg.get('center_z',  28.39)),
-            '--size_x',         str(_vcfg.get('size_x',      20)),
-            '--size_y',         str(_vcfg.get('size_y',      20)),
-            '--size_z',         str(_vcfg.get('size_z',      20)),
+            '--center_x',       _box('center_x', -25.7),
+            '--center_y',       _box('center_y',   0.22),
+            '--center_z',       _box('center_z',  28.39),
+            '--size_x',         _box('size_x',      20),
+            '--size_y',         _box('size_y',      20),
+            '--size_z',         _box('size_z',      20),
             '--exhaustiveness', str(_vcfg.get('exhaustiveness', 8)),
             '--num_modes',      str(_vcfg.get('num_modes',      9)),
             '--energy_range',   str(_vcfg.get('energy_range',   3)),
@@ -544,6 +736,51 @@ def vina_dock():
     except Exception as exc:
         logger.error(f'vina_dock error: {exc}', exc_info=True)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/vina_visualization/vina_export_pdb', methods=['POST'])
+def vina_export_pdb():
+    """
+    POST /vina_export_pdb
+    Convert the best-pose Vina output to PDB and return it for the browser to download.
+
+    Body: { "ligand_path": str }   → reads <ligand_stem>_out.pdbqt next to the ligand
+       or { "out_path": str }      → explicit path to the *_out.pdbqt to convert
+    Returns: { ok: true, filename, pdb_text }  |  { ok: false, err }
+
+    The *_out.pdbqt path mirrors what vina_dock writes (OUT_LIG). Best (first) pose only.
+    """
+    try:
+        data     = request.get_json(force=True) or {}
+        out_path = (data.get('out_path') or '').strip()
+        if not out_path:
+            lig = (data.get('ligand_path') or '').strip()
+            if not lig:
+                return jsonify({'ok': False, 'err': 'ligand_path or out_path is required'}), 400
+            # If the ligand field already points AT a docked output, the naive
+            # stem + '_out.pdbqt' derives <stem>_out_out.pdbqt — a path that never
+            # exists — so Export PDB 404'd with "run a dock first" even though the
+            # dock had just succeeded. vina_parse_log already guards this; the
+            # export did not.
+            _stem = Path(lig).stem
+            out_path = (lig if _stem.endswith('_out')
+                        else str(Path(lig).parent / f"{_stem}_out.pdbqt"))
+
+        p = Path(out_path)
+        if not p.is_file():
+            return jsonify({'ok': False, 'err': f'output pose not found: {out_path} '
+                                                 '(run a dock first)'}), 404
+
+        conect   = _conect_from_pdbqt(str(p))
+        pdb_text = _pdbqt_best_pose_to_pdb(p.read_text(errors='ignore'),
+                                           src_name=p.name, conect=conect)
+        filename = p.stem + '.pdb'          # e.g. HJL-1_out.pdb
+        return jsonify({'ok': True, 'filename': filename, 'pdb_text': pdb_text,
+                        'source': str(p), 'n_conect': len(conect)}), 200
+
+    except Exception as exc:
+        logger.warning(f'vina_export_pdb error: {exc}')
+        return jsonify({'ok': False, 'err': str(exc)}), 200
 
 
 @app.route('/vina_visualization/vina_dock_progress', methods=['GET'])
@@ -787,6 +1024,7 @@ def vina_parse_log():
             r'r=([\d.]+)\s+'
             r'(?:r_true=[\d.]+\s+)?'
             r's=r-opt=([-\d.]+)\s+pair_e=([-\d.]+)'
+            r'(?:\s+lig_xyz=\(([-\d.]+),([-\d.]+),([-\d.]+)\))?'   # groups 9,10,11: log's ligand coord
         )
         atom_re = _re.compile(
             r'\[non_cache::eval lig_atom=(\d+)\(xs=(\d+)\)\]\s+'
@@ -807,6 +1045,37 @@ def vina_parse_log():
         best_total:  float | None    = None
         best_mode:   int             = 1
 
+        # ── Vina index → PDBQT file index ────────────────────────────────────────
+        # Vina's m.atoms order follows the PDBQT torsion tree (ROOT, then BRANCHes),
+        # which is NOT the file's line order. Measured on this ligand, 31 of 41 atoms
+        # differ — e.g. Vina's lig_atom=13 is C19 (file line 19) while C16 (file
+        # line 14) is Vina's lig_atom=15. Keying this_e / pairs by the raw log index
+        # therefore attributes one atom's contacts to a different atom.
+        # The instrumented non_cache.cpp emits an [atom_map] block pairing each Vina
+        # index with the original PDBQT line, so use it when present.
+        # The instrumented non_cache.cpp echoes the ligand's ORIGINAL PDBQT record
+        # name, so an MGLTools ligand prints pdbqt_line="HETATM   1 ...". Anchoring
+        # on "ATOM" alone left vina_to_file empty for those files and silently fell
+        # back to identity mapping — no error, just per-atom energies painted onto
+        # the wrong atoms (31 of 41 differ on this ligand).
+        atommap_re = _re.compile(
+            r'\[atom_map\]\s+lig_atom=(\d+)\s+pdbqt_line="(?:ATOM|HETATM)\s*(\d+)')
+        vina_to_file: dict[int, int] = {}
+        for line in lines:
+            m = atommap_re.search(line)
+            if m:
+                vina_to_file[int(m.group(1))] = int(m.group(2)) - 1   # serial is 1-based
+        file_to_vina: dict[int, int] = {f: v for v, f in vina_to_file.items()}
+        if vina_to_file:
+            n_bad = sum(1 for v, f in vina_to_file.items() if v != f)
+            logger.info('vina_parse_log: [atom_map] found — %d atoms, %d with '
+                        'lig_atom != file index', len(vina_to_file), n_bad)
+        else:
+            logger.warning('vina_parse_log: no [atom_map] block in log — falling back to '
+                           'identity mapping (lig_atom == file index). Rebuild Vina with '
+                           'the instrumented non_cache.cpp so contacts are attributed to '
+                           'the correct atoms.')
+
         collecting = False
         for line in lines:
             # Start collecting when we see the first pair line
@@ -821,6 +1090,11 @@ def vina_parse_log():
                 if li not in best_pairs:
                     best_pairs[li] = {'xs':lxs,'pairs':[],'this_e':0.0}
                     best_order.append(li)
+                # The log prints the ligand atom's coordinate (in Vina's scoring frame)
+                # on every pair line for that atom; capture it once. Lets the client
+                # optionally plot ligand atoms in the frame Vina actually scored.
+                if m.group(9) is not None and 'log_xyz' not in best_pairs[li]:
+                    best_pairs[li]['log_xyz'] = [float(m.group(9)), float(m.group(10)), float(m.group(11))]
                 best_pairs[li]['pairs'].append({'rec_idx':ri,'rec_xs':rxs,'opt':opt,'r':r,'s':s,'pair_e':pe})
                 continue
 
@@ -852,6 +1126,37 @@ def vina_parse_log():
         lig_atoms_all = _load_pdbqt_all(lig_path) if lig_path else []
         rec_atoms_all = _load_rec_heavy(rec_path)  if rec_path  else []
 
+        # ── Load the REAL docked pose Vina wrote to disk (authoritative) ───────
+        # vina_dock() always writes <ligand_stem>_out.pdbqt next to the ligand (OUT_LIG).
+        # Its MODEL 1 is the best pose in the coordinate frame Vina actually scored —
+        # ground truth, vs. reconstructing an approximate frame from log text below.
+        # Same atom count/order as the exported ligand (Vina repositions atoms, it
+        # doesn't add/remove/reorder them), so we zip by index.
+        docked_atoms_all = []
+        docked_pose_path = None
+        if lig_path:
+            # vina_dock() writes <ligand_stem>_out.pdbqt next to the ligand. If the user
+            # already pointed ligPath AT that _out file, naive stem+'_out.pdbqt' would
+            # derive <stem>_out_out.pdbqt — a file that never exists — silently leaving
+            # has_docked_pose false. Treat an existing *_out.pdbqt as its own docked pose.
+            _stem = Path(lig_path).stem
+            if _stem.endswith('_out'):
+                out_path = str(lig_path)
+            else:
+                out_path = str(Path(lig_path).parent / (_stem + '_out.pdbqt'))
+            if Path(out_path).is_file():
+                try:
+                    candidate = _load_pdbqt_all(out_path)
+                    if len(candidate) == len(lig_atoms_all):
+                        docked_atoms_all = candidate
+                        docked_pose_path = out_path
+                    else:
+                        logger.warning('vina_parse_log: %s atom count (%d) != ligand (%d) — '
+                                       'skipping docked-pose coordinates', out_path,
+                                       len(candidate), len(lig_atoms_all))
+                except Exception as _de:
+                    logger.warning('vina_parse_log: could not read docked pose %s: %s', out_path, _de)
+
         # Build this_e per atom idx
         # best_pairs keys = lig_atom indices in non_cache (= PDBQT line order incl H)
         this_e_map: dict[int, float] = {li: info['this_e'] for li, info in best_pairs.items()}
@@ -865,15 +1170,16 @@ def vina_parse_log():
         ]
 
         # ── Compute this_e for each heavy atom (from log) ─────────────────────
-        # Non_cache iterates ALL movable atoms (incl H) but H are skipped.
-        # The lig_atom index in the log == i in VINA_FOR(i, m.num_movable_atoms())
-        # which iterates lig_atoms_all in PDBQT order.
-        # So this_e_map[i] directly corresponds to lig_atoms_all[i].
+        # The log's lig_atom index is Vina's internal m.atoms index, which follows the
+        # PDBQT torsion tree rather than file order. file_to_vina translates; it falls
+        # back to identity for logs predating the [atom_map] instrumentation.
+        def _vina_idx(pdbqt_i):
+            return file_to_vina.get(pdbqt_i, pdbqt_i)
 
         # Build this_e_by_pdbqt_idx: for each heavy atom's pdbqt idx → this_e
         values_raw = []
         for pdbqt_i, atom in heavy_atoms_indexed:
-            te = this_e_map.get(pdbqt_i, 0.0)
+            te = this_e_map.get(_vina_idx(pdbqt_i), 0.0)
             values_raw.append(te)
 
         if not values_raw:
@@ -906,16 +1212,27 @@ def vina_parse_log():
         values_normalised = []
 
         for local_i, (pdbqt_i, atom) in enumerate(heavy_atoms_indexed):
-            te   = this_e_map.get(pdbqt_i, 0.0)
+            te   = this_e_map.get(_vina_idx(pdbqt_i), 0.0)
             # Invert: most negative this_e → norm=1 (most important/large/red),
             # near-zero or positive → norm=0 (least important/small/blue)
             norm = (max_e - te) / rng
+            # Vina's own scoring-frame coordinate for this atom, if the log printed it.
+            # Differs from x/y/z (exported-pose PDBQT) when the two frames disagree.
+            log_xyz = best_pairs.get(_vina_idx(pdbqt_i), {}).get('log_xyz')
+            # The REAL docked pose from <ligand_stem>_out.pdbqt (authoritative — see above).
+            docked = docked_atoms_all[pdbqt_i] if pdbqt_i < len(docked_atoms_all) else None
             atoms_out.append({
                 'idx':         local_i,          # sequential heavy-atom index
                 'symbol':      atom['name'],      # e.g. "O1", "C6"
                 'x':           round(atom['x'], 4),
                 'y':           round(atom['y'], 4),
                 'z':           round(atom['z'], 4),
+                'log_x':       (round(log_xyz[0], 4) if log_xyz else None),
+                'log_y':       (round(log_xyz[1], 4) if log_xyz else None),
+                'log_z':       (round(log_xyz[2], 4) if log_xyz else None),
+                'docked_x':    (round(docked['x'], 4) if docked else None),
+                'docked_y':    (round(docked['y'], 4) if docked else None),
+                'docked_z':    (round(docked['z'], 4) if docked else None),
                 'weight_raw':  round(te, 5),      # this_e in kcal/mol
                 'weight_norm': round(norm, 5),    # 0..1 for colour
                 'color':       _coolwarm_hex(norm),
@@ -940,13 +1257,19 @@ def vina_parse_log():
         # For real bonds, parse BRANCH/ENDBRANCH + ROOT connectivity
         bonds = _infer_bonds_from_pdbqt(lig_path) if lig_path else []
 
-        # ── pairs_by_lig_atom: local_heavy_idx → [{rec_idx, pair_e}] ────────────
+        # ── pairs_by_lig_atom: local_heavy_idx → [{rec_idx, pair_e, rec_xs, lig_xs, r, s}]
+        # rec_xs/lig_xs/r/s are carried so the client can draw the atom–atom distance
+        # and reconstruct the Vina pair_e breakdown on demand (see _voxelPairClick).
         pairs_by_lig = {}
         for local_i, (pdbqt_i, _) in enumerate(heavy_atoms_indexed):
-            if pdbqt_i in best_pairs:
+            vi = _vina_idx(pdbqt_i)
+            if vi in best_pairs:
+                lig_xs = best_pairs[vi].get('xs')
                 pairs_by_lig[local_i] = [
-                    {'rec_idx': p['rec_idx'], 'pair_e': round(p['pair_e'], 5)}
-                    for p in best_pairs[pdbqt_i]['pairs']
+                    {'rec_idx': p['rec_idx'], 'pair_e': round(p['pair_e'], 5),
+                     'rec_xs':  p['rec_xs'],  'lig_xs':  lig_xs,
+                     'r':       round(p['r'], 4), 's': round(p['s'], 4)}
+                    for p in best_pairs[vi]['pairs']
                 ]
 
         # ── rec_atoms: receptor atom coords + labels for protein view ─────────
@@ -976,6 +1299,15 @@ def vina_parse_log():
             'log_file':          LOG_FILE,
             'pairs_by_lig_atom': pairs_by_lig,
             'rec_atoms':         rec_atoms_out,
+            'has_docked_pose':   bool(docked_atoms_all),
+            'docked_pose_path':  docked_pose_path,
+            # Which pose is on screen. A Vina _out.pdbqt holds several MODELs (mode 1 =
+            # best); _load_pdbqt_all() stops at the first ENDMDL, so the viewer always
+            # shows MODEL 1. Reporting the count lets the UI say so explicitly instead
+            # of silently showing one of N and inviting "these coords look wrong" when
+            # someone reads a different MODEL out of the file.
+            'lig_model_count':   _count_pdbqt_models(lig_path),
+            'lig_model_shown':   1,
         })
 
     except Exception as exc:
@@ -983,25 +1315,196 @@ def vina_parse_log():
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
+# ── Bond perception ───────────────────────────────────────────────────────────
+# A PDBQT carries no bond block at all — only the ROOT/BRANCH torsion tree (which
+# lists rotatable bonds, not all bonds) and AutoDock atom types. The old
+# _infer_bonds_from_pdbqt() therefore emitted every bond as order 1, which is why a
+# benzo ring drew as six identical single lines. Two things in the file let us do
+# better:
+#
+#   1. AutoDock types aromatic carbons 'A' — MGLTools' prepare_ligand4.py and Open
+#      Babel both do this — so aromatic rings are labelled, not guessed.
+#   2. The coordinates are a real 3D structure, so bond LENGTH cleanly separates
+#      single / double / triple for everything outside a ring.
+#
+# RDKit's rdDetermineBonds is the usual tool for this, but it needs a complete
+# hydrogen count to balance valences and a PDBQT keeps only POLAR hydrogens.
+# Measured on this ligand: heavy atoms alone raise "Final molecular charge (0) does
+# not match input (-2); could not find valid bond ordering", and including the polar
+# H raises AtomValenceException. Hence the geometry + atom-type route below, which
+# adds no dependency.
+
+# Covalent radii (Å), Cordero et al. 2008.
+_RCOV = {'H':0.31,'B':0.84,'C':0.76,'N':0.71,'O':0.66,'F':0.57,'P':1.07,'S':1.05,
+         'Cl':1.02,'Se':1.20,'Br':1.20,'I':1.39,'Mg':1.41,'Zn':1.22,'Mn':1.39,
+         'Ca':1.76,'Fe':1.32,'Cu':1.32,'Ni':1.24,'Co':1.26,'K':2.03}
+
+# (elem, elem) -> (longest triple bond, longest double bond), Å.
+_BOND_MULT = {
+    ('C','C'): (1.25, 1.365), ('C','N'): (1.21, 1.345), ('C','O'): (1.15, 1.29),
+    ('C','S'): (1.55, 1.70),  ('N','N'): (1.20, 1.31),  ('N','O'): (1.15, 1.30),
+    ('O','O'): (None, 1.30),  ('N','S'): (None, 1.60),  ('O','S'): (None, 1.55),
+    ('P','O'): (None, 1.55),  ('P','N'): (None, 1.65),  ('P','S'): (None, 1.98),
+}
+_AROM_MAX_BOND = 1.45      # a ring bond longer than this is not aromatic
+
+
+def _xyz_dist(a, b):
+    return math.sqrt((a['x']-b['x'])**2 + (a['y']-b['y'])**2 + (a['z']-b['z'])**2)
+
+
+def _small_rings(adj, max_size=8):
+    """Simple cycles up to max_size, then a crude SSSR filter. Ligand-sized graphs."""
+    seen, rings = set(), []
+    for start in sorted(adj):
+        stack = [(start, [start], {start})]
+        while stack:
+            cur, path, inpath = stack.pop()
+            for nb in sorted(adj[cur]):
+                if nb == start and len(path) >= 3:
+                    key = frozenset(path)
+                    if key not in seen:
+                        seen.add(key); rings.append(list(path))
+                elif nb not in inpath and nb > start and len(path) < max_size:
+                    stack.append((nb, path + [nb], inpath | {nb}))
+    rings.sort(key=len)
+    kept, covered = [], set()
+    for r in rings:
+        edges = {(min(r[i], r[(i+1) % len(r)]), max(r[i], r[(i+1) % len(r)]))
+                 for i in range(len(r))}
+        if not edges <= covered:
+            kept.append(r); covered |= edges
+    return kept
+
+
+def _max_matching(nodes, edges):
+    """Maximum matching by augmenting paths — this is the Kekule assignment for one
+    aromatic system. Matched pairs become the double bonds."""
+    adj = {n: [] for n in nodes}
+    for u, v in edges:
+        if u in adj and v in adj:
+            adj[u].append(v); adj[v].append(u)
+    mate = {}
+
+    def _aug(u, seen):
+        for v in adj[u]:
+            if v in seen:
+                continue
+            seen.add(v)
+            if v not in mate or _aug(mate[v], seen):
+                mate[v] = u; mate[u] = v
+                return True
+        return False
+
+    for u in nodes:
+        if u not in mate:
+            _aug(u, set())
+    return {(min(u, v), max(u, v)) for u, v in mate.items()}
+
+
+def _order_from_length(a, b, a_has_h, b_has_h, deg_a, deg_b):
+    """Bond order for a NON-aromatic bond, from its measured length."""
+    ea, eb = a['elem'], b['elem']
+    key = (ea, eb) if (ea, eb) in _BOND_MULT else (eb, ea)
+    lim = _BOND_MULT.get(key)
+    if not lim:
+        return 1
+    # An O or N carrying a polar hydrogen is a hydroxyl / amine, never the
+    # multiply-bonded partner. PDBQT keeps polar H, so this test is reliable — it is
+    # what stops the C9-O1 hydroxyl in this ligand being drawn as a carbonyl.
+    if a_has_h or b_has_h:
+        return 1
+    d = _xyz_dist(a, b)
+    triple, double = lim
+    if triple is not None and d <= triple and deg_a <= 2 and deg_b <= 2:
+        return 3
+    if d <= double:
+        return 2
+    return 1
+
+
 def _infer_bonds_from_pdbqt(path: str) -> list:
+    """Ligand bonds for the viewer, WITH bond orders.
+
+    Returns [{begin, end, order, aromatic}] where begin/end index the heavy-atom
+    list (the same ordering the atom payload uses) and order is the Kekule order
+    1 / 2 / 3. Aromatic rings are kekulised so the viewer can draw alternating
+    double bonds; `aromatic` is carried alongside for anything that would rather
+    render the delocalised form.
     """
-    Infer bonds from PDBQT BRANCH/ENDBRANCH + ROOT structure.
-    Returns list of {begin: local_heavy_idx, end: local_heavy_idx, order: 1}.
-    Uses simple distance-based bond detection as fallback.
-    """
-    import math as _math
-    atoms = [a for a in _load_pdbqt_all(path) if a['atype'] not in ('H','HD')]
+    all_atoms = _load_pdbqt_all(path)
+    if not all_atoms:
+        return []
+    for a in all_atoms:
+        a['elem'] = _adt_to_elem(a['atype'])
+
+    heavy_pos = [i for i, a in enumerate(all_atoms) if a['elem'] != 'H']
+    g2h   = {g: h for h, g in enumerate(heavy_pos)}
+    heavy = [all_atoms[i] for i in heavy_pos]
+
+    # ── connectivity: covalent radii + 0.45 Å slack. The old flat 1.85 Å cutoff
+    #    over-bonds halogens and under-bonds S/P. ──────────────────────────────
+    adj = {i: set() for i in range(len(all_atoms))}
+    for i in range(len(all_atoms)):
+        for j in range(i + 1, len(all_atoms)):
+            ei, ej = all_atoms[i]['elem'], all_atoms[j]['elem']
+            if ei == 'H' and ej == 'H':
+                continue
+            cut = _RCOV.get(ei, 0.77) + _RCOV.get(ej, 0.77) + 0.45
+            if _xyz_dist(all_atoms[i], all_atoms[j]) < cut:
+                adj[i].add(j); adj[j].add(i)
+
+    has_h = {i: any(all_atoms[j]['elem'] == 'H' for j in adj[i])
+             for i in range(len(all_atoms))}
+
+    hbonds = sorted({(g2h[i], g2h[j])
+                     for i in heavy_pos for j in adj[i]
+                     if j in g2h and g2h[i] < g2h[j]})
+
+    hadj = {i: set() for i in range(len(heavy))}
+    for u, v in hbonds:
+        hadj[u].add(v); hadj[v].add(u)
+
+    # ── aromatic rings: flagged by AutoDock type 'A', confirmed by geometry ───
+    arom_bonds, arom_atoms = set(), set()
+    for ring in _small_rings(hadj, max_size=8):
+        n = len(ring)
+        if n not in (5, 6, 7):
+            continue
+        if any(_xyz_dist(heavy[ring[k]], heavy[ring[(k + 1) % n]]) > _AROM_MAX_BOND
+               for k in range(n)):
+            continue
+        n_a = sum(1 for a in ring if heavy[a]['atype'].strip().upper() == 'A')
+        if n_a * 2 < n:                    # majority must be aromatic carbons
+            continue
+        for k in range(n):
+            a, b = ring[k], ring[(k + 1) % n]
+            arom_bonds.add((min(a, b), max(a, b)))
+            arom_atoms.update((a, b))
+
+    # ── kekulise: pyrrole-type N/O/S donates a lone pair to the ring and so takes
+    #    no double bond; everything else in the aromatic system is matched in
+    #    pairs. For indole this gives three doubles in the benzo ring and one in
+    #    the five-ring, which is the structure a chemist would draw. ───────────
+    donors = set()
+    for h in arom_atoms:
+        g, e = heavy_pos[h], heavy[h]['elem']
+        if e in ('O', 'S'):
+            donors.add(h)
+        elif e == 'N' and (has_h[g] or len(hadj[h]) >= 3):
+            donors.add(h)
+    matched = _max_matching(
+        sorted(arom_atoms - donors),
+        [(u, v) for (u, v) in arom_bonds if u not in donors and v not in donors])
+
     bonds = []
-    n = len(atoms)
-    # Distance threshold per element pair (simplified)
-    for i in range(n):
-        for j in range(i+1, n):
-            dx = atoms[i]['x']-atoms[j]['x']
-            dy = atoms[i]['y']-atoms[j]['y']
-            dz = atoms[i]['z']-atoms[j]['z']
-            d  = _math.sqrt(dx*dx+dy*dy+dz*dz)
-            # Typical covalent bond lengths: C-C~1.54, C-N~1.47, C-O~1.43, C-F~1.35
-            # Use generous 1.8 Å cutoff for all heavy-heavy bonds
-            if d < 1.85:
-                bonds.append({'begin': i, 'end': j, 'order': 1})
+    for (u, v) in hbonds:
+        aromatic = (u, v) in arom_bonds
+        if aromatic:
+            order = 2 if (u, v) in matched else 1
+        else:
+            order = _order_from_length(heavy[u], heavy[v],
+                                       has_h[heavy_pos[u]], has_h[heavy_pos[v]],
+                                       len(hadj[u]), len(hadj[v]))
+        bonds.append({'begin': u, 'end': v, 'order': order, 'aromatic': aromatic})
     return bonds

@@ -14,7 +14,7 @@ generator:
   TS:
     reaction_smarts: "[#6;a;D3;$([#6](~[#6])~[#6]):2][#35;A;D1].[#6;a;D3;$([#6]([#6])[#6]):1]-[#5]([#8])[#8]>>[#6:2]-[#6:1]"
     num_warmup_trials: 1
-    num_ts_iterations: 5000
+    num_ts_iterations: 5
     ts_mode: "maximize"
     eval_batch_size: 256
     log_level: INFO
@@ -27,7 +27,7 @@ evaluator_class_name: "ElionEstimatorEvaluator"
 
 reward_function:
   SAScore:
-    rew_coeff: 0.05
+    rew_coeff: 0
     max_reward: 1.0
     threshold: 8.0
     optimize: True
@@ -52,7 +52,7 @@ reward_function:
     allowed_threshold_jumps: true
 
   CHEMBERT_BE:
-    rew_coeff: 0.9
+    rew_coeff: 0.95
     max_reward: 1.0
     optimize: True
     threshold: -7.0
@@ -74,6 +74,60 @@ reward_function:
   #   threshold_limit: 200.0
   #   threshold_step: -20.0
   #   bb_directory: "/blue/lic/huangzihang/repos/Elion-AGI-Ecosystem/TS/data/Building_Blocks/"
+
+
+# ============================================================
+#  Visualizer / dashboard backend
+#  Used by: ts_routes.py  (the Flask TS backend)
+# ============================================================
+# Base folder for the TS dashboard's JSON artifacts. The backend writes:
+#     <output_dir>/TS_Session   — live-run chart session files
+#     <output_dir>/Warmup_TS    — warmup belief-state checkpoints
+# The TS_Session / Warmup_TS subfolder names are fixed; only this base path
+# is configurable. Read once when ts_routes.py is imported (restart Flask to
+# pick up a change). If this section or key is missing, the backend falls
+# back to the default: /home/huangzihang/repos/user_data
+visualizer:
+  output_dir: "/home/huangzihang/repos/user_data"
+
+  # ── UI server bind address ────────────────────────────────────────────────
+  # The port the Elion UI listens on. Change it here and `python run.py` picks
+  # it up — no code edit. Read once at startup, so restart Flask after editing.
+  #
+  # Precedence:  $UI_PORT  >  visualizer.port  >  5000
+  #              $UI_HOST  >  visualizer.host  >  0.0.0.0
+  #
+  # An out-of-range or non-numeric port is ignored and the next level is used,
+  # so a typo here cannot stop the server from starting. The startup banner
+  # prints the resolved value and which of the three it came from.
+  #
+  # host: "0.0.0.0" listens on every interface (reachable from other machines);
+  # "127.0.0.1" restricts it to this machine.
+  port: 5002
+  host: "0.0.0.0"
+
+  # ── Default value of the UI's OUTPUT DIR box ──────────────────────────────
+  # Where a RUN writes its result CSVs. This is NOT `output_dir` above:
+  #   output_dir          → the UI's own state (TS_Session / Warmup_TS / debug)
+  #   default_output_dir  → what the OUTPUT DIR field is pre-filled with
+  # Leave it unset and the UI derives the value from the directory part of
+  # `generator.TS.results_filename`, which is already where this engine writes.
+  # Typing over the field in the browser always wins for that run.
+  default_output_dir: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS"
+
+  # ── Default directory for the ⛁ Import database box ───────────────────────
+  # Pre-fills the path the building-block scan reads. Leave it unset and the UI
+  # falls back to the engine's own reagent-library root (TS_BB_BASE, derived
+  # from ELION_CWD). Kept separate from that root because the directory you
+  # SCAN is usually a superset of the one a run actually draws reagents from.
+  # Typing over the box in the browser always wins for that scan.
+  bb_scan_dir: "/home/huangzihang/repos/user_data/Building_Blocks"
+
+  # ── Debug trace directory ─────────────────────────────────────────────────
+  # End-to-end trace of the reagent-panel chain (elion stdout → regex match →
+  # top5 → /ts_top5 → the browser). Defaults to <output_dir>/debug.
+  # Override with $UI_TS_DEBUG_DIR; disable entirely with UI_TS_DEBUG=0.
+  debug_dir: "/home/huangzihang/repos/user_data/debug"
 
 
 # ============================================================
@@ -122,3 +176,244 @@ vina_docking:
   size_z: 20
   thread: 16000
   search_depth: 5
+
+# ============================================================
+# ============================================================
+#  === merged in from the former input_routes.yml ===
+#  (previously lived at .../src/visualizer/input_routes.yml)
+#
+#  Consumers of the three blocks below:
+#    vina      -> app.py            loads this block into app.config["VINA"]
+#                                   at startup; the vina route module reads it
+#                                   from app.config at request time.
+#    deepatom  -> nas_storage_app/routes/deepatom_routes.py  (via shared._INPUT_ROUTES_YML)
+#    pose      -> nas_storage_app/routes/pose_routes.py      (via shared._INPUT_ROUTES_YML)
+#
+#  IMPORTANT: because this config moved here from .../visualizer/,
+#  app.py and routes/shared.py must point their YAML path at THIS
+#  file (.../src/elion/input_TS.yml). See the accompanying handoff.
+# ============================================================
+
+# ============================================================
+#  Vina Docking Configuration (interactive visualizer)
+#  Loaded by app.py into app.config["VINA"] at startup.
+#  All vina hyperparameters, paths, and defaults live here.
+# ============================================================
+vina:
+  # ── Binary ────────────────────────────────────────────────
+  bin: "/home/huangzihang/repos/elion/src/visualizer/vina/vina"
+  log: "/home/huangzihang/repos/elion/src/visualizer/vina/vina_non_cache.log"
+
+  # ── Active protein (used by the docking engine at runtime) ───────────────────
+  # Set this to one of the `id` values from the `proteins` list below.
+  # The frontend also reads `proteins` directly via GET /vina_visualization/vina_proteins
+  # and lets the user pick; selecting a protein POSTs to /vina_visualization/vina_select_protein
+  # which writes the chosen entry's fields back into app.config["VINA"].
+  active_protein: "8P0M"
+
+  # ── Default ligand directory (shared across all proteins) ─────────────────────
+  ligand_pdbqt_dir: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand"
+
+  # ── Protein library ──────────────────────────────────────────────────────────
+  # Each entry is a self-contained docking target.
+  # Fields per entry:
+  #   id              – unique short identifier shown in the UI
+  #   label           – human-friendly name shown in the mini-chat buttons
+  #   description     – one-line blurb shown below the button
+  #   default_receptor – absolute path to the prepared receptor .pdbqt
+  #   default_ligand   – absolute path to the default ligand .pdbqt
+  #   center_x/y/z    – Vina grid box centre (Å)
+  #   size_x/y/z      – Vina grid box dimensions (Å)
+  #   exhaustiveness  – sampling exhaustiveness (8 = standard)
+  #   num_modes       – max binding modes to output
+  #   energy_range    – modes within this kcal/mol of best are kept
+  #   cpu             – null = auto-detect (os.cpu_count())
+  proteins:
+
+    - id: "8P0M"
+      label: "TEAD3 / 8P0M"
+      description: "TEAD3 YAP-binding domain — active site near Phe-338"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/Elion_8P0M.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/Elion_iag933.pdbqt"
+      center_x: -25.7
+      center_y:   0.22
+      center_z:  28.39
+      size_x: 20
+      size_y: 20
+      size_z: 20
+      exhaustiveness: 8
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+    - id: "1P9M"
+      label: "IL-6 / gp130 hexamer"
+      description: "Interleukin-6 receptor subunit beta"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/IL-6_gp130.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/G001a_IL-6_gp130_SP_Score_-4.214.pdbqt"
+      center_x:  -0.127
+      center_y:  2.204
+      center_z:  -12.08
+      size_x: 20
+      size_y: 20
+      size_z: 20
+      exhaustiveness: 8
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+    - id: "1ERR"
+      label: "ERα / 1ERR"
+      description: "Estrogen Receptor Alpha"
+      default_receptor: "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/receptor/EAlphaReceptor_1ERR.pdbqt"
+      default_ligand:   "/home/huangzihang/repos/elion/src/visualizer/nas_storage_app/converted_pdbqt/ligand/G001a_EAlphaReceptor_pocket1_SP_Score_-11.880.pdbqt"
+      center_x:  67.872
+      center_y:  34.6
+      center_z:  74.321
+      size_x: 24
+      size_y: 24
+      size_z: 24
+      exhaustiveness: 12
+      num_modes: 9
+      energy_range: 3
+      cpu: null
+
+  # ── Sampling hyperparameters (global fallback if a protein entry omits them) ──
+  exhaustiveness: 8
+  num_modes: 9
+  energy_range: 3
+  cpu: null
+# ============================================================
+#  DeepAtom Virtual Screening Configuration
+#  Used by: nas_storage_app/routes/deepatom_routes.py
+#
+#  Each dataset entry maps to one run of:
+#    predict_binding_affinity_v4_2_data_split_ZccE_elion.sh
+#      -t <test_type>   (e.g. "vs" for virtual screening)
+#      -d <data_dir>    (absolute path to the dataset root)
+#
+#  timeout_seconds: max wait before killing the script.
+#    540 augmented complexes takes ~5-10 min on CPU.
+#    Set to 0 to wait forever (not recommended).
+# ============================================================
+
+deepatom:
+  # ── Script ──────────────────────────────────────────────────────────────
+  script: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/bin/predict_binding_affinity_v4_2_data_split_ZccE_elion.sh"
+
+  # ── Timeout ─────────────────────────────────────────────────────────────
+  # Seconds before the script is killed. Increase for larger compound libraries.
+  # 0 = no limit (not recommended — will block the server thread forever).
+  timeout_seconds: 1200
+
+  # ── Active dataset (pre-selected in the UI on load) ─────────────────────
+  active_dataset: "ZccE_VS"
+
+  # ── Dataset library ─────────────────────────────────────────────────────
+  datasets:
+
+    - id: "ZccE"
+      label: "ZccE · Virtual Screening"
+      description: "ZccE compound library — virtual screening mode"
+      test_type: "vs"
+      data_dir: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: true
+
+    - id: "ZccE_Train"
+      label: "ZccE · Training Set"
+      description: "ZccE benchmark — training split evaluation"
+      test_type: "train"
+      data_dir: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: false
+
+    - id: "ZccE_Test"
+      label: "ZccE · Test Set"
+      description: "ZccE benchmark — held-out test split"
+      test_type: "test"
+      data_dir: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/ZccE"
+      active: false
+# ============================================================
+#  Pose Generation tool defaults
+#  Used by: nas_storage_app/routes/pose_routes.py
+#    GET /pose/default_receptor serves this .pdb so the tool
+#    opens with a default target loaded.
+# ============================================================
+
+pose:
+  # Default ligand SMILES pre-filled into the Pose Generation tool's "LIGAND SMILES"
+  # box (#poseSmiles) on open, so the tool builds a starting ligand with no typing.
+  # The box stays editable; pressing Enter / Build re-parses whatever is typed.
+  # Blank → falls back to the value hardcoded on the #poseSmiles input in hub.html.
+  default_smile: "ClC(C(F)=CC1=C2C[C@](C3=CC=CC=C3)([C@@H]4CCCN4)O1)=[C@]2[C@@]5=C(C(NC)=O)C=NC(OCCO)=C5F"
+
+  # Default receptor .pdb auto-loaded into the Pose Generation tool on open.
+  # The "⤓ Upload .pdb" button overrides it per session.
+  # Blank → no target loaded (docking box defaults to the ligand frame).
+  # NOTE: this is a .pdb (the pose tool reads PDB, not the .pdbqt the Vina engine uses).
+  default_receptor_pdb: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/8P0M/protein/8P0M_Prepared_water_605_632.pdb"
+
+  # Folder where receptors uploaded via the "⤓ Upload .pdb" button are archived
+  # server-side (created if missing), so the user can find the uploaded .pdb later.
+  # Blank → uploads are not archived (kept in-browser only).
+  default_upload_path: "/home/huangzihang/repos/user_data/uploaded_pdb"
+
+  # "⚛ Score best pose" runs:  <default_script> -t vs -d <default_dir>
+  # default_script : the DeepAtom scoring entry-point (the dispatcher).
+  # default_dir    : pre-filled into the card's output-dir field on open, and used
+  #                  as -d if that field is cleared; a value typed there overrides it.
+  default_script: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/bin/deepatom_score_pipeline.sh"
+
+  # "Yupu_GIGN" scorer -- third option in the (3) Monte-Carlo "Scorer" dropdown.
+  # "Score (GIGN)" scores the LIVE pose: the posed ligand + the loaded receptor.
+  # The endpoint stages them and runs:
+  #     python <gign_script> --stage <dir> --name <name>
+  # with cwd = the script's own dir, inside <gign_conda_env>. yupu_GIGN_pose.py
+  # builds the GIGN graph and runs the model, printing GIGN_PRED_PK.
+  #
+  # gign_pocket_cutoff: 5 = cut the 5 angstrom binding pocket (whole protein
+  #   residues within 5 A of the ligand, waters dropped) -- this MATCHES how the
+  #   model was trained (preprocessing.py: pymol `byres <lig> around 5`, HOH +
+  #   hydrogens removed). Set 0 to feed the FULL receptor, which reproduces
+  #   predict_ZccE.py -- but that is a train/inference MISMATCH (the model was
+  #   trained on pockets), so full-protein scores are not meaningful affinities.
+  # gign_drop_water: drop HOH/WAT; applies when cutting (cutoff > 0).
+  # gign_conda_env: set to your GIGN env; leave "" to run plain `python`.
+  # gign_model:     leave "" to use yupu_GIGN_pose.py's built-in default checkpoint.
+  gign_script: "/home/huangzihang/repos/elion/src/elion/properties/Yupu_GIGN/yupu_GIGN_pose.py"
+  gign_model: ""
+  gign_conda_env: "elion_backend"
+  gign_pocket_cutoff: 5
+  gign_drop_water: true
+  gign_scratch: "/home/huangzihang/repos/user_data/GIGN"
+  gign_timeout_seconds: 1200
+  default_dir: "/home/huangzihang/repos/user_data/deepatom"
+
+  # Default docking box loaded into the 3D legend on open: the "Box ctr" x/y/z
+  # inputs and the "len" edge length (Å). The user can still drag/edit it.
+  # (These match the Vina 8P0M grid box; adjust if the .pdb frame differs.)
+  box_center_x: -25.7
+  box_center_y: 0.22
+  box_center_z: 28.39
+  box_length: 20
+
+  # ── Vina score-breakdown log ("Vina" tab in the Pose Generation tool) ────────
+  # The "Vina" tab scores the current pose with the full five-term AutoDock Vina
+  # function (gauss1 + gauss2 + repulsion + hydrophobic + Hbond, then the Nrot
+  # penalty) and can dump the *per-atom-pair* breakdown to a log file, so the
+  # total score is auditable pair by pair. For every ligand-atom <-> pocket-atom
+  # pair the log records: the surface gap s = r - Ri - Rj, each term's raw and
+  # weighted value, and the summed pair_e — the same decomposition the Vina
+  # visualizer shows ([non_cache::eval pair] lines). A file named
+  #     <name>_vina_breakdown.log
+  # is written into this directory (created if missing).
+  # Blank → the breakdown is shown in-browser only and nothing is written to disk.
+  vina_breakdown_dir: "/home/huangzihang/repos/user_data/vina_breakdown"
+
+  # ── Searched-pose auto-save ("▶ Run search" on the Monte-Carlo tab) ──────────
+  # When the Monte-Carlo search finishes, the best pose is auto-saved here as
+  # <timestamp>.pdb (the same ligand-pose .pdb the "⤓ Generate pose .pdb" button
+  # produces), so every completed search leaves an artifact on disk without the
+  # user having to click export. Created if missing. Also used as the fallback
+  # for POST /pose/save_pdb when its request supplies no explicit out_dir.
+  # Blank → the search does not auto-save (use the export button instead).
+  search_pose_dir: "/home/huangzihang/repos/user_data/search_pose"

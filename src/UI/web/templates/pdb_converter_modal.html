@@ -50,6 +50,25 @@
                 </div>
             </div>
 
+            <!-- Conversion engine toggle -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Engine</div>
+                <div style="display:flex;border:1px solid #1e293b;border-radius:10px;overflow:hidden;width:fit-content;">
+                    <button id="p2p_engine_obabel_btn" onclick="_p2pSetEngine('obabel')" style="
+                        padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer;border:none;
+                        background:#064e3b;color:#6ee7b7;font-family:inherit;transition:all .15s;
+                    ">Open Babel</button>
+                    <button id="p2p_engine_mgltools_btn" onclick="_p2pSetEngine('mgltools')" style="
+                        padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer;border:none;
+                        background:#111827;color:#475569;font-family:inherit;transition:all .15s;
+                        border-left:1px solid #1e293b;
+                    ">MGLTools</button>
+                </div>
+                <div id="p2p_engine_hint" style="font-size:11px;color:#334155;margin-top:6px;">
+                    Open Babel: fast, no extra install. Gasteiger charges + automatic H.
+                </div>
+            </div>
+
             <!-- File drop zone -->
             <div id="p2p_dropzone" onclick="document.getElementById('p2p_file_input').click()" style="
                 border:2px dashed #1e3a2a;border-radius:14px;padding:32px 20px;
@@ -74,7 +93,7 @@
                 <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
                     Output Directory <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#334155;">(optional — defaults to temp)</span>
                 </div>
-                <input id="p2p_out_dir" type="text" placeholder="./data/docking/outputs"
+                <input id="p2p_out_dir" type="text" placeholder="/path/to/writable/dir"
                     style="width:100%;box-sizing:border-box;
                            font-family:'Courier New',monospace;font-size:12px;
                            background:#0a0f1a;border:1px solid #1e293b;border-radius:8px;

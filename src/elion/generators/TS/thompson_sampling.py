@@ -15,6 +15,43 @@ from ts_logger import get_logger
 from ts_utils import read_reagents_csv
 from evaluators import DBEvaluator
 
+# ── PROBE2 DEBUG FILE LOGGING ─────────────────────────────────────────────────
+# Writes timing/progress to a file in the debug dir, independent of the browser
+# (ts_worker.js filters unrecognized stdout lines). tail -f this to verify the
+# stdout-volume fix holds past iter 4000. This logging is CHEAP (one short line
+# every 25 iters) and writes to a SEPARATE file, so it does NOT feed the SSE
+# pipe and cannot itself cause the backpressure we're fixing.
+import os as _os_probe, sys as _sys_probe, time as _time_probe
+_PROBE2_LOG_DIR = "/home/huangzihang/repos/elion/src/visualizer/debug"
+_PROBE2_LOG_PATH = _os_probe.path.join(_PROBE2_LOG_DIR, "probe2.log")
+_probe2_fh = None
+def _probe2_open_log():
+    global _probe2_fh, _PROBE2_LOG_PATH
+    try:
+        _os_probe.makedirs(_PROBE2_LOG_DIR, exist_ok=True)
+        _probe2_fh = open(_PROBE2_LOG_PATH, "a", buffering=1)
+    except Exception:
+        try:
+            _PROBE2_LOG_PATH = "/tmp/probe2.log"
+            _probe2_fh = open(_PROBE2_LOG_PATH, "a", buffering=1)
+        except Exception:
+            _probe2_fh = None
+    return _probe2_fh
+def _probe2_log(msg):
+    global _probe2_fh
+    if _probe2_fh is None:
+        _probe2_open_log()
+    if _probe2_fh is not None:
+        try:
+            _probe2_fh.write(f"[{_time_probe.strftime('%H:%M:%S')}] {msg}\n")
+            _probe2_fh.flush()
+        except Exception:
+            pass
+_probe2_open_log()
+_probe2_log(f"[PROBE2-IMPORT] thompson_sampling (LEAN FIX) imported from: {__file__} "
+            f"| log -> {_PROBE2_LOG_PATH}")
+# ──────────────────────────────────────────────────────────────────────────────
+
 
 class ThompsonSampler:
     def __init__(self, mode="maximize", db_name="SYNPLE", log_filename: Optional[str] = None,
@@ -290,6 +327,54 @@ class ThompsonSampler:
         :param num_warmup_trials: number of random partner trials per reagent
         :param eval_batch_size: max molecules per evaluate_batch() call (tune to GPU memory)
         """
+        # ── Checkpoint restore: skip warmup if TS_WARMUP_CHECKPOINT is set ────
+        import os as _os, json as _json
+        _ckpt_path = _os.environ.get("TS_WARMUP_CHECKPOINT", "")
+        if _ckpt_path and _os.path.isfile(_ckpt_path):
+            try:
+                with open(_ckpt_path) as _f:
+                    _ckpt = _json.load(_f)
+                _prior_mean = _ckpt["prior_mean"]
+                _prior_std  = _ckpt["prior_std"]
+                _known_var  = _prior_std ** 2
+                _beliefs = {}
+                for _comp_list in _ckpt.get("components", {}).values():
+                    for _r in _comp_list:
+                        _beliefs[_r["reagent_name"]] = _r
+                self.logger.info(
+                    "[checkpoint] Loading warmup checkpoint: %s "
+                    "(prior_mean=%.4f, prior_std=%.4f, %d reagents)",
+                    _ckpt_path, _prior_mean, _prior_std, len(_beliefs))
+                restored = skipped = 0
+                for reagent_list in self.reagent_lists:
+                    for reagent in reagent_list:
+                        belief = _beliefs.get(reagent.reagent_name)
+                        if belief:
+                            reagent.current_phase  = "search"
+                            reagent.current_mean   = belief["current_mean"]
+                            reagent.current_std    = belief["current_std"]
+                            reagent.known_var      = belief.get("known_var") or _known_var
+                            reagent.num_scores     = belief["num_scores"]
+                            reagent.initial_scores = []
+                            restored += 1
+                        else:
+                            reagent.current_phase  = "search"
+                            reagent.current_mean   = _prior_mean
+                            reagent.current_std    = _prior_std
+                            reagent.known_var      = _known_var
+                            reagent.num_scores     = 0
+                            reagent.initial_scores = []
+                            skipped += 1
+                self._warmup_std = _prior_std
+                self.logger.info(
+                    "[checkpoint] Restored %d reagents from checkpoint, %d set to prior. "
+                    "Skipping warmup phase.", restored, skipped)
+                return [[_prior_mean, "checkpoint", "checkpoint"]]
+            except Exception as _e:
+                self.logger.warning(
+                    "[checkpoint] Failed to load checkpoint %s: %s — running warmup normally",
+                    _ckpt_path, _e)
+        # ── End checkpoint restore ─────────────────────────────────────────────
         idx_list = list(range(len(self.reagent_lists)))
         reagent_count_list = [len(x) for x in self.reagent_lists]
         warmup_results = []
@@ -403,7 +488,18 @@ class ThompsonSampler:
         pending_batch: list[tuple[list, float]] = []
         log_batch: list[tuple[int, float, str, str]] = []  # (iter, score, smiles, name)
 
+        # PROBE2 timing (writes to the debug file only — see _probe2_log)
+        _t_select = 0.0
+        _t_score  = 0.0
+        _t_flush  = 0.0
+        _t_win    = _time_probe.perf_counter()
+        _probe_last_i = 0
+        _probe2_log(f"[PROBE2-ENTER] search() num_cycles={num_cycles} batch_size={batch_size} "
+                    f"debug_on={self.logger.isEnabledFor(logging.DEBUG)} "
+                    f"reagent_sizes={[len(r) for r in self.reagent_lists]}")
+
         for i in tqdm(range(0, num_cycles), desc="Cycle", disable=self.hide_progress):
+            _sel_t0 = _time_probe.perf_counter()
             selected_reagents = [DisallowTracker.Empty] * len(self.reagent_lists)
 
             for cycle_id in random.sample(range(0, len(self.reagent_lists)), len(self.reagent_lists)):
@@ -425,7 +521,7 @@ class ThompsonSampler:
 
                 winner_idx = self.pick_function(choice_row)
 
-                # Log winner + top-5 competitors (by sampled score) for this cycle
+                # Log winner for this cycle (parsed by the UI at ts_worker.js)
                 self.logger.debug(
                     'winner | cycle_id=%d | reagent=%s | '
                     'sampled=%.6f | mu=%.6f | std=%.6f | num_scores=%d',
@@ -436,36 +532,23 @@ class ThompsonSampler:
                     reagent_list[winner_idx].current_std,
                     reagent_list[winner_idx].num_scores)
 
-                # Top-5 runners-up (excluding winner and nan/disallowed)
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    valid_mask = ~np.isnan(choice_row)
-                    valid_mask[winner_idx] = False  # exclude winner
-                    valid_indices = np.where(valid_mask)[0]
-                    if len(valid_indices) > 0:
-                        top_n = min(5, len(valid_indices))
-                        # argsort descending on sampled scores for valid candidates
-                        runner_up_indices = valid_indices[
-                            np.argsort(-choice_row[valid_indices])[:top_n]]
-                        self.logger.debug(
-                            'competitors (cycle_id=%d) — top %d by sampled score:',
-                            cycle_id, top_n)
-                        for rank, idx in enumerate(runner_up_indices, 1):
-                            self.logger.debug(
-                                '  #%d | reagent=%s | sampled=%.6f | '
-                                'mu=%.6f | std=%.6f | num_scores=%d',
-                                rank,
-                                reagent_list[idx].reagent_name,
-                                choice_row[idx],
-                                reagent_list[idx].current_mean,
-                                reagent_list[idx].current_std,
-                                reagent_list[idx].num_scores)
+                # NOTE: the per-cycle "top-5 competitors" debug block was removed.
+                # It emitted ~5 lines/cycle (~10 lines/iter) that the dashboard
+                # never parses. Under DEBUG that stdout volume backs up the output
+                # pipe once the browser consumer lags (~iter 4000), blocking
+                # elion's write() and stalling the run. Winner/post-update/mu-range
+                # lines the UI DOES parse are kept.
 
                 selected_reagents[cycle_id] = winner_idx
 
+            _t_select += _time_probe.perf_counter() - _sel_t0
+
+            _score_t0 = _time_probe.perf_counter()
             self._disallow_tracker.update(selected_reagents)
             smiles, name, score, sel_reagent_objs = self.evaluate(selected_reagents)
+            _t_score += _time_probe.perf_counter() - _score_t0
 
-            self.logger.debug('iter=%d | score=%s | smiles=%s | name=%s', i, score, smiles, name)
+            # (removed per-iter 'iter=N | score=' debug line — not parsed by the UI)
 
             if np.isfinite(score):
                 out_list.append([score, smiles, name])
@@ -475,7 +558,9 @@ class ThompsonSampler:
             # Flush scores to reagents as a batch (Bayesian update frequency)
             if len(pending_batch) >= batch_size or i == num_cycles - 1:
                 if pending_batch:
+                    _flush_t0 = _time_probe.perf_counter()
                     self._flush_score_batch(pending_batch)
+                    _t_flush += _time_probe.perf_counter() - _flush_t0
                     for sel_r_objs, _ in pending_batch:
                         for comp_idx, reagent_idx in enumerate(selected_reagents):
                             r = self.reagent_lists[comp_idx][reagent_idx]
@@ -485,21 +570,30 @@ class ThompsonSampler:
                                 r.current_mean, r.current_std, r.num_scores)
                     pending_batch = []
 
-            # Log molecules as a batch (log readability — controlled by log_batch_size)
+            # Batch molecule logging removed (was ~1 debug line per molecule,
+            # not parsed by the UI — pure stdout volume that backs up the pipe).
             if len(log_batch) >= log_batch_size or i == num_cycles - 1:
                 if log_batch:
-                    self.logger.debug(
-                        '=== search batch [iter %d-%d] | %d molecules ===',
-                        log_batch[0][0], log_batch[-1][0], len(log_batch))
-                    for b_iter, b_score, b_smiles, b_name in log_batch:
-                        self.logger.debug(
-                            '  iter=%d | score=%.6f | smiles=%s | name=%s',
-                            b_iter, b_score, b_smiles, b_name)
                     log_batch = []
 
             if i % 100 == 0 and out_list:
                 top_score, top_smiles, top_name = self._top_func(out_list)
                 self.logger.info('Iteration: %d | max score: %.6f | smiles: %s | name: %s',
                                  i, top_score, top_smiles, top_name)
+
+            # ── PROBE2 timing to the debug file (every 25 iters) ──────────────
+            # If the volume fix worked, these it/s stay flat past iter 4000.
+            if i > 0 and i % 25 == 0:
+                _dt = _time_probe.perf_counter() - _t_win
+                _n = i - _probe_last_i
+                _itps = _n / _dt if _dt > 0 else 0
+                _probe2_log(
+                    f"[PROBE2] iter={i} | {_itps:.1f} it/s | per-iter ms: "
+                    f"select={_t_select/_n*1000:.2f} "
+                    f"score={_t_score/_n*1000:.2f} "
+                    f"flush={_t_flush/_n*1000:.2f}")
+                _t_select = _t_score = _t_flush = 0.0
+                _t_win = _time_probe.perf_counter()
+                _probe_last_i = i
 
         return out_list

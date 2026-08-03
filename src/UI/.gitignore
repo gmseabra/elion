@@ -29,3 +29,21 @@ models/
 *.pt
 
 .DS_Store
+
+# ── pose generation / TS session / reasoning state (runtime, keep the dirs) ──
+data/pose/*
+!data/pose/.gitkeep
+!data/pose/*/
+data/pose/*/*
+!data/pose/*/.gitkeep
+data/ts/*
+!data/ts/.gitkeep
+!data/ts/*/
+data/ts/*/*
+!data/ts/*/.gitkeep
+data/reasoning/*
+!data/reasoning/.gitkeep
+data/elion_sessions.db
+
+# User data
+data/chembert

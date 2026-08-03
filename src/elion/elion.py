@@ -5,6 +5,35 @@
 # Here we will read this input file, and direct the calculations
 # accordingly.
 """
+# ── Import-path pin (added) ────────────────────────────────────────────────
+# The box has multiple copies of the `properties` package (e.g.
+# src/TS/properties and src/elion/properties). Only src/elion/properties has
+# the GPU-enabled ChemBERT. Pin THIS file's directory (src/elion) to the FRONT
+# of sys.path so `import properties...` and `from generators...` always resolve
+# to the copies that live next to this elion.py — making the imported ChemBERT
+# deterministic regardless of PYTHONPATH ordering.
+import os as _os, sys as _sys
+# Resolve this file's directory robustly. Under the TS wrapper, elion.py is run
+# via exec() with __file__='elion.py' (relative), so abspath() uses cwd — which
+# the launcher sets to src/elion. Guard all three cases.
+try:
+    _ELION_DIR = _os.path.dirname(_os.path.abspath(__file__))
+except Exception:
+    _ELION_DIR = ""
+# If that didn't yield a dir containing the properties package, fall back to cwd,
+# then to the canonical absolute path.
+if not _ELION_DIR or not _os.path.isdir(_os.path.join(_ELION_DIR, "properties")):
+    _cwd = _os.getcwd()
+    if _os.path.isdir(_os.path.join(_cwd, "properties")):
+        _ELION_DIR = _cwd
+    elif _os.path.isdir("/home/huangzihang/repos/elion/src/elion/properties"):
+        _ELION_DIR = "/home/huangzihang/repos/elion/src/elion"
+if _ELION_DIR:
+    if _ELION_DIR in _sys.path:
+        _sys.path.remove(_ELION_DIR)
+    _sys.path.insert(0, _ELION_DIR)
+    print(f"[ELION] sys.path pinned to: {_ELION_DIR}", flush=True)
+# ───────────────────────────────────────────────────────────────────────────
 import argparse
 from pathlib import Path
 
@@ -108,4 +137,3 @@ def main():
     
 if __name__ == '__main__':
     main()
-    

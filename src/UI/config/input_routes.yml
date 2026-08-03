@@ -110,6 +110,8 @@ vina:
 # ============================================================
 
 deepatom:
+  # Hard cap on a screening run before the route returns 504.
+  timeout_seconds: 1200
   # ── Script ────────────────────────────────────────────────────────────────
   script: "../deepatom/bin/predict_binding_affinity_v4_2_data_split_ZccE_elion.sh"
 
@@ -139,3 +141,43 @@ deepatom:
       test_type: "test"
       data_dir: "../elion/src/elion/properties/deepatom/data/ZccE"
       active: false
+# ═════════════════════════════════════════════════════════════════════════════
+# Pose Generation  (uiapp/routes/pose_routes.py)
+# ═════════════════════════════════════════════════════════════════════════════
+# SMILES → 3-D conformer + torsion tree (RDKit, server-side), with three scoring
+# backends. Every path below is repo-relative and absolutised by run.py at load;
+# override any of them with the UI_POSE_* environment variables in uiapp/config.py.
+#
+# The two scorer scripts live in the sibling elion checkout, so they are the one
+# genuinely-external pair here — leave them blank to disable that scorer rather
+# than pointing at a path that does not exist.
+pose:
+  # Seed molecule shown when the tool first opens.
+  default_smile: "CC(=O)Oc1ccccc1C(=O)O"
+
+  # Receptor + upload gallery roots (repo-relative; created on first write).
+  default_receptor_pdb: "data/pose/receptor/receptor.pdb"
+  default_upload_path:  "data/pose/uploads"
+  default_dir:          "data/pose"
+
+  # DeepAtom scorer — the consolidated single-pose driver in the elion tree.
+  # Blank disables the "deepatom" option in the Scorer dropdown.
+  default_script: ""
+
+  # GIGN scorer — graph-network pose scorer in the elion tree.
+  # Blank disables the "yupu_gign" option.
+  gign_script: ""
+  gign_model: ""                 # blank => the script's own default checkpoint
+  gign_conda_env: "elion_backend"
+  gign_pocket_cutoff: 5          # Angstrom. MUST be > 0 — 0 means "whole
+                                 # receptor", and the model's sum pooling makes
+                                 # that produce a physically impossible score.
+  gign_drop_water: true
+  gign_scratch: ""               # blank => a temp dir per invocation
+  gign_timeout_seconds: 1200
+
+  # Docking box drawn in the 3-D view. Matches vina.active_protein (8P0M).
+  box_center_x: -25.7
+  box_center_y: 0.22
+  box_center_z: 28.39
+  box_length: 20

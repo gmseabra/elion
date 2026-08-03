@@ -1,3 +1,12 @@
+<style>
+  /* The four sidebar sections share one scroll region. Declared here so it doesn't
+     inherit overflow/max-height from the global .side-panel rules. */
+  #vSideScrollA::-webkit-scrollbar        { width: 8px; }
+  #vSideScrollA::-webkit-scrollbar-track  { background: #020617; }
+  #vSideScrollA::-webkit-scrollbar-thumb  { background: #1e3a5f; border-radius: 4px; }
+  #vSideScrollA::-webkit-scrollbar-thumb:hover { background: #2b5286; }
+</style>
+
 <div id="vinaModal"
      onclick="if(event.target.id==='vinaModal')_adjHide()"
      class="hidden fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center">
@@ -22,13 +31,9 @@
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <!-- Ligand/Protein view toggle -->
-        <div class="flex rounded-xl border border-slate-700 overflow-hidden text-xs font-medium">
-          <button id="modeLigand" onclick="_setView('ligand')"
-                  class="px-4 py-1.5 border-r border-slate-700 bg-cyan-800 text-cyan-100">Ligand</button>
-          <button id="modeProtein" onclick="_setView('protein')"
-                  class="px-4 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800">🧪 Protein</button>
-        </div>
+        <!-- Docking assistant mini-chat toggle -->
+        <button id="vinaMiniBtn" onclick="_vinaMiniToggle()" title="Docking assistant chat"
+                style="padding:5px 9px;border-radius:8px;border:1px solid #164e63;background:#083344;color:#67e8f9;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;">💬</button>
         <button onclick="_vinaHide()"
                 class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white ml-2">✕</button>
       </div>
@@ -65,11 +70,19 @@
 
     <!-- ── Visualize row ── -->
     <div class="px-6 py-2.5 border-b border-slate-800 bg-slate-950 flex items-center gap-3 flex-shrink-0">
-      <span class="text-[10px] text-slate-500 flex-1">
-        Reads
-        <code class="text-cyan-400 text-[9px]">vina_non_cache.log</code>
-        · best pose · per-atom <code class="text-emerald-400 text-[9px]">this_e</code> = Σ pair_e
-      </span>
+      <!-- Editable docking box: center x/y/z + edge length. Drives the Grid Box overlay,
+           the dock command preview, and the vina_dock POST body (see _setGridBox in vina.js).
+           IDs are vina-prefixed to avoid colliding with the pose tool's poseCx/… inputs. -->
+      <div class="flex-1" style="pointer-events:auto;display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+        <span style="color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-size:9px;font-weight:600;">Box ctr</span>
+        <input id="vinaCx" type="number" step="0.5" onchange="_setGridBox()" title="docking box center x (Å)" style="width:52px;font-family:ui-monospace,monospace;font-size:10px;background:#0b1120;border:1px solid #1e293b;border-radius:5px;padding:1px 5px;color:#22d3ee;outline:none;text-align:right;">
+        <input id="vinaCy" type="number" step="0.5" onchange="_setGridBox()" title="docking box center y (Å)" style="width:52px;font-family:ui-monospace,monospace;font-size:10px;background:#0b1120;border:1px solid #1e293b;border-radius:5px;padding:1px 5px;color:#22d3ee;outline:none;text-align:right;">
+        <input id="vinaCz" type="number" step="0.5" onchange="_setGridBox()" title="docking box center z (Å)" style="width:52px;font-family:ui-monospace,monospace;font-size:10px;background:#0b1120;border:1px solid #1e293b;border-radius:5px;padding:1px 5px;color:#22d3ee;outline:none;text-align:right;">
+        <span style="color:#475569;font-size:9px;">Å</span>
+        <span style="color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-size:9px;font-weight:600;margin-left:3px;">len</span>
+        <input id="vinaLen" type="number" step="1" min="6" onchange="_setGridBox()" title="docking box edge length (Å)" style="width:52px;font-family:ui-monospace,monospace;font-size:10px;background:#0b1120;border:1px solid #1e293b;border-radius:5px;padding:1px 5px;color:#22d3ee;outline:none;text-align:right;">
+        <span style="color:#475569;font-size:9px;">Å</span>
+      </div>
       <!-- Grid box toggle -->
       <button id="gridBoxBtn" onclick="_toggleGridBox()"
               class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-400 hover:text-white font-semibold rounded-xl text-xs transition-all active:scale-95">
@@ -99,7 +112,15 @@
       </div>
 
       <!-- RIGHT: sidebar — exactly as Image 2 ── -->
-      <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:264px">
+      <div id="vSideA"
+           class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col min-h-0"
+           style="width:264px; height:100%;">
+
+        <!-- Single scroll region: score card + bar chart + scale + atom table scroll
+             together as one column. The status line below stays pinned. -->
+        <div id="vSideScrollA" class="flex-1 min-h-0"
+             style="overflow-y:auto; overflow-x:hidden;
+                    scrollbar-width:thin; scrollbar-color:#1e3a5f #020617;">
 
         <!-- Score (Image 2: "PREDICTED BINDING SCORE") -->
         <div class="px-4 pt-4 pb-3 border-b border-slate-800 flex-shrink-0">
@@ -108,6 +129,11 @@
             <div id="vScoreA" class="score-val score-neutral">—</div>
             <div id="vScoreANote" class="text-[10px] text-slate-500 mt-0.5">kcal/mol</div>
           </div>
+          <!-- Export best pose as PDB (downloads <ligand>_out.pdb) -->
+          <button id="vinaExportBtn" onclick="_vinaExportPdb()"
+                  class="w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-cyan-900 hover:bg-cyan-800 border border-cyan-700 text-cyan-300 rounded-lg text-[11px] font-semibold transition-colors active:scale-95">
+            ⬇ Export PDB
+          </button>
         </div>
 
         <!-- Bar chart — toggled between weight_a and Vina this_e -->
@@ -134,11 +160,13 @@
         </div>
 
         <!-- Atom table (Image 2: "ATOMS ↓ — CLICK TO LOCATE IN CHART + 3D") -->
-        <div id="vTableA" class="side-panel px-4 pb-3 flex-1 overflow-y-auto space-y-0.5 text-[11px] text-slate-400">
+        <div id="vTableA" class="px-4 pb-3 flex-shrink-0 space-y-0.5 text-[11px] text-slate-400">
           <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1 pt-2">
             Atoms ↓ — click to locate in chart + 3D
           </p>
         </div>
+
+        </div><!-- /#vSideScrollA -->
 
         <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
           <p id="vStatusA" class="text-[10px] text-slate-600 truncate">—</p>
@@ -181,10 +209,12 @@
 </div>
 
 
-<!-- ══ Voxel inspector panel ══════════════════════════════════════════════════ -->
+<!-- ══ Voxel inspector panel (contact list) ═══════════════════════════════════
+     Bottom-RIGHT so it clears the docking mini-chat. Populated when a ligand atom
+     is clicked in pick mode; each row drives a distance + pair_e breakdown. -->
 <div id="voxelPanel"
      class="hidden fixed z-[10002] bg-slate-900 border border-cyan-800 rounded-2xl shadow-2xl overflow-hidden"
-     style="width:380px; bottom:32px; left:32px;">
+     style="width:380px; bottom:32px; right:32px;">
   <div class="px-4 py-2.5 border-b border-slate-700 flex items-center justify-between bg-slate-950">
     <div class="flex items-center gap-2">
       <span class="text-sm">🔬</span>

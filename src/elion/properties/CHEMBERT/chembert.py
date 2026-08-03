@@ -141,12 +141,45 @@ class chembert_model:
     """
     
     def __init__(self,model_state):
-        # Use GPU if available
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        
+        # ── Device selection with LOUD reporting ──────────────────────────────
+        # A silent `else 'cpu'` fallback previously hid the fact that ChemBERT
+        # was scoring on CPU even when a GPU was present. Print the decision so
+        # it is visible in the elion stdout / the TS log panel. If CUDA is
+        # expected but unavailable, this banner is the first place to look.
+        _cuda_ok = torch.cuda.is_available()
+        device = torch.device('cuda:0' if _cuda_ok else 'cpu')
+        try:
+            _tver = torch.__version__
+            _cver = getattr(torch.version, 'cuda', None)
+            if _cuda_ok:
+                _gpu_name = torch.cuda.get_device_name(0)
+                print(f"[CHEMBERT] device=CUDA:0 ({_gpu_name}) | "
+                      f"torch {_tver} (cuda {_cver}) | GPU scoring ENABLED",
+                      flush=True)
+            else:
+                print(f"[CHEMBERT] device=CPU | torch {_tver} "
+                      f"(cuda {_cver}) | torch.cuda.is_available()=False — "
+                      f"GPU NOT used. If this box has a GPU, the interpreter "
+                      f"running elion likely has a CPU-only torch build.",
+                      flush=True)
+        except Exception as _e:
+            print(f"[CHEMBERT] device banner error: {_e}", flush=True)
+
+        # On CPU only, spread the transformer matmuls across all cores (otherwise
+        # torch may run single-threaded). No effect / not needed on CUDA.
+        if device.type == 'cpu':
+            try:
+                import os as _os
+                torch.set_num_threads(_os.cpu_count() or 1)
+            except Exception:
+                pass
+
         # prepare model
         Smiles_vocab = Vocab()
-        params = {'batch_size':16, 'dropout':0, 'learning_rate':0.00001,
+        # batch_size 16 -> 128: when scoring a wide candidate batch (batched
+        # Thompson Sampling / warmup) this becomes ONE large matmul that fills
+        # the GPU (or all CPU cores) instead of many tiny ones.
+        params = {'batch_size':128, 'dropout':0, 'learning_rate':0.00001,
                 'epoch':15, 'optimizer':'Adam', 'model':'Transformer'}
         model = Smiles_BERT(len(Smiles_vocab), max_len=256, nhead=16,
                             feature_dim=1024, feedforward_dim=1024, nlayers=8,
@@ -156,6 +189,7 @@ class chembert_model:
 
         model.load_state_dict(torch.load(model_state, map_location=device))
         model.to(device)
+        model.eval()  # inference mode (was missing)
 
         self.model = model
         self.device = device
@@ -173,7 +207,10 @@ class chembert_model:
         model  = self.model
         params = self.params
 
-        dataloader = DataLoader(dataset, batch_size=params['batch_size'], num_workers=4)
+        # num_workers=0: predict() builds a fresh DataLoader every call. With
+        # workers>0 torch spawns/joins subprocesses per call — overhead that
+        # dominates for the short, frequent calls TS makes. In-process is faster.
+        dataloader = DataLoader(dataset, batch_size=params['batch_size'], num_workers=0)
 
         predictions  = []
         with torch.no_grad():

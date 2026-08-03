@@ -1,4 +1,4 @@
-<!-- ══ DeepAtom Modal — integrated layout matching vina_modal.html ═══════════ -->
+<!-- ══ DeepAtom Modal — Single Ligand CNN Saliency Inspector ════════════════ -->
 <div id="deepatomModal"
      onclick="if(event.target.id==='deepatomModal')_deepatomHide()"
      class="hidden fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center">
@@ -7,7 +7,7 @@
        class="bg-slate-900 w-[97%] max-w-7xl h-[93vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
        style="animation:modalPop .25s cubic-bezier(.34,1.56,.64,1)">
 
-    <!-- ── Header (mirrors vina header) ── -->
+    <!-- ── Header ── -->
     <div class="px-6 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
       <div class="flex items-center gap-3">
         <span class="text-xl">⚛️</span>
@@ -17,8 +17,9 @@
           </h2>
           <p class="text-[10px] text-slate-400 mt-0.5">
             Atom colour &amp; size =
-            <code class="text-amber-300">importance</code> contribution ·
-            ∂(predicted pK) / ∂(input voxel) · L2 norm over 24 channels
+            <code class="text-amber-300">importance</code> ·
+            ‖∂(predicted pK)/∂(input voxel)‖₂ over 24 channels ·
+            <span class="text-slate-500">higher = more critical to CNN prediction</span>
           </p>
         </div>
       </div>
@@ -26,117 +27,58 @@
               class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white ml-2">✕</button>
     </div>
 
-    <!-- ── Data dir + Run bar (mirrors vina files bar) ── -->
+    <!-- ── Ligand input row (mirrors ChemBERT SMILES row) ── -->
     <div class="px-6 py-2 bg-slate-950 border-b border-slate-800 flex items-center gap-3 flex-shrink-0 flex-wrap">
+      <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Ligand</span>
+      <input id="daLigandPath" class="path-input" style="flex:1;min-width:320px;"
+             placeholder="e.g. BM-1-57  or  /path/to/ligand.atomtypes  (compound ID or full path)"
+             onkeydown="if(event.key==='Enter')_deepatomVisualize()">
+
       <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Data Dir</span>
-      <input id="deepatomDataDir" class="path-input" style="flex:1;min-width:320px;"
-             placeholder="../elion/src/elion/properties/deepatom/data/ZccE"
-             value="../elion/src/elion/properties/deepatom/data/ZccE"
-             oninput="_deepatomClearResults()"
-             onkeydown="if(event.key==='Enter')_deepatomRun()">
+      <input id="daDataDir" class="path-input" style="width:340px;"
+             placeholder="/path/to/deepatom/data/<dataset>"
+             value=""
+             onkeydown="if(event.key==='Enter')_deepatomVisualize()">
+
       <div class="flex-1"></div>
-      <button onclick="_deepatomRun()" id="deepatomRunBtn"
-              class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-900 hover:bg-amber-800 border border-amber-700 text-amber-300 rounded-lg text-[10px] font-semibold transition-colors whitespace-nowrap">
-        <span id="deepatomRunIcon">⚡</span> Run Virtual Screening
+      <button id="daMakeAtBtn" onclick="_deepatomMakeAtomtypes()"
+              class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 font-semibold rounded-xl text-xs transition-all active:scale-95"
+              title="Generate .atomtypes file from complex PDB for this compound">
+        <span id="daMakeAtIcon">🧬</span> Make Atomtypes
+      </button>
+      <button id="daVizBtn" onclick="_deepatomVisualize()"
+              class="flex-shrink-0 flex items-center gap-1.5 px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-xl text-xs transition-all active:scale-95">
+        ⚡ Visualize
       </button>
     </div>
 
-    <!-- ── View toggle row (mirrors vina visualize row) ── -->
+    <!-- ── Info row (mirrors vina "Reads vina_non_cache.log…" row) ── -->
     <div class="px-6 py-2.5 border-b border-slate-800 bg-slate-950 flex items-center gap-3 flex-shrink-0">
-      <span id="daViewHint" class="text-[10px] text-slate-500 flex-1">
-        Confirm data dir and click
-        <code class="text-amber-400 text-[9px]">⚡ Run Virtual Screening</code>
-        · then click any compound row to view its
-        <code class="text-amber-300 text-[9px]">CNN saliency map</code>
+      <span class="text-[10px] text-slate-500 flex-1">
+        Reads <code class="text-amber-400 text-[9px]">.atomtypes</code> file ·
+        builds 32³ voxel grid · runs
+        <code class="text-amber-300 text-[9px]">ShuffleNetV3 × 2.0</code> forward+backward ·
+        per-atom <code class="text-amber-300 text-[9px]">importance</code> = ‖∂pK/∂voxel‖₂
       </span>
       <div id="daSpinnerBar" class="hidden spinner-ring flex-shrink-0"
            style="width:14px;height:14px;border-width:2px;border-color:#f59e0b;border-top-color:transparent;"></div>
-      <!-- View toggle — hidden until results are loaded -->
-      <div id="daViewToggle" class="hidden flex rounded-xl border border-slate-700 overflow-hidden text-xs font-medium">
-        <button id="daViewResultsBtn" onclick="_deepatomSetView('results')"
-                class="px-4 py-1.5 border-r border-slate-700 bg-amber-900 text-amber-100">📋 Results</button>
-        <button id="daView3DBtn" onclick="_deepatomSetView('3d')"
-                class="px-4 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800">⚛️ Saliency 3D</button>
-      </div>
     </div>
 
-    <!-- ── Body: left panel + right sidebar ── -->
+    <!-- ── Body: 3D plot + right sidebar (identical to Vina layout) ── -->
     <div class="flex flex-1 min-h-0 overflow-hidden">
 
-      <!-- LEFT: switches between placeholder / results table / 3D plot -->
-      <div class="flex-1 flex flex-col min-h-0 overflow-hidden relative bg-[#05070f]">
-
-        <!-- Placeholder -->
-        <div id="daPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-500">
-          <div id="daPlaceholderSpinner" class="hidden spinner-ring"
-               style="width:34px;height:34px;border-color:#f59e0b;border-top-color:transparent;"></div>
-          <div id="daPlaceholderIcon" style="font-size:2.5rem;">⚛️</div>
-          <p id="daPlaceholderMsg" class="text-xs text-center">
-            Confirm the data directory above and click<br>
-            <strong class="text-amber-400">⚡ Run Virtual Screening</strong>
-          </p>
+      <!-- LEFT: 3D saliency plot -->
+      <div class="flex-1 relative bg-[#05070f]">
+        <div id="daSpinner" class="mol-spinner">
+          <div class="spinner-ring" style="border-color:#f59e0b;border-top-color:transparent;"></div>
+          <span id="daSpinnerMsg" class="text-xs text-slate-500">
+            Enter compound ID or path above, then click ⚡ Visualize
+          </span>
         </div>
+        <div id="daPlot" class="mol-plot"></div>
+      </div>
 
-        <!-- Results table (shown after run, hidden when 3D view active) -->
-        <div id="daResultsView" class="hidden absolute inset-0 flex flex-col min-h-0 overflow-hidden">
-          <!-- Summary stat cards -->
-          <div id="deepatomSummaryCards" class="hidden px-4 pt-3 pb-2 grid grid-cols-4 gap-3 flex-shrink-0 border-b border-slate-800">
-            <div style="background:#1c1200;border:1px solid #78350f;border-radius:10px;padding:10px 12px;">
-              <div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#78350f;margin-bottom:2px;">Best pK</div>
-              <div id="daStatBest" style="font-size:1.4rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#fbbf24;">—</div>
-            </div>
-            <div style="background:#052e1c;border:1px solid #065f46;border-radius:10px;padding:10px 12px;">
-              <div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#065f46;margin-bottom:2px;">Mean pK</div>
-              <div id="daStatMean" style="font-size:1.4rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#34d399;">—</div>
-            </div>
-            <div style="background:#083344;border:1px solid #0e4f63;border-radius:10px;padding:10px 12px;">
-              <div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#0e4f63;margin-bottom:2px;">Screened</div>
-              <div id="daStatCount" style="font-size:1.4rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#67e8f9;">—</div>
-            </div>
-            <div style="background:#1e1b4b;border:1px solid #312e81;border-radius:10px;padding:10px 12px;">
-              <div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#312e81;margin-bottom:2px;">Top 10%</div>
-              <div id="daStatTop10" style="font-size:1.4rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#818cf8;">—</div>
-            </div>
-          </div>
-          <!-- Table header + search -->
-          <div class="px-5 py-2 border-b border-slate-800 flex items-center gap-3 flex-shrink-0">
-            <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Results</span>
-            <input id="deepatomSearch" type="text" placeholder="Filter by complex ID…"
-                   style="font-size:11px;background:#0a0f1a;color:#e2e8f0;border:1px solid #1e293b;
-                          border-radius:6px;padding:4px 9px;outline:none;transition:border-color .2s;width:180px;"
-                   onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#1e293b'"
-                   oninput="_deepatomFilterTable()">
-            <span id="deepatomRowCount" class="text-[10px] text-slate-600 ml-auto"></span>
-          </div>
-          <!-- Scrollable table -->
-          <div class="flex-1 overflow-y-auto side-panel">
-            <table style="width:100%;border-collapse:collapse;font-size:11px;">
-              <thead style="position:sticky;top:0;background:#0a0f1a;z-index:2;">
-                <tr>
-                  <th onclick="_deepatomSort('rank')" style="padding:8px 12px;text-align:left;color:#475569;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;white-space:nowrap;" onmouseover="this.style.color='#f59e0b'" onmouseout="this.style.color='#475569'"># <span id="daSortRank">↕</span></th>
-                  <th onclick="_deepatomSort('id')"   style="padding:8px 12px;text-align:left;color:#475569;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;" onmouseover="this.style.color='#f59e0b'" onmouseout="this.style.color='#475569'">Complex ID <span id="daSortId">↕</span></th>
-                  <th onclick="_deepatomSort('pred')" style="padding:8px 20px 8px 12px;text-align:right;color:#475569;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;white-space:nowrap;" onmouseover="this.style.color='#f59e0b'" onmouseout="this.style.color='#475569'">Predicted pK <span id="daSortPred">↓</span></th>
-                  <th onclick="_deepatomSort('exp')"  style="padding:8px 12px;text-align:right;color:#475569;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;white-space:nowrap;" onmouseover="this.style.color='#f59e0b'" onmouseout="this.style.color='#475569'">Exp. pK <span id="daSortExp">↕</span></th>
-                  <th style="padding:8px 12px;text-align:left;color:#475569;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;">Affinity Bar</th>
-                </tr>
-              </thead>
-              <tbody id="deepatomTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- 3D saliency plot (shown when compound clicked) -->
-        <div id="da3DView" class="hidden absolute inset-0">
-          <div id="daSpinner" class="mol-spinner">
-            <div class="spinner-ring" style="border-color:#f59e0b;border-top-color:transparent;"></div>
-            <span id="daSpinnerMsg" class="text-xs text-slate-500">Computing CNN saliency…</span>
-          </div>
-          <div id="daPlot" class="mol-plot"></div>
-        </div>
-
-      </div><!-- /left panel -->
-
-      <!-- RIGHT: sidebar (identical to vina right sidebar) -->
+      <!-- RIGHT: sidebar (mirrors Vina right sidebar exactly) -->
       <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 flex flex-col overflow-hidden" style="width:264px">
 
         <!-- Score card -->
@@ -148,11 +90,15 @@
           </div>
         </div>
 
-        <!-- Bar chart -->
+        <!-- Bar chart (IMPORTANCE · TOP 50) -->
         <div class="px-4 pt-3 pb-1 flex-shrink-0">
           <div class="flex items-center justify-between mb-1">
-            <p id="daBarLabel" class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Importance · top 50</p>
-            <div id="daCompoundPill" class="text-[9px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-500 truncate max-w-[100px]" title="">—</div>
+            <p id="daBarLabel" class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              IMPORTANCE · TOP 50
+            </p>
+            <div id="daCompoundPill"
+                 class="text-[9px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-500 truncate max-w-[100px]"
+                 title="">—</div>
           </div>
           <div id="daBar" style="height:150px"></div>
         </div>
@@ -161,7 +107,8 @@
         <div class="px-4 py-2 border-t border-slate-800 flex-shrink-0">
           <div class="flex items-center gap-2 text-[10px] text-slate-500">
             <span>Low</span>
-            <div style="flex:1;height:6px;border-radius:3px;background:linear-gradient(to right,#1e3a5f,#065f46,#f59e0b);"></div>
+            <div style="flex:1;height:6px;border-radius:3px;
+                        background:linear-gradient(to right,#1e3a5f,#065f46,#f59e0b);"></div>
             <span>High</span>
           </div>
           <p class="text-[10px] text-slate-600 mt-1">
@@ -169,10 +116,11 @@
           </p>
         </div>
 
-        <!-- Atom list -->
-        <div id="daTableA" class="side-panel px-4 pb-3 flex-1 overflow-y-auto space-y-0.5 text-[11px] text-slate-400">
+        <!-- Atom list (mirrors vTableA) -->
+        <div id="daTableA"
+             class="side-panel px-4 pb-3 flex-1 overflow-y-auto space-y-0.5 text-[11px] text-slate-400">
           <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1 pt-2">
-            Atoms ↓ — click to locate in 3D
+            Atoms ↓ — most favourable first · click to locate
           </p>
         </div>
 
@@ -180,16 +128,46 @@
           <p id="daStatusA" class="text-[10px] text-slate-600 truncate">—</p>
         </div>
       </div>
+
     </div><!-- /body -->
 
-    <!-- ── Status bar (mirrors vina status bar) ── -->
+    <!-- ── Status bar ── -->
     <div class="px-6 py-1.5 border-t border-slate-800 bg-slate-950 flex-shrink-0 flex items-center gap-2">
       <div id="daStatusSpinner" class="hidden spinner-ring"
            style="width:12px;height:12px;border-width:2px;border-color:#f59e0b;border-top-color:transparent;"></div>
       <p id="deepatomStatus" class="text-[10px] text-slate-600 flex-1 truncate">
-        Ready — confirm data dir and click ⚡ Run Virtual Screening.
+        Enter a compound ID (e.g. BM-1-57) or full path to .atomtypes file, then click ⚡ Visualize.
       </p>
     </div>
 
+  </div>
+</div>
+
+<!-- ── Floating terminal (reused from previous) ── -->
+<div id="daTerminal"
+     class="hidden fixed z-[10050] flex flex-col overflow-hidden rounded-xl shadow-2xl"
+     style="width:680px;height:220px;bottom:80px;left:140px;
+            background:#080c10;border:1px solid #1e293b;">
+  <div id="daTerminalBar" data-drag-handle="daTerminal"
+       style="padding:7px 12px;background:#0a0f18;border-bottom:1px solid #1e293b;
+              display:flex;align-items:center;gap:8px;cursor:grab;flex-shrink:0;user-select:none;">
+    <span style="width:11px;height:11px;border-radius:50%;background:#ef4444;display:inline-block;"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#f59e0b;display:inline-block;"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#22c55e;display:inline-block;"></span>
+    <span id="daTerminalCmd"
+          style="font-family:'Courier New',monospace;font-size:10px;color:#64748b;
+                 flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:4px;">
+      $ deepatom saliency …
+    </span>
+    <button onclick="document.getElementById('daTerminal').classList.add('hidden')"
+            style="font-size:13px;color:#334155;background:none;border:none;cursor:pointer;
+                   padding:2px 6px;" onmouseover="this.style.color='#94a3b8'"
+                   onmouseout="this.style.color='#334155'">✕</button>
+  </div>
+  <div id="daLogBody"
+       style="flex:1;overflow-y:auto;padding:8px 14px;font-family:'Courier New',monospace;
+              font-size:10px;line-height:1.6;color:#64748b;
+              scrollbar-width:thin;scrollbar-color:#1e3a5f #080c10;">
+    <span style="color:#334155;">Waiting for run…</span>
   </div>
 </div>

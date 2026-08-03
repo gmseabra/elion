@@ -1,0 +1,235 @@
+{# ===========================================================================
+   templates/_elion_head.html
+   Shared <head> INNER contents (CDN libs + fonts + base styles), extracted
+   verbatim from hub.html so embedded tool pages match the app's look exactly.
+   Use inside a <head> element:  <head>{% include '_elion_head.html' %}</head>
+   Wrapped in {% raw %} because the <style> block contains { } that must not be
+   parsed as Jinja. hub.html keeps its own inline head; you can later switch it
+   to include this partial too, to stay DRY.
+   =========================================================================== #}
+{% raw %}
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
+    <title>Elion · Drug Discovery Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .title-font { font-family: "Space Grotesk", sans-serif; }
+
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap');
+        body        { font-family: 'Inter', system-ui, sans-serif; }
+        .title-font { font-family: 'Space Grotesk', sans-serif; }
+
+        #adjModal { backdrop-filter: blur(14px); }
+
+        .mol-plot {
+            position: absolute; inset: 0;
+            opacity: 0; transition: opacity .3s;
+        }
+        .mol-spinner {
+            position: absolute; inset: 0; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+            gap: 12px; color: #475569; z-index: 5; background: #05070f;
+        }
+        .spinner-ring {
+            width: 34px; height: 34px;
+            border: 2px solid #22d3ee; border-top-color: transparent;
+            border-radius: 50%; animation: spin .8s linear infinite;
+        }
+        @keyframes spin     { to { transform: rotate(360deg); } }
+        @keyframes modalPop {
+            0%   { transform: scale(.95); opacity: 0; }
+            100% { transform: scale(1);   opacity: 1; }
+        }
+
+        .smiles-mono {
+            font-family: 'Courier New', monospace; font-size: 12px;
+            background: #0f172a; border: 1px solid #334155;
+            border-radius: 8px; padding: 7px 12px; color: #e2e8f0;
+            outline: none; width: 100%; transition: border-color .2s;
+        }
+        .smiles-mono:focus { border-color: #22d3ee; }
+
+        .path-input {
+            font-family: 'Courier New', monospace; font-size: 11px;
+            background: #0a0f1a; border: 1px solid #1e293b;
+            border-radius: 6px; padding: 5px 10px; color: #94a3b8;
+            outline: none; width: 100%; transition: border-color .2s;
+        }
+        .path-input:focus { border-color: #22d3ee; color: #e2e8f0; }
+
+        .cw-bar {
+            height: 7px; border-radius: 4px; flex: 1;
+            background: linear-gradient(to right, #3b4cc0, #dde1ee, #b40426);
+        }
+
+        /* model tag pill */
+        .tag-finetuned  { background: #064e3b; color: #6ee7b7; border: 1px solid #065f46; }
+        .tag-pretrained { background: #1e1b4b; color: #a5b4fc; border: 1px solid #312e81; }
+        .tag-none       { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+
+        /* mode toggle */
+        .mode-btn { transition: background .15s, color .15s, border-color .15s; }
+        .mode-btn.active { background: #0e7490; color: #ecfeff; border-color: #22d3ee; }
+
+        /* score card */
+        .score-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 10px 14px; }
+        .score-val  { font-size: 1.3rem; font-weight: 700; font-family: 'Space Grotesk', sans-serif; }
+        .score-better  { color: #4ade80; }
+        .score-worse   { color: #f87171; }
+        .score-neutral { color: #94a3b8; }
+        .score-na      { color: #475569; font-style: italic; font-size: 0.85rem; }
+
+        .side-panel { scrollbar-width: thin; scrollbar-color: #22d3ee #1e293b; }
+
+        .compare-vs {
+            writing-mode: vertical-rl; text-orientation: mixed;
+            font-weight: 700; font-size: 11px; color: #475569; letter-spacing: .1em;
+        }
+
+        /* model selector bar */
+        #modelBar { border-bottom: 1px solid #1e293b; }
+        .preset-btn {
+            font-size: 11px; padding: 4px 12px; border-radius: 20px;
+            border: 1px solid #334155; background: transparent; color: #94a3b8;
+            cursor: pointer; transition: all .15s; white-space: nowrap;
+        }
+        .preset-btn:hover  { border-color: #22d3ee; color: #ecfeff; }
+        .preset-btn.active { background: #0e7490; color: #ecfeff; border-color: #22d3ee; }
+        .preset-btn.pretrained-active { background: #1e1b4b; color: #a5b4fc; border-color: #4f46e5; }
+
+        /* ── Qwen chat (Claude-style) ── */
+        #chatInputBox {
+            background: #111827; border: 1px solid #1e293b;
+            border-radius: 16px; padding: 16px 20px;
+            box-shadow: 0 2px 20px rgba(0,0,0,.5);
+            display: flex; flex-direction: column; gap: 10px;
+            transition: border-color .2s;
+        }
+        #chatInputBox:focus-within,
+        #chatInputBoxSticky:focus-within { border-color: #22d3ee; }
+        #chatInputBoxSticky {
+            background: #111827; border: 1px solid #1e293b;
+            border-radius: 16px; padding: 16px 20px;
+            box-shadow: 0 2px 20px rgba(0,0,0,.5);
+            display: flex; flex-direction: column; gap: 10px;
+            transition: border-color .2s;
+        }
+        #chatInput, #chatInputSticky2 {
+            resize: none; font-size: 15px; border: none; outline: none;
+            background: transparent; color: #e2e8f0; font-family: inherit;
+            min-height: 24px; max-height: 160px; overflow-y: auto;
+            scrollbar-width: thin; line-height: 1.5; width: 100%;
+        }
+        #chatInput::placeholder,
+        #chatInputSticky2::placeholder { color: #4b5563; }
+        .cpill {
+            font-size:13px;padding:8px 16px;background:#111827;border:1px solid #1e293b;
+            border-radius:20px;cursor:pointer;color:#94a3b8;font-weight:500;
+            transition:border-color .15s,color .15s;white-space:nowrap;
+        }
+        .cpill:hover { border-color:#22d3ee;color:#e2e8f0; }
+        .chat-bubble-user {
+            align-self:flex-end;max-width:min(680px,85%);
+            background:#1e293b;color:#f1f5f9;
+            border-radius:18px 18px 4px 18px;padding:12px 18px;font-size:15px;line-height:1.6;
+        }
+        .chat-bubble-ai {
+            align-self:flex-start;max-width:min(680px,90%);
+            color:#cbd5e1;font-size:15px;line-height:1.75;
+        }
+        .chat-bubble-ai strong { color:#7dd3fc; }
+        .chat-bubble-ai code { background:#1e293b;padding:2px 6px;border-radius:5px;font-size:13px; }
+        .typing-dot {
+            display:inline-block;width:7px;height:7px;background:#64748b;border-radius:50%;
+            animation:tdot 1.1s ease-in-out infinite;
+        }
+        .typing-dot:nth-child(2){animation-delay:.18s;}
+        .typing-dot:nth-child(3){animation-delay:.36s;}
+        @keyframes tdot{0%,60%,100%{opacity:.3;transform:scale(.8);}30%{opacity:1;transform:scale(1.1);}}
+
+        @keyframes goldPulse {
+            0%,100% { outline: 3px solid rgba(251,191,36,.4); outline-offset: 0px;
+                      box-shadow: 0 0 6px rgba(251,191,36,.3); }
+            50%     { outline: 3px solid rgba(251,191,36,1);   outline-offset: 4px;
+                      box-shadow: 0 0 24px rgba(251,191,36,.8), 0 0 40px rgba(251,191,36,.3); }
+        }
+        .btn-pulse-wait {
+            animation: goldPulse 1.1s ease-in-out infinite !important;
+            position: relative !important;
+            z-index: 2 !important;
+        }
+        /* Same gold pulse on input fields */
+        .input-pulse-wait {
+            animation: goldPulse 1.1s ease-in-out infinite !important;
+            outline: 3px solid #fbbf24 !important;
+        }
+    
+        /* ── Vina-specific ── */
+
+.mol-plot    { position:absolute;inset:0;opacity:0;transition:opacity .3s; }
+
+.mol-spinner {
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px;color:#475569;
+    z-index:5;background:#05070f;
+}
+
+.smiles-mono {
+    font-family:'Courier New',monospace;font-size:12px;
+    background:#0f172a;border:1px solid #334155;border-radius:8px;
+    padding:7px 12px;color:#e2e8f0;outline:none;width:100%;transition:border-color .2s;
+}
+
+.path-input {
+    font-family:'Courier New',monospace;font-size:11px;
+    background:#0a0f1a;border:1px solid #1e293b;border-radius:6px;
+    padding:5px 10px;color:#94a3b8;outline:none;width:100%;transition:border-color .2s;
+}
+
+.cw-bar { height:7px;border-radius:4px;flex:1;
+    background:linear-gradient(to right,#3b4cc0,#dde1ee,#b40426); }
+
+.pair-row   { cursor:pointer;border-radius:4px;border:1px solid transparent;transition:background .12s; }
+
+.pair-row:hover    { background:rgba(30,41,59,.5); }
+
+.pair-row.selected { background:#0e3a4a;border-color:#22d3ee; }
+
+.atom-row { cursor:pointer;border-radius:4px;border:1px solid transparent;transition:background .15s; }
+
+.atom-row:hover    { background:rgba(30,41,59,.5);border-color:#334155; }
+
+.atom-row.sel      { background:#0e3a4a;border-color:#22d3ee; }
+
+.typing-dot {
+    display: inline-block; width: 6px; height: 6px;
+    background: #22d3ee; border-radius: 50%; opacity: .3;
+    animation: tdot 1.1s ease-in-out infinite;
+}
+
+.cpill {
+    font-size:13px;padding:8px 16px;
+    background:#111827;border:1px solid #1e293b;border-radius:20px;
+    cursor:pointer;color:#94a3b8;font-weight:500;
+    transition:border-color .15s,color .15s;white-space:nowrap;
+}
+
+.btn-pulse-wait,
+.amber-pulse,
+.btn-highlight {
+    animation: goldPulse 1.1s ease-in-out infinite !important;
+    outline: 2px solid #fbbf24 !important;
+    position: relative; z-index: 1;
+}
+
+.btn-glow {
+    outline: 2px solid #f59e0b !important;
+    box-shadow: 0 0 10px rgba(251,191,36,.35) !important;
+}
+
+    </style>
+{% endraw %}

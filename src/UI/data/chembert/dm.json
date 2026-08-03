@@ -1,1 +1,0 @@
-{"model": "Transformer", "optimizer": "Adam", "batch_size": 64, "dropout": 0, "learning_rate": 1e-05, "best_step": 6, "best_score": 0.30057, "metric": "RMSE"}

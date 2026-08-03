@@ -96,6 +96,17 @@ def load_vina_config() -> dict:
         for key in ("default_receptor", "default_ligand"):
             if protein.get(key):
                 protein[key] = config.resolve(protein[key])
+    # Pose-generation config travels with the vina block so a single
+    # app.config["VINA"] lookup reaches both. Repo-relative paths are
+    # absolutised here exactly like the vina ones.
+    pose = cfg.get("pose", {}) or {}
+    for key in ("default_receptor_pdb", "default_upload_path", "default_dir",
+                "default_script", "gign_script", "gign_model", "gign_scratch"):
+        if pose.get(key):
+            pose[key] = config.resolve(pose[key])
+    if pose:
+        vina["pose"] = pose
+
     return vina
 
 
@@ -106,9 +117,20 @@ print("=== Elion UI Platform ===")
 print(f"  Repo root : {REPO_ROOT}")
 print(f"  Templates : {config.TEMPLATES_DIR}")
 print(f"  Vina bin  : {app.config['VINA'].get('bin', '(not set)')}")
-print("  http://0.0.0.0:5000/")
-print("  http://0.0.0.0:5000/attention_visualization/")
-print("  http://0.0.0.0:5000/vina_visualization/")
+# The TS routes answer HTTP 404 when this file is missing, which in the browser
+# is indistinguishable from an unregistered route. Say it once, at boot.
+if config.ELION_FOUND:
+    print(f"  Elion     : {config.ELION_CWD}")
+else:
+    print(f"  Elion     : NOT FOUND — looked for {config.ELION_YML_PATH}")
+    print("              Thompson Sampling will answer 404 until ELION_CWD points")
+    print(f"              at the directory containing {config.ELION_YML}.")
+_HOST, _PORT = config.UI_HOST, config.UI_PORT
+_SHOWN = "localhost" if _HOST in ("0.0.0.0", "::") else _HOST
+print(f"  Bind      : {_HOST}:{_PORT}  (port from {config.UI_BIND_SOURCE})")
+print(f"  http://{_SHOWN}:{_PORT}/")
+print(f"  http://{_SHOWN}:{_PORT}/attention_visualization/")
+print(f"  http://{_SHOWN}:{_PORT}/vina_visualization/")
 
 # ── AutoLearn file log ───────────────────────────────────────────────────────
 import logging  # noqa: E402
@@ -132,6 +154,8 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Elion UI Platform on http://0.0.0.0:5000")
+    print(f"🚀 Starting Elion UI Platform on http://{_HOST}:{_PORT}")
     print(f"📝 AutoLearn log → {config.AUTOLEARN_LOG_PATH}")
-    app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)
+    # Host/port come from $UI_HOST / $UI_PORT, then `visualizer.host` /
+    # `visualizer.port` in the engine's input_TS.yml, then 0.0.0.0:5000.
+    app.run(host=_HOST, port=_PORT, debug=True, threaded=True)

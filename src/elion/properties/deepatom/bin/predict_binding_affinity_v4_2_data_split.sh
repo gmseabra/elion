@@ -51,9 +51,9 @@ fi
 start_whole=$(date +%s)
 
 #DRUG_ROOT_DIR="${HOME}/DEEP_MODEL_temp"
-DRUG_ROOT_DIR="/blue/lic/$USER/repos/deepatom/DEEP_MODEL_temp.$$"
+DRUG_ROOT_DIR="/home/$USER/repos/elion/src/elion/properties/deepatom/DEEP_MODEL_temp.$$"
 #SCRIPTS_DIR="/usr/local/deepatom/model_split_data"
-SCRIPTS_DIR="/blue/lic/huangzihang/repos/deepatom/model_split_data"
+SCRIPTS_DIR="/home/huangzihang/repos/elion/src/elion/properties/deepatom/model_split_data"
 PRE_DIR="${SCRIPTS_DIR}/00_preprocess"
 GEN_DIR="${SCRIPTS_DIR}/01_generate_channels"
 PRED_DIR="${SCRIPTS_DIR}/02_pytorch"

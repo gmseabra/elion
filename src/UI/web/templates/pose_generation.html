@@ -1,0 +1,1922 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pose Generation — preview</title>
+<script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{font-family:'Inter',system-ui,sans-serif;background:#0a0e17;margin:0;min-height:100vh;}.title-font{font-family:'Space Grotesk',sans-serif;}
+.path-input{font-family:'Courier New',monospace;font-size:11px;background:#0a0f1a;border:1px solid #1e293b;border-radius:6px;padding:5px 10px;color:#94a3b8;outline:none;transition:border-color .2s;}.path-input:focus{border-color:#22d3ee;color:#e2e8f0;}
+@keyframes modalPop{0%{transform:scale(.95);opacity:0}100%{transform:scale(1);opacity:1}}
+.launch{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#475569;}.launch button{margin-top:14px;padding:12px 20px;border-radius:12px;border:1px solid #0e4f63;background:#083344;color:#67e8f9;font:600 14px Inter,sans-serif;cursor:pointer;}.launch p{font-size:11px;max-width:520px;margin:10px auto 0;line-height:1.5;}</style></head>
+<body><div class="launch"><div style="font-size:13px;">Pose Generation — Random Start · Ligand Minimization · Monte-Carlo + BFGS</div>
+<button onclick="PoseGen.open()">⬡ Open Pose Generation</button>
+<p>In the Monte-Carlo stage, the <b>Scorer</b> dropdown picks the score: the fast surrogate (drives the live search) or <b>DeepAtom ΔG</b> (server CNN, scores the best pose on demand). Offline preview can't reach the DeepAtom endpoint — it will report it gracefully.</p></div>
+<!-- ══ Pose Generation Modal ═══════════════════════════════════════════════════ -->
+<div id="poseModal" onclick="if(event.target.id==='poseModal')PoseGen.close()"
+     class="hidden fixed inset-0 bg-black/85 z-[9998] flex items-center justify-center">
+  <div onclick="event.stopImmediatePropagation()"
+       class="bg-slate-900 w-[97%] max-w-7xl h-[94vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
+       style="animation:modalPop .25s cubic-bezier(.34,1.56,.64,1)">
+
+    <!-- Header -->
+    <div class="px-6 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span style="width:34px;height:34px;border-radius:10px;background:linear-gradient(150deg,#0e7490,#6d28d9);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-linejoin="round"><path d="M12 3.2 19.4 7.6v8.8L12 20.8 4.6 16.4V7.6L12 3.2z" stroke="#67e8f9" stroke-width="1.5"/><circle cx="12" cy="12" r="2.4" stroke="#c4b5fd" stroke-width="1.5"/></svg>
+        </span>
+        <div>
+          <h2 class="font-semibold text-white text-sm title-font leading-tight">Pose Generation — Random Start in the Docking Box</h2>
+          <p class="text-[10px] text-slate-400 mt-0.5">Ligand &amp; target → random initialization inside the search box · faithful to AutoDock Vina <span class="font-mono text-cyan-300">conf::randomize()</span></p>
+        </div>
+      </div>
+      <button onclick="PoseGen.close()" class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white flex-shrink-0">✕</button>
+    </div>
+
+    <!-- Input bar -->
+    <div class="px-6 py-2.5 bg-slate-950 border-b border-slate-800 flex-shrink-0" style="display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="flex-shrink:0;">Ligand SMILES</span>
+        <input id="poseSmiles" class="path-input" style="flex:1;min-width:220px;" spellcheck="false" value="CC(=O)Oc1ccccc1C(=O)O" onkeydown="if(event.key==='Enter')PoseGen.build()">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+          <button onclick="PoseGen.setPreset('CC(=O)Oc1ccccc1C(=O)O')" class="pose-chip">Aspirin</button>
+          <button onclick="PoseGen.setPreset('CC(C)Cc1ccc(cc1)C(C)C(=O)O')" class="pose-chip">Ibuprofen</button>
+          <button onclick="PoseGen.setPreset('CC(=O)Nc1ccc(O)cc1')" class="pose-chip">Paracetamol</button>
+          <button onclick="PoseGen.setPreset('Cn1cnc2c1c(=O)n(c(=O)n2C)C')" class="pose-chip">Caffeine</button>
+          <button onclick="PoseGen.setPreset('c1ccc(cc1)c1ccccc1')" class="pose-chip">Biphenyl</button>
+        </div>
+        <button id="poseBuildBtn" onclick="PoseGen.build()" style="padding:7px 16px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;">⌬ Build</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="flex-shrink:0;">Target protein</span>
+        <input id="posePdbId" class="path-input" style="width:120px;flex-shrink:0;" spellcheck="false" placeholder="PDB ID e.g. 1HSG" onkeydown="if(event.key==='Enter')PoseGen.fetchPdb()">
+        <button onclick="PoseGen.fetchPdb()" style="padding:6px 12px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#67e8f9;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;">Fetch from RCSB</button>
+        <button onclick="document.getElementById('posePdbFile').click()" style="padding:6px 12px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;">⤓ Upload .pdb</button>
+        <input id="posePdbFile" type="file" accept=".pdb,.ent,.txt" style="display:none;" onchange="PoseGen.loadPdbFile(this.files[0])">
+        <span id="poseProteinStatus" class="text-[11px] text-slate-600" style="flex:1;">No target loaded — docking box defaults to ligand frame.</span>
+      </div>
+      <div id="poseDerived" class="text-[11px] text-slate-400" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;"></div>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <!-- Stage bar -->
+      <div class="px-5 py-2 border-b border-slate-800 flex items-center gap-2 bg-slate-900/60 flex-shrink-0 flex-wrap">
+        <span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1">Stage</span>
+        <button id="poseStRandom" onclick="PoseGen.stage('random')" class="pose-stage">① Random Start</button>
+        <button id="poseStMin" onclick="PoseGen.stage('min')" class="pose-stage">② Ligand Minimization</button>
+        <button id="poseStMC" onclick="PoseGen.stage('mc')" class="pose-stage">③ Monte-Carlo + BFGS</button>
+        <span class="text-[10.5px] text-slate-600 ml-2" id="poseStageHint">Random initialization inside the search box.</span>
+      </div>
+      <div class="flex-1 min-h-0 flex overflow-hidden">
+        <div class="flex-1 bg-[#05070f] flex flex-col min-h-0 overflow-hidden">
+          <div class="flex items-center gap-2 px-5 py-2.5 border-b border-slate-800 flex-shrink-0 text-[11px] text-slate-400">
+            <span style="width:7px;height:7px;border-radius:50%;background:#22d3ee;box-shadow:0 0 8px #22d3ee;display:inline-block;flex-shrink:0;"></span>
+            <span id="poseViewTitle">Random placement inside the docking box</span> <span id="poseBoxLabel" class="font-mono text-slate-200 ml-1">20³ Å</span>
+          </div>
+          <div class="flex-1 min-h-0 relative">
+            <svg id="poseSvgBox" style="position:absolute;inset:0;width:100%;height:100%;"></svg>
+            <div id="poseBox3D" style="display:none;position:absolute;inset:0;"></div>
+            <div id="poseLegend3D" style="display:none;position:absolute;top:8px;left:10px;font-size:10px;font-family:ui-monospace,monospace;line-height:1.75;background:rgba(8,12,20,.72);border:1px solid #1e293b;border-radius:9px;padding:7px 10px;pointer-events:none;">
+              <div style="margin-bottom:2px;"><span style="color:#22c55e;">●</span> ligand&nbsp;&nbsp;<span style="color:#97a3b0;">●</span> protein&nbsp;<span style="color:#3b6cf6;">●</span>N <span style="color:#ef4444;">●</span>O</div>
+              <div><span style="color:#fde047;">┄┄</span> H-bond&nbsp;&nbsp;<span style="color:#d946ef;">┄┄</span> salt bridge&nbsp;&nbsp;<span style="color:#38bdf8;">┄┄</span> π–π</div>
+            </div>
+            <div id="poseProcPanel" style="display:none;position:absolute;top:8px;right:10px;width:208px;background:rgba(8,12,20,.85);border:1px solid #1e293b;border-radius:11px;padding:10px 12px;pointer-events:none;">
+              <div id="poseProcTitle" style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">Energy</div>
+              <div id="poseProcVal" style="font-family:ui-monospace,monospace;font-size:19px;font-weight:700;color:#34d399;line-height:1.1;margin-top:1px;">—</div>
+              <svg id="poseProcChart" viewBox="0 0 184 44" style="width:100%;height:44px;margin-top:5px;display:block;"></svg>
+              <div id="poseProcSub" style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;margin-top:2px;">—</div>
+            </div>
+            <button id="poseFsBtn" onclick="PoseGen.toggleFullscreen()" title="Fullscreen" style="position:absolute;top:8px;right:10px;z-index:6;pointer-events:auto;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-size:13px;line-height:1;cursor:pointer;">&#9974;</button>
+            <div id="poseBox3DHint" style="display:none;position:absolute;bottom:8px;left:10px;font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;pointer-events:none;"><div id="poseViewMenu" style="display:none;pointer-events:auto;margin-bottom:6px;min-width:174px;background:rgba(8,12,20,.94);border:1px solid #1e293b;border-radius:10px;padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.5);"><button id="poseSurfBtn" onclick="PoseGen.toggleSurface()" title="Solvent-excluded molecular surface: a 1.4 &#197; water probe rolled over the pocket atoms&#39; van der Waals spheres. Shows the SHAPE of the binding cavity, not the fold." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9677; Surface</button><button id="poseSSBtn" onclick="PoseGen.toggleSS()" title="Secondary structure via DSSP-style backbone H-bond assignment: &#945;-helix (i&#8594;i+4), &#946;-sheet (parallel / antiparallel bridges), loop. Red helix &#183; cyan sheet &#183; grey loop." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#12336; Secondary structure</button><button id="poseProtBtn" onclick="PoseGen.toggleProtein()" title="Show or hide the protein pocket atoms (sticks). The surface and secondary-structure overlays are independent of this." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #0e7490;background:rgba(34,211,238,.16);color:#67e8f9;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#11041; Protein atoms</button><div id="poseSSLegend" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;"><span style="color:#ef4444;">&#9644;</span> helix <b id="poseSSa" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#22d3ee;">&#9644;</span> sheet <b id="poseSSb" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#8ca0b3;">&#9644;</span> loop <b id="poseSSl" style="color:#e2e8f0;">0</b></div><div id="poseSurfNote" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;">SES &#183; 1.4 &#197; water probe</div></div><button id="poseViewToggle" onclick="PoseGen.toggleViewMenu()" title="View layers" style="pointer-events:auto;padding:4px 11px;border-radius:8px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9776; View</button></div>
+          </div>
+          <!-- Random controls -->
+          <div id="poseCtrlRandom" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:flex;">
+            <button onclick="PoseGen.init.shuffle()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">⟳ New random pose</button>
+            <button onclick="PoseGen.init.regen()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">Regenerate all seeds</button>
+            <div class="flex-1"></div>
+            <span class="text-[11px] text-slate-500">Exhaustiveness</span>
+            <div id="poseExhToggles" style="display:flex;gap:6px;">
+              <button data-ex="4" onclick="PoseGen.init.setEx(4)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">4</button>
+              <button data-ex="8" onclick="PoseGen.init.setEx(8)" style="padding:6px 11px;border-radius:9px;border:1px solid #22d3ee;background:rgba(34,211,238,.1);color:#22d3ee;font-size:11px;cursor:pointer;font-family:inherit;">8</button>
+              <button data-ex="16" onclick="PoseGen.init.setEx(16)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">16</button>
+            </div>
+          </div>
+          <!-- Minimization controls -->
+          <div id="poseCtrlMin" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:none;">
+            <button id="poseMinRunBtn" onclick="PoseGen.min.run()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">▶ Minimize</button>
+            <button onclick="PoseGen.min.reset()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">↺ Perturb &amp; reset</button>
+            <div class="flex-1"></div>
+            <span class="text-[10.5px] text-slate-500">steepest-descent on bond/angle/torsion strain · illustrative (MMFF runs server-side)</span>
+          </div>
+          <!-- Monte-Carlo controls -->
+          <div id="poseCtrlMC" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:none;">
+            <button id="poseMcRunBtn" onclick="PoseGen.mc.run()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">▶ Run search</button>
+            <button onclick="PoseGen.mc.step()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">Step</button>
+            <button onclick="PoseGen.mc.reset()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">↺ Reset</button>
+            <span class="text-[11px] text-slate-500 ml-1">Scorer</span>
+            <select id="poseMcScorer" onchange="PoseGen.mc.setScorer(this.value)" style="background:#0b1120;border:1px solid #1e293b;border-radius:9px;color:#cbd5e1;font-size:11px;padding:6px 8px;font-family:inherit;cursor:pointer;outline:none;">
+              <option value="surrogate">Surrogate · clash + restraint</option>
+              <option value="deepatom">DeepAtom ΔG (server CNN)</option>
+            </select>
+            <button id="poseDaScoreBtn" onclick="PoseGen.mc.scoreDeepAtom()" style="display:none;padding:6px 12px;border-radius:9px;border:1px solid #6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score best pose</button>
+            <div class="flex-1"></div>
+            <span class="text-[11px] text-slate-500">Temp</span>
+            <div id="poseMcTempToggles" style="display:flex;gap:6px;">
+              <button data-t="0.5" onclick="PoseGen.mc.setT(0.5)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">cold</button>
+              <button data-t="1.2" onclick="PoseGen.mc.setT(1.2)" style="padding:6px 11px;border-radius:9px;border:1px solid #22d3ee;background:rgba(34,211,238,.1);color:#22d3ee;font-size:11px;cursor:pointer;font-family:inherit;">warm</button>
+              <button data-t="2.5" onclick="PoseGen.mc.setT(2.5)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">hot</button>
+            </div>
+          </div>
+        </div>
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 overflow-y-auto" style="width:336px;">
+          <!-- Random sidebar -->
+          <div id="poseSideRandom" class="px-4 py-4" style="display:flex;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Stochastic initialization</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">Each run starts from a <b class="text-slate-200">random state</b> in the box; minimization then Monte-Carlo + BFGS refine it. <span class="font-mono text-[11px] text-cyan-300">conf::randomize()</span> draws:</p>
+            <div id="poseProteinCard"></div>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Current start state</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">seed</span><span id="poseCurSeed" style="color:#22d3ee;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">center (x,y,z)</span><span id="poseCurPos" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">quaternion</span><span id="poseCurQuat" style="color:#e2e8f0;font-size:10px;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">torsions</span><span id="poseCurTors" style="color:#e2e8f0;font-size:10px;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">contacts</span><span id="poseCurIx" style="color:#e2e8f0;font-size:10px;">—</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;"><p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="margin:0;">Independent runs</p><span class="text-[9px] px-2 py-0.5 rounded-full" style="background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);color:#34d399;">exhaustiveness</span></div>
+            <div id="poseSeedGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;"></div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Translation: uniform in box · Rotation: <b style="color:#a78bfa;">uniform random orientation</b> (Shoemake) · Torsions: uniform in [−π, π].</p>
+          </div>
+          <!-- Minimization sidebar -->
+          <div id="poseSideMin" class="px-4 py-4" style="display:none;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Ligand minimization</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">The embedded conformer is <b class="text-slate-200">relaxed</b> before docking — strained bonds, angles and torsions descend toward a local energy minimum. Hit <b class="text-cyan-300">Minimize</b> to watch the geometry settle.</p>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Relaxation</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">start strain</span><span id="poseMinEstart" style="color:#fb7185;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">current</span><span id="poseMinEcur" style="color:#34d399;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">Δ energy</span><span id="poseMinDelta" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">iteration</span><span id="poseMinIter" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">RMSD→min</span><span id="poseMinRmsd" style="color:#e2e8f0;">—</span></div>
+            </div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Illustrative steepest-descent on a harmonic bond/angle + periodic-torsion strain function. Production minimization uses MMFF94 in RDKit (server-side).</p>
+          </div>
+          <!-- Monte-Carlo sidebar -->
+          <div id="poseSideMC" class="px-4 py-4" style="display:none;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Monte-Carlo + BFGS</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">Vina's global search iterates: <b class="text-slate-200">random perturbation</b> → <b class="text-violet-300">BFGS</b> local optimization → <b class="text-slate-200">Metropolis</b> accept/reject, tracking the best pose. Lower score = better.</p>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Search trace</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">step</span><span id="poseMcStep" style="color:#22d3ee;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">current score</span><span id="poseMcScore" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">best score</span><span id="poseMcBest" style="color:#34d399;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">accepted</span><span id="poseMcAcc" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">temperature</span><span id="poseMcTempVal" style="color:#e2e8f0;">—</span></div>
+            </div>
+            <div id="poseDaCard" style="display:none;flex-direction:column;gap:0;background:#140d24;border:1px solid #3b2a6b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#a78bfa;margin:0 0 8px;">DeepAtom affinity · ShuffleNetV3</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(59,42,107,.5);"><span style="color:#7c6bae;">predicted pK</span><span id="poseDaPk" style="color:#c4b5fd;font-weight:700;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(59,42,107,.5);"><span style="color:#7c6bae;">ΔG (kcal/mol)</span><span id="poseDaDg" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#7c6bae;">status</span><span id="poseDaStatus" style="color:#94a3b8;font-size:10px;">idle</span></div>
+              <p style="font-size:10px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:8px 0 0;">Server-side CNN scores the <b>best</b> pose on demand (prep + grid + inference take seconds–minutes) — it does not drive the per-step search. pK = −ΔG/1.36.</p>
+            </div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Illustrative score = steric clash with the pocket + box-center restraint. Production scoring uses the Vina function on the GPU/CPU (server-side).</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+  .pose-chip{padding:5px 10px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .14s;}
+  .pose-chip:hover{border-color:#22d3ee;color:#67e8f9;}
+  .pose-stage{padding:5px 13px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .14s;}
+  .pose-stage:hover{border-color:#334a6b;color:#cbd5e1;}
+  .pose-stage.on{border-color:#0e4f63;background:rgba(34,211,238,.12);color:#67e8f9;}
+</style>
+<!-- ══ /Pose Generation Modal ═══════════════════════════════════════════════════ -->
+
+<script>
+/* ============================================================================
+   Pose-Gen engine — SMILES parsing, rotatable-bond perception, torsion tree,
+   2D layout, pose math, PDB parsing.  Pure (no DOM). Node-testable.
+   ============================================================================ */
+(function(root){
+  /* ---- vec math ---- */
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const nrm=a=>{const m=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/m,a[1]/m,a[2]/m];};
+  function matVec(M,v){return [M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]];}
+  function matMul(A,B){const C=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)C[i][j]+=A[i][k]*B[k][j];return C;}
+  function rotX(t){const c=Math.cos(t),s=Math.sin(t);return [[1,0,0],[0,c,-s],[0,s,c]];}
+  function rotY(t){const c=Math.cos(t),s=Math.sin(t);return [[c,0,s],[0,1,0],[-s,0,c]];}
+  function quatToMat(q){const a=q[0],b=q[1],c=q[2],d=q[3];
+    const aa=a*a,ab=a*b,ac=a*c,ad=a*d,bb=b*b,bc=b*c,bd=b*d,cc=c*c,cd=c*d,dd=d*d;
+    return [[aa+bb-cc-dd,2*(-ad+bc),2*(ac+bd)],[2*(ad+bc),aa-bb+cc-dd,2*(-ab+cd)],[2*(-ac+bd),2*(ab+cd),aa-bb-cc+dd]];}
+  function normQuat(q){const m=Math.hypot(q[0],q[1],q[2],q[3])||1;return [q[0]/m,q[1]/m,q[2]/m,q[3]/m];}
+  function eulerToQuat(rx,ry,rz){const cx=Math.cos(rx/2),sx=Math.sin(rx/2),cy=Math.cos(ry/2),sy=Math.sin(ry/2),cz=Math.cos(rz/2),sz=Math.sin(rz/2);
+    return normQuat([cx*cy*cz+sx*sy*sz,sx*cy*cz-cx*sy*sz,cx*sy*cz+sx*cy*sz,cx*cy*sz-sx*sy*cz]);}
+  function randomQuat(){const u1=Math.random(),u2=Math.random(),u3=Math.random();const s1=Math.sqrt(1-u1),s2=Math.sqrt(u1),t1=2*Math.PI*u2,t2=2*Math.PI*u3;
+    return [s2*Math.cos(t2),s1*Math.sin(t1),s1*Math.cos(t1),s2*Math.sin(t2)];}
+  function rotAxis(p,piv,k,th){const v=sub(p,piv),ct=Math.cos(th),st=Math.sin(th),kv=dot(k,v),kc=cross(k,v);
+    return [piv[0]+v[0]*ct+kc[0]*st+k[0]*kv*(1-ct),piv[1]+v[1]*ct+kc[1]*st+k[1]*kv*(1-ct),piv[2]+v[2]*ct+kc[2]*st+k[2]*kv*(1-ct)];}
+  function q2e(q){q=normQuat(q);const w=q[0],x=q[1],y=q[2],z=q[3];
+    const rx=Math.atan2(2*(w*x+y*z),1-2*(x*x+y*y));let sp=2*(w*y-z*x);sp=Math.max(-1,Math.min(1,sp));const ry=Math.asin(sp);
+    const rz=Math.atan2(2*(w*z+x*y),1-2*(y*y+z*z));return [rx,ry,rz];}
+
+  /* ---- element table ---- */
+  const ELEM={ C:{col:'#cbd5e1',r:9}, N:{col:'#60a5fa',r:9.5}, O:{col:'#fb7185',r:9.5},
+    S:{col:'#fbbf24',r:11}, P:{col:'#fb923c',r:11}, F:{col:'#86efac',r:8},
+    Cl:{col:'#86efac',r:10}, Br:{col:'#fca5a5',r:11}, I:{col:'#c4b5fd',r:12},
+    B:{col:'#fcd34d',r:9.5}, H:{col:'#e2e8f0',r:6}, '*':{col:'#f0abfc',r:9} };
+  function elInfo(e){return ELEM[e]||ELEM['*'];}
+
+  /* ---- SMILES parser (organic subset + brackets, rings, branches, aromatics) ---- */
+  const ORG2=['Cl','Br'];
+  function bondOrder(ch){return ch==='='?2:ch==='#'?3:ch===':'?4:1;}
+  function parseSMILES(smi){
+    const atoms=[], bonds=[];
+    let prev=-1, pend=null; const stack=[]; const ring={};
+    const addBond=(a,b,o)=>{ if(a===b)return; bonds.push({a,b,order:o}); };
+    const addAtom=(el,arom)=>{
+      const idx=atoms.length; atoms.push({el,arom:!!arom});
+      if(prev>=0){ const o = pend!=null?pend : ((atoms[prev].arom&&arom)?4:1); addBond(prev,idx,o); }
+      pend=null; prev=idx; return idx;
+    };
+    const doRing=(label)=>{
+      if(ring[label]==null){ ring[label]={atom:prev,bond:pend}; pend=null; }
+      else { const r=ring[label]; const o = pend!=null?pend : (r.bond!=null?r.bond : ((atoms[prev].arom&&atoms[r.atom].arom)?4:1));
+        addBond(r.atom,prev,o); ring[label]=null; pend=null; }
+    };
+    let i=0;
+    while(i<smi.length){
+      const ch=smi[i];
+      if(ch==='('){ stack.push(prev); i++; continue; }
+      if(ch===')'){ prev=stack.pop(); i++; continue; }
+      if(ch==='-'||ch==='='||ch==='#'||ch===':'||ch==='/'||ch==='\\'){ pend=bondOrder(ch); i++; continue; }
+      if(ch==='.'){ prev=-1; pend=null; i++; continue; }
+      if(ch==='%'){ const lab=parseInt(smi.substr(i+1,2),10); i+=3; doRing('%'+lab); continue; }
+      if(ch>='0'&&ch<='9'){ doRing(ch); i++; continue; }
+      if(ch==='['){
+        const j=smi.indexOf(']',i); const body=smi.slice(i+1,j);
+        const m=body.match(/^(\d*)([A-Z][a-z]?|se|as|[bcnops])/);
+        let el='*', arom=false;
+        if(m){ let sym=m[2]; arom=/^[bcnops]$|^se$|^as$/.test(sym); el = arom? (sym==='se'?'Se':sym==='as'?'As':sym.toUpperCase()) : sym; }
+        addAtom(el,arom); i=j+1; continue;
+      }
+      // organic subset
+      const two=smi.substr(i,2);
+      if(ORG2.indexOf(two)>=0){ addAtom(two,false); i+=2; continue; }
+      if(/[A-Z]/.test(ch)){ addAtom(ch,false); i++; continue; }
+      if(/[bcnops]/.test(ch)){ addAtom(ch.toUpperCase(),true); i++; continue; }
+      i++; // skip unknown (e.g. H inside? @, +, -, stray)
+    }
+    // keep only the largest connected component (ligand = one molecule)
+    return largestComponent(atoms,bonds);
+  }
+  function buildAdj(n,bonds){ const adj=Array.from({length:n},()=>[]); bonds.forEach((b,id)=>{ adj[b.a].push({to:b.b,id}); adj[b.b].push({to:b.a,id}); }); return adj; }
+  function largestComponent(atoms,bonds){
+    const n=atoms.length; if(!n) return {atoms,bonds};
+    const adj=buildAdj(n,bonds); const comp=new Array(n).fill(-1); let nc=0; const sizes=[];
+    for(let s=0;s<n;s++){ if(comp[s]>=0)continue; const q=[s]; comp[s]=nc; let cnt=0; while(q.length){const u=q.pop();cnt++;for(const e of adj[u])if(comp[e.to]<0){comp[e.to]=nc;q.push(e.to);}} sizes.push(cnt); nc++; }
+    if(nc===1) return {atoms,bonds};
+    let best=0; for(let c=1;c<nc;c++) if(sizes[c]>sizes[best]) best=c;
+    const keep=[]; const remap=new Array(n).fill(-1);
+    atoms.forEach((a,i)=>{ if(comp[i]===best){ remap[i]=keep.length; keep.push(a);} });
+    const kb=bonds.filter(b=>comp[b.a]===best).map(b=>({a:remap[b.a],b:remap[b.b],order:b.order}));
+    return {atoms:keep,bonds:kb};
+  }
+
+  /* ---- bridges (Tarjan) ---- */
+  function findBridges(n,adj){
+    const disc=new Array(n).fill(-1), low=new Array(n).fill(0), br={}; let t=0;
+    const st=[];
+    for(let s=0;s<n;s++){ if(disc[s]>=0)continue;
+      st.push({u:s,pe:-1,ix:0}); disc[s]=low[s]=t++;
+      while(st.length){ const fr=st[st.length-1]; const u=fr.u;
+        if(fr.ix<adj[u].length){ const e=adj[u][fr.ix++]; if(e.id===fr.pe)continue;
+          if(disc[e.to]<0){ disc[e.to]=low[e.to]=t++; st.push({u:e.to,pe:e.id,ix:0}); }
+          else low[u]=Math.min(low[u],disc[e.to]);
+        } else { st.pop(); if(st.length){ const p=st[st.length-1]; low[p.u]=Math.min(low[p.u],low[u]); if(low[u]>disc[p.u]) br[fr.pe]=true; } }
+      }
+    }
+    return br;
+  }
+
+  /* ---- rotatable-bond perception ---- */
+  function perceive(mol){
+    const {atoms,bonds}=mol; const n=atoms.length; const adj=buildAdj(n,bonds);
+    const deg=new Array(n).fill(0); bonds.forEach(b=>{deg[b.a]++;deg[b.b]++;});
+    const br=findBridges(n,adj);
+    // an aromatic-flagged bond that is a bridge cannot be in a ring → it is a single bond
+    const orders=bonds.map((b,id)=> (b.order===4 && br[id]) ? 1 : b.order );
+    // amide C–N where C has a double bond to O
+    const hasCarbonyl=(c)=>bonds.some((b,k)=>orders[k]===2 && (b.a===c||b.b===c) && atoms[(b.a===c?b.b:b.a)].el==='O');
+    const rot={};
+    bonds.forEach((b,id)=>{
+      if(orders[id]!==1) return;
+      if(!br[id]) return;
+      if(deg[b.a]<2||deg[b.b]<2) return;
+      const ea=atoms[b.a].el, eb=atoms[b.b].el;
+      // amide: C–N with carbonyl on the C
+      if((ea==='C'&&eb==='N'&&hasCarbonyl(b.a))||(eb==='C'&&ea==='N'&&hasCarbonyl(b.b))) return;
+      rot[id]=true;
+    });
+    return {deg,bridges:br,rotatable:rot,orders};
+  }
+
+  /* ---- ring detection (simple cycles among non-bridge bonds) for layout ---- */
+  function simpleRings(mol,bridges){
+    const {atoms,bonds}=mol; const n=atoms.length;
+    const radj=Array.from({length:n},()=>[]);
+    bonds.forEach((b,id)=>{ if(!bridges[id]){ radj[b.a].push(b.b); radj[b.b].push(b.a); } });
+    const seen=new Array(n).fill(false); const rings=[];
+    for(let s=0;s<n;s++){ if(seen[s]||radj[s].length===0)continue;
+      // BFS component
+      const q=[s], comp=[]; seen[s]=true;
+      while(q.length){ const u=q.pop(); comp.push(u); for(const v of radj[u]) if(!seen[v]){seen[v]=true;q.push(v);} }
+      // simple cycle iff every vertex has ring-degree 2
+      if(comp.every(v=>radj[v].length===2)){
+        // order around the cycle
+        const order=[comp[0]]; let prev=-1, cur=comp[0];
+        for(let k=0;k<comp.length-1;k++){ const nx=radj[cur].find(w=>w!==prev); prev=cur; cur=nx; order.push(cur); }
+        rings.push(order);
+      }
+    }
+    return rings;
+  }
+
+  /* ---- 2D layout: BFS tree init + ring polygon snap + force relax ---- */
+  function layout2D(mol,bridges){
+    const {atoms,bonds}=mol; const n=atoms.length; const L=1.4;
+    const adj=Array.from({length:n},()=>[]); bonds.forEach(b=>{adj[b.a].push(b.b);adj[b.b].push(b.a);});
+    const pos=Array.from({length:n},()=>[0,0]);
+    // BFS tree init
+    const placed=new Array(n).fill(false);
+    const ang=new Array(n).fill(0);
+    if(n>0){ const q=[0]; placed[0]=true; pos[0]=[0,0]; ang[0]=Math.PI/2;
+      while(q.length){ const u=q.shift(); const nb=adj[u].filter(v=>!placed[v]); let base=ang[u]+Math.PI;
+        const spread=Math.PI*2/3; nb.forEach((v,k)=>{ const a=base + (k-(nb.length-1)/2)*(spread/Math.max(1,nb.length));
+          pos[v]=[pos[u][0]+L*Math.cos(a), pos[u][1]+L*Math.sin(a)]; ang[v]=a; placed[v]=true; q.push(v); }); }
+    }
+    // ring polygon snap (overwrite ring atoms to a regular polygon at their centroid)
+    simpleRings(mol,bridges).forEach(ring=>{
+      const k=ring.length; const cx=ring.reduce((s,i)=>s+pos[i][0],0)/k, cy=ring.reduce((s,i)=>s+pos[i][1],0)/k;
+      const R=L/(2*Math.sin(Math.PI/k)); const a0=Math.atan2(pos[ring[0]][1]-cy,pos[ring[0]][0]-cx);
+      ring.forEach((idx,j)=>{ const a=a0 + j*2*Math.PI/k; pos[idx]=[cx+R*Math.cos(a), cy+R*Math.sin(a)]; });
+    });
+    // force relax (spring on bonds + repulsion) — light, to relieve overlaps
+    const bonded=new Set(bonds.map(b=>Math.min(b.a,b.b)+'_'+Math.max(b.a,b.b)));
+    for(let it=0;it<160;it++){ const f=Array.from({length:n},()=>[0,0]); const cool=1-it/200;
+      for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){ const dx=pos[i][0]-pos[j][0],dy=pos[i][1]-pos[j][1]; let d2=dx*dx+dy*dy; if(d2<1e-4)d2=1e-4; const d=Math.sqrt(d2);
+        const rep=0.55*L*L/d2; f[i][0]+=rep*dx/d; f[i][1]+=rep*dy/d; f[j][0]-=rep*dx/d; f[j][1]-=rep*dy/d; }
+      bonds.forEach(b=>{ const dx=pos[b.b][0]-pos[b.a][0],dy=pos[b.b][1]-pos[b.a][1]; const d=Math.hypot(dx,dy)||1e-4; const s=0.10*(d-L);
+        f[b.a][0]+=s*dx/d; f[b.a][1]+=s*dy/d; f[b.b][0]-=s*dx/d; f[b.b][1]-=s*dy/d; });
+      for(let i=0;i<n;i++){ const m=Math.hypot(f[i][0],f[i][1]); const cap=0.25*L; const sc=m>cap?cap/m:1; pos[i][0]+=f[i][0]*sc*cool; pos[i][1]+=f[i][1]*sc*cool; }
+    }
+    // center + scale so median bond length == L
+    const cx=pos.reduce((s,p)=>s+p[0],0)/Math.max(1,n), cy=pos.reduce((s,p)=>s+p[1],0)/Math.max(1,n);
+    const lens=bonds.map(b=>Math.hypot(pos[b.a][0]-pos[b.b][0],pos[b.a][1]-pos[b.b][1])).sort((x,y)=>x-y);
+    const med=lens.length?lens[Math.floor(lens.length/2)]:L; const sc=med>1e-3?L/med:1;
+    return pos.map(p=>[ (p[0]-cx)*sc, (p[1]-cy)*sc, 0 ]);
+  }
+
+  /* ---- torsion tree (generalized): rigid fragments → fragment tree from largest ---- */
+  function buildTree(mol,rotatable){
+    const {atoms,bonds}=mol; const n=atoms.length;
+    const radj=Array.from({length:n},()=>[]);
+    bonds.forEach((b,id)=>{ if(!rotatable[id]){ radj[b.a].push(b.b); radj[b.b].push(b.a); } });
+    const frag=new Array(n).fill(-1); const fragments=[];
+    for(let s=0;s<n;s++){ if(frag[s]>=0)continue; const fid=fragments.length; const q=[s]; frag[s]=fid; const comp=[];
+      while(q.length){ const u=q.pop(); comp.push(u); for(const v of radj[u]) if(frag[v]<0){frag[v]=fid;q.push(v);} } fragments.push(comp); }
+    let rootFrag=0; for(let i=1;i<fragments.length;i++) if(fragments[i].length>fragments[rootFrag].length) rootFrag=i;
+    // fragment adjacency via rotatable bonds
+    const fadj=Array.from({length:fragments.length},()=>[]);
+    const rotBonds=[]; bonds.forEach((b,id)=>{ if(rotatable[id]){ rotBonds.push({id,a:b.a,b:b.b}); fadj[frag[b.a]].push({to:frag[b.b],bond:{a:b.a,b:b.b}}); fadj[frag[b.b]].push({to:frag[b.a],bond:{a:b.b,b:b.a}}); } });
+    // BFS fragment tree from root; record parent
+    const par=new Array(fragments.length).fill(-1); const parBond=new Array(fragments.length).fill(null);
+    const vis=new Array(fragments.length).fill(false); const orderF=[]; const q=[rootFrag]; vis[rootFrag]=true;
+    while(q.length){ const u=q.shift(); orderF.push(u); for(const e of fadj[u]) if(!vis[e.to]){ vis[e.to]=true; par[e.to]=u; parBond[e.to]={from:e.bond.a,to:e.bond.b}; q.push(e.to); } }
+    // downstream atoms for a child fragment = all atoms in its fragment-subtree
+    function subtreeAtoms(childFrag){ const out=[]; const qq=[childFrag]; const seen=new Set([childFrag]);
+      while(qq.length){ const u=qq.pop(); out.push(...fragments[u]); for(const e of fadj[u]) if(!seen.has(e.to)&&e.to!==par[u]){ /*move away from root*/ }
+        // proper: traverse children only (those whose par is u)
+      }
+      return out; }
+    // build proper subtree via parent pointers
+    const childrenOf=Array.from({length:fragments.length},()=>[]);
+    for(let fcur=0;fcur<fragments.length;fcur++) if(par[fcur]>=0) childrenOf[par[fcur]].push(fcur);
+    function subtree(f){ const out=[]; const stk=[f]; while(stk.length){ const u=stk.pop(); out.push(...fragments[u]); for(const c of childrenOf[u]) stk.push(c);} return out; }
+    const TORS=[];
+    orderF.forEach(f=>{ if(par[f]<0)return; const pb=parBond[f]; // from in parent frag, to in child frag
+      TORS.push({ from:pb.from, to:pb.to, moves:subtree(f) }); });
+    return { ROOT:fragments[rootFrag].slice(), TORS, frag, fragCount:fragments.length };
+  }
+
+  /* ---- assemble a full ligand model from SMILES ---- */
+  function buildLigand(smi){
+    const mol=parseSMILES(smi);
+    if(!mol.atoms.length) return {ok:false,err:'No atoms parsed'};
+    if(mol.atoms.length>140) return {ok:false,err:'Too large for client preview ('+mol.atoms.length+' heavy atoms)'};
+    const per=perceive(mol);
+    const ref=layout2D(mol,per.bridges);
+    const tree=buildTree(mol,per.rotatable);
+    const rotIds=Object.keys(per.rotatable).map(Number);
+    // formula
+    const counts={}; mol.atoms.forEach(a=>counts[a.el]=(counts[a.el]||0)+1);
+    const order=['C','H','N','O','S','P','F','Cl','Br','I'];
+    let formula=''; order.forEach(e=>{ if(counts[e]) formula+=e+(counts[e]>1?counts[e]:''); });
+    Object.keys(counts).sort().forEach(e=>{ if(order.indexOf(e)<0) formula+=e+(counts[e]>1?counts[e]:''); });
+    // bond metadata: type + torsion index
+    const torsionOfBond={}; // bondId -> torsion index in TORS
+    // map each rotatable bond to its TORS entry (match by endpoints)
+    mol.bonds.forEach((b,id)=>{ if(per.rotatable[id]){ const ti=tree.TORS.findIndex(t=>(t.from===b.a&&t.to===b.b)||(t.from===b.b&&t.to===b.a)); torsionOfBond[id]=ti; } });
+    const BONDS=mol.bonds.map((b,id)=>({a:b.a,b:b.b,order:per.orders[id],
+      type: per.rotatable[id]?'rot':(per.bridges[id]?'rigid':'ring'),
+      ti: per.rotatable[id]?torsionOfBond[id]:-1 }));
+    const TINFO=tree.TORS.map((t,i)=>({ n: mol.atoms[t.from].el+'–'+mol.atoms[t.to].el, a:'A'+t.from+'–A'+t.to }));
+    return {ok:true, smiles:smi, atoms:mol.atoms.map(a=>a.el), arom:mol.atoms.map(a=>a.arom),
+      REF:ref, BONDS, ROOT:tree.ROOT, TORS:tree.TORS, TINFO, N:tree.TORS.length, formula,
+      counts };
+  }
+
+  /* ---- compute pose: torsions (parent-first) then quaternion rotation + translation ---- */
+  function computePose(L,quat,trans,thetas){
+    const c=L.REF.map(p=>p.slice());
+    L.TORS.forEach((t,i)=>{ const ang=thetas[i]||0; if(!ang)return; const k=nrm(sub(c[t.to],c[t.from])), piv=c[t.from];
+      t.moves.forEach(id=>{ if(id!==t.from) c[id]=rotAxis(c[id],piv,k,ang); }); });
+    const cen=L.ROOT.reduce((a,id)=>add(a,c[id]),[0,0,0]).map(x=>x/Math.max(1,L.ROOT.length));
+    const R=quatToMat(normQuat(quat));
+    return c.map(p=>add(add(matVec(R,sub(p,cen)),cen),trans));
+  }
+
+  /* ---- PDB parser ---- */
+  function parsePDB(text){
+    const ca=[], het=[], atoms=[]; const chains={}; const resset={}; let natoms=0;
+    let mn=[1e9,1e9,1e9], mx=[-1e9,-1e9,-1e9];
+    const TWO=['CL','BR','FE','ZN','MG','MN','SE','NA','CA','CU','NI','CO','HG','CD','K','I','F','P','S','B'];
+    function elemOf(ln,name,isHet){
+      let e=ln.slice(76,78).trim();
+      if(e){return e[0].toUpperCase()+e.slice(1).toLowerCase();}
+      let nm=name.replace(/[0-9'"]/g,'').trim().toUpperCase();
+      if(isHet&&nm.length>=2&&TWO.indexOf(nm.slice(0,2))>=0){const t=nm.slice(0,2);return t[0]+t.slice(1).toLowerCase();}
+      return (nm[0]||'C');
+    }
+    const lines=text.split('\n');
+    for(const ln of lines){ const rec=ln.slice(0,6);
+      if(rec==='ATOM  '||rec==='HETATM'){
+        const x=parseFloat(ln.slice(30,38)), y=parseFloat(ln.slice(38,46)), z=parseFloat(ln.slice(46,54));
+        if(isNaN(x)||isNaN(y)||isNaN(z))continue; natoms++;
+        if(x<mn[0])mn[0]=x; if(y<mn[1])mn[1]=y; if(z<mn[2])mn[2]=z;
+        if(x>mx[0])mx[0]=x; if(y>mx[1])mx[1]=y; if(z>mx[2])mx[2]=z;
+        const name=ln.slice(12,16).trim(); const chain=ln[21]||'A'; const resn=ln.slice(17,20).trim(); const resseq=ln.slice(22,26).trim();
+        const isHet=rec==='HETATM'; const water=(resn==='HOH'||resn==='WAT');
+        const el=elemOf(ln,name,isHet);
+        if(!water) atoms.push({x,y,z,el,name,resn,resseq,chain,het:isHet});
+        if(rec==='ATOM  '){ chains[chain]=1; resset[chain+'|'+resseq]=1; if(name==='CA') ca.push([x,y,z,chain]); }
+        else { if(!water&&resn!=='SO4'&&resn!=='PO4') het.push([x,y,z,resn]); }
+      }
+    }
+    const protCenter=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2];
+    let hetCenter=null, hetSize=null;
+    if(het.length){ hetCenter=[0,0,0]; het.forEach(h=>{hetCenter[0]+=h[0];hetCenter[1]+=h[1];hetCenter[2]+=h[2];}); hetCenter=hetCenter.map(v=>v/het.length);
+      let hmn=[1e9,1e9,1e9],hmx=[-1e9,-1e9,-1e9]; het.forEach(h=>{for(let k=0;k<3;k++){if(h[k]<hmn[k])hmn[k]=h[k];if(h[k]>hmx[k])hmx[k]=h[k];}});
+      hetSize=Math.max(16, Math.ceil(Math.max(hmx[0]-hmn[0],hmx[1]-hmn[1],hmx[2]-hmn[2])+8)); }
+    const center=hetCenter||protCenter;
+    const size=hetSize||22;
+    return { ca, het, atoms, chains:Object.keys(chains), nres:Object.keys(resset).length, natoms, min:mn, max:mx,
+      center, size, hasLigand:het.length>0, protCenter };
+  }
+
+  const API={ sub,add,dot,cross,nrm,matVec,matMul,rotX,rotY,quatToMat,normQuat,eulerToQuat,randomQuat,rotAxis,q2e,
+    elInfo, parseSMILES, perceive, simpleRings, layout2D, buildTree, buildLigand, computePose, parsePDB, findBridges, buildAdj };
+  if(typeof module!=='undefined'&&module.exports) module.exports=API; else root.PoseEngine=API;
+})(typeof window!=='undefined'?window:globalThis);
+/* ════════════════ Pose Generation — UI controller (uses PoseEngine) ════════════════ */
+(function(){
+  const PE=window.PoseEngine;
+  const POSE_LIGAND_API='/pose/ligand';   // RDKit backend; falls back to in-browser engine if unavailable
+  const $=id=>document.getElementById(id);
+  const CAM=PE.matMul(PE.rotY(0.32),PE.rotX(-0.36));
+
+  /* ---- helpers ---- */
+  function molExtent(L){let m=0;for(const p of L.REF){const d=Math.hypot(p[0],p[1],p[2]);if(d>m)m=d;}return m||1;}
+  function fitScale(L,px){return px/molExtent(L);}
+  function boxParams(L){const ext=molExtent(L),half=Math.max(4,ext*1.3),S=150/half,tmax=Math.max(0.6,(half-ext)*0.85);return {ext,half,S,tmax};}
+  function kv(k,v,col){return '<div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.5);"><span style="color:#64748b;">'+k+'</span><span style="color:'+(col||'#e2e8f0')+';">'+v+'</span></div>';}
+
+  /* ---- render ---- */
+  function project(coords,cam,scale,cx,cy){return coords.map(p=>{const cp=PE.matVec(cam,p);return {x:cx+scale*cp[0],y:cy-scale*cp[1],z:cp[2]};});}
+  function svgMol(L,coords,cam,opt){
+    const scale=opt.scale,cx=opt.cx,cy=opt.cy,labels=opt.labels,rootHi=opt.rootHi,hot=opt.hot==null?-1:opt.hot,small=opt.small;
+    const P=project(coords,cam,scale,cx,cy);let s='';
+    const root=new Set(L.ROOT);
+    L.BONDS.forEach(bd=>{const A=P[bd.a],B=P[bd.b];const dep=(A.z+B.z)/2;const ds=Math.min(1.4,Math.max(.7,1+dep*0.07));
+      let col=bd.type==='rot'?'#a78bfa':bd.type==='ring'?'#5b6b86':'#647089';let w=(small?1.6:3.0)*ds;
+      if(bd.type==='rot'&&bd.ti===hot){col='#c4b5fd';w*=1.5;}
+      if(bd.order===2){const dx=B.x-A.x,dy=B.y-A.y,Ln=Math.hypot(dx,dy)||1,ox=-dy/Ln*2.2,oy=dx/Ln*2.2;
+        s+='<line x1="'+(A.x+ox)+'" y1="'+(A.y+oy)+'" x2="'+(B.x+ox)+'" y2="'+(B.y+oy)+'" stroke="'+col+'" stroke-width="'+(w*.8)+'" stroke-linecap="round"/>';
+        s+='<line x1="'+(A.x-ox)+'" y1="'+(A.y-oy)+'" x2="'+(B.x-ox)+'" y2="'+(B.y-oy)+'" stroke="'+col+'" stroke-width="'+(w*.8)+'" stroke-linecap="round"/>';
+      } else { s+='<line x1="'+A.x+'" y1="'+A.y+'" x2="'+B.x+'" y2="'+B.y+'" stroke="'+col+'" stroke-width="'+w+'" stroke-linecap="round"/>'; }
+      if(bd.type==='rot'&&!small){const mx=(A.x+B.x)/2,my=(A.y+B.y)/2,r=bd.ti===hot?6:4.5;
+        s+='<circle cx="'+mx+'" cy="'+my+'" r="'+r+'" fill="none" stroke="'+(bd.ti===hot?'#c4b5fd':'#a78bfa')+'" stroke-width="1.3" stroke-dasharray="2.2 2"/>';}
+    });
+    const ord=P.map((p,i)=>i).sort((i,j)=>P[i].z-P[j].z);
+    ord.forEach(i=>{const p=P[i],el=L.atoms[i],info=PE.elInfo(el),dep=p.z,ds=Math.min(1.45,Math.max(.65,1+dep*0.07));const r=(small?info.r*0.42:info.r)*ds;
+      if(rootHi&&root.has(i))s+='<circle cx="'+p.x+'" cy="'+p.y+'" r="'+(r+5)+'" fill="none" stroke="#22d3ee" stroke-width="1.6" opacity=".55"/>';
+      s+='<circle cx="'+p.x+'" cy="'+p.y+'" r="'+r+'" fill="'+elcol(el,true)+'" stroke="#05070f" stroke-width="'+(small?1:1.5)+'"/>';
+      s+='<circle cx="'+(p.x-r*0.3)+'" cy="'+(p.y-r*0.3)+'" r="'+(r*0.34)+'" fill="#fff" opacity=".3"/>';
+      if(labels&&!small&&el!=='C')s+='<text x="'+p.x+'" y="'+(p.y+r+11)+'" font-size="9.5" fill="#94a3b8" text-anchor="middle" font-family="ui-monospace,monospace">'+el+'</text>';
+    });
+    return s;
+  }
+  function svgBoxWire(cam,scale,cx,cy,B){
+    const c=[[-B,-B,-B],[B,-B,-B],[B,B,-B],[-B,B,-B],[-B,-B,B],[B,-B,B],[B,B,B],[-B,B,B]];
+    const P=project(c,cam,scale,cx,cy);const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];let s='';
+    E.forEach((e,idx)=>{s+='<line x1="'+P[e[0]].x+'" y1="'+P[e[0]].y+'" x2="'+P[e[1]].x+'" y2="'+P[e[1]].y+'" stroke="#22d3ee" stroke-width="1" opacity="'+(idx<4?'.22':'.42')+'" stroke-dasharray="'+(idx<4?'4 4':'0')+'"/>';});
+    return s;
+  }
+  /* ---- Plotly 3D: ball-and-stick pocket + ligand + interactions ---- */
+  function layout3D(){const ax={showgrid:false,zeroline:false,showticklabels:false};   // matches vina.js _sceneP
+    return {paper_bgcolor:'transparent',plot_bgcolor:'transparent',margin:{l:0,r:0,t:0,b:0},showlegend:false,font:{color:'#94a3b8'},
+      scene:{xaxis:ax,yaxis:ax,zaxis:ax,aspectmode:'data',bgcolor:'#05070f',camera:{eye:{x:1.35,y:1.35,z:1.05}}}};}
+  function boxTrace3D(c,size){const h=size/2;const C=[[-h,-h,-h],[h,-h,-h],[h,h,-h],[-h,h,-h],[-h,-h,h],[h,-h,h],[h,h,h],[-h,h,h]].map(d=>[c[0]+d[0],c[1]+d[1],c[2]+d[2]]);
+    const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];const x=[],y=[],z=[];
+    E.forEach(e=>{x.push(C[e[0]][0],C[e[1]][0],null);y.push(C[e[0]][1],C[e[1]][1],null);z.push(C[e[0]][2],C[e[1]][2],null);});
+    return {type:'scatter3d',mode:'lines',x:x,y:y,z:z,line:{color:'#22d3ee',width:3,dash:'dot'},hoverinfo:'skip',showlegend:false};}
+
+  const COV={H:0.31,C:0.76,N:0.71,O:0.66,S:1.05,P:1.07,F:0.57,Cl:1.02,Br:1.20,I:1.39,Se:1.20,B:0.84,Zn:1.22,Fe:1.32,Mg:1.41,Mn:1.39,Ca:1.76,Na:1.66,K:2.03,Cu:1.32,Ni:1.24,Co:1.26};
+  function covr(el){return COV[el]||0.76;}
+  function elcol(el,ligC){ if(el==='C')return ligC?'#22c55e':'#97a3b0';
+    const M={N:'#3b6cf6',O:'#ef4444',S:'#e6b800',P:'#f97316',H:'#e3eaf1',F:'#67e8f9',Cl:'#22c55e',Br:'#b45309',I:'#7c3aed',Se:'#f59e0b'};
+    return M[el]||(PE.elInfo(el)||{}).col||'#c4b5fd'; }
+  function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);}
+
+  // covalent bonds by distance (one-off per pocket)
+  function inferBonds(atoms){const b=[];const n=atoms.length;
+    for(let i=0;i<n;i++){const a=atoms[i];for(let j=i+1;j<n;j++){const c=atoms[j];
+      const dx=a.x-c.x,dy=a.y-c.y,dz=a.z-c.z;const d2=dx*dx+dy*dy+dz*dz;
+      const mx=covr(a.el)+covr(c.el)+0.45; if(d2<mx*mx&&d2>0.20)b.push([i,j]); }}
+    return b;}
+  // two-tone sticks (split each bond at midpoint) grouped by colour + atom spheres
+  function stickTraces(atoms,bonds,ligC,width,mksz){
+    const byCol={}; const half=(col,p,m)=>{const g=byCol[col]||(byCol[col]={x:[],y:[],z:[]});g.x.push(p.x,m.x,null);g.y.push(p.y,m.y,null);g.z.push(p.z,m.z,null);};
+    bonds.forEach(pr=>{const a=atoms[pr[0]],c=atoms[pr[1]];const m={x:(a.x+c.x)/2,y:(a.y+c.y)/2,z:(a.z+c.z)/2};half(elcol(a.el,ligC),a,m);half(elcol(c.el,ligC),c,m);});
+    const traces=Object.keys(byCol).map(col=>({type:'scatter3d',mode:'lines',x:byCol[col].x,y:byCol[col].y,z:byCol[col].z,line:{color:col,width:width},hoverinfo:'skip',showlegend:false}));
+    traces.push({type:'scatter3d',mode:'markers',x:atoms.map(a=>a.x),y:atoms.map(a=>a.y),z:atoms.map(a=>a.z),
+      marker:{color:atoms.map(a=>elcol(a.el,ligC)),size:atoms.map(a=>a.el==='H'?mksz*0.55:(a.el==='C'?mksz:mksz*1.3)),line:{width:0}},
+      text:atoms.map(a=>(a.name||a.el)+(a.resn?(' · '+a.resn+a.resseq):'')),hoverinfo:ligC?'skip':'text',showlegend:false});
+    return traces;
+  }
+  // dashed 3D line → on/off sub-segments
+  function pushDash(acc,p,q,dash,gap){const dx=q[0]-p[0],dy=q[1]-p[1],dz=q[2]-p[2];const L=Math.hypot(dx,dy,dz)||1;const ux=dx/L,uy=dy/L,uz=dz/L;let t=0,on=true;
+    while(t<L-1e-6){const t2=Math.min(L,t+(on?dash:gap));if(on){acc.x.push(p[0]+ux*t,p[0]+ux*t2,null);acc.y.push(p[1]+uy*t,p[1]+uy*t2,null);acc.z.push(p[2]+uz*t,p[2]+uz*t2,null);}t=t2;on=!on;}}
+  // smallest 5-/6-ring through each ligand bond
+  function smallRings(L){const n=L.atoms.length;const adj=Array.from({length:n},()=>[]);
+    L.BONDS.forEach(b=>{adj[b.a].push(b.b);adj[b.b].push(b.a);});const seen={};const rings=[];
+    L.BONDS.forEach(b=>{const u=b.a,v=b.b;const ded={},prev={};ded[u]=0;prev[u]=-1;const q=[u];let qi=0;
+      while(qi<q.length){const x=q[qi++];for(const w of adj[x]){if((x===u&&w===v)||(x===v&&w===u))continue;if(ded[w]===undefined){ded[w]=ded[x]+1;prev[w]=x;q.push(w);}}}
+      if(ded[v]!==undefined){const sz=ded[v]+1;if(sz>=5&&sz<=6){const path=[];let c=v;while(c!==-1&&c!==undefined){path.push(c);c=prev[c];}const key=path.slice().sort((a,b)=>a-b).join(',');if(!seen[key]){seen[key]=1;rings.push(path);}}}});
+    return rings;}
+  function ringCentroid(coords,idx){const c=[0,0,0];idx.forEach(i=>{c[0]+=coords[i][0];c[1]+=coords[i][1];c[2]+=coords[i][2];});return [c[0]/idx.length,c[1]/idx.length,c[2]/idx.length];}
+  // ligand carboxylate O atoms (C bonded to ≥2 O) — anionic
+  function ligCarboxylate(L,coords){const out=[];const adj={};L.BONDS.forEach(b=>{(adj[b.a]||(adj[b.a]=[])).push(b.b);(adj[b.b]||(adj[b.b]=[])).push(b.a);});
+    L.atoms.forEach((el,i)=>{if(el==='C'){const os=(adj[i]||[]).filter(j=>L.atoms[j]==='O');if(os.length>=2)os.forEach(j=>out.push(coords[j]));}});return out;}
+  // aromatic-residue ring centroids in the pocket
+  function protAromatics(sel){const byRes={};sel.forEach(a=>{const k=a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]={resn:a.resn,at:{}})).at[a.name]=[a.x,a.y,a.z];});
+    const want={PHE:['CG','CD1','CD2','CE1','CE2','CZ'],TYR:['CG','CD1','CD2','CE1','CE2','CZ'],HIS:['CG','ND1','CD2','CE1','NE2'],TRP:['CD2','CE2','CE3','CZ2','CH2','CZ3']};const out=[];
+    Object.keys(byRes).forEach(k=>{const r=byRes[k];const names=want[r.resn];if(!names)return;const pts=names.map(n=>r.at[n]).filter(Boolean);if(pts.length>=4){const c=[0,0,0];pts.forEach(p=>{c[0]+=p[0];c[1]+=p[1];c[2]+=p[2];});out.push([c[0]/pts.length,c[1]/pts.length,c[2]/pts.length]);}});return out;}
+  // ligand↔pocket interactions for the current pose
+  function interactions(L,coords,site){
+    const hb={x:[],y:[],z:[]},sb={x:[],y:[],z:[]},pp={x:[],y:[],z:[]};
+    const ligNO=[];L.atoms.forEach((el,i)=>{if(el==='N'||el==='O')ligNO.push({el,p:coords[i]});});
+    const protNO=site.atoms.filter(a=>a.el==='N'||a.el==='O');
+    ligNO.forEach(l=>protNO.forEach(a=>{if(dist(l.p,[a.x,a.y,a.z])<3.5)pushDash(hb,l.p,[a.x,a.y,a.z],0.32,0.22);}));
+    const acidicO=site.atoms.filter(a=>(a.resn==='ASP'||a.resn==='GLU')&&a.el==='O'&&a.name[0]==='O'&&(a.name.indexOf('D')>0||a.name.indexOf('E')>0));
+    const basicN=site.atoms.filter(a=>((a.resn==='LYS'&&a.name==='NZ')||(a.resn==='ARG'&&a.name[0]==='N'&&a.name!=='N')||(a.resn==='HIS'&&(a.name==='ND1'||a.name==='NE2'))));
+    const ligN=ligNO.filter(l=>l.el==='N');const ligAnion=ligCarboxylate(L,coords);
+    ligN.forEach(l=>acidicO.forEach(a=>{if(dist(l.p,[a.x,a.y,a.z])<4.2)pushDash(sb,l.p,[a.x,a.y,a.z],0.5,0.3);}));
+    ligAnion.forEach(p=>basicN.forEach(a=>{if(dist(p,[a.x,a.y,a.z])<4.2)pushDash(sb,p,[a.x,a.y,a.z],0.5,0.3);}));
+    const lrings=smallRings(L).filter(r=>r.every(i=>'CNOS'.indexOf(L.atoms[i])>=0)).map(r=>ringCentroid(coords,r));
+    site.aromatics.forEach(pc=>lrings.forEach(rc=>{if(dist(rc,pc)<6.0)pushDash(pp,rc,pc,0.55,0.35);}));
+    const traces=[];const mk=(acc,col)=>{if(acc.x.length)traces.push({type:'scatter3d',mode:'lines',x:acc.x,y:acc.y,z:acc.z,line:{color:col,width:4},hoverinfo:'skip',showlegend:false});};
+    mk(hb,'#fde047');mk(sb,'#d946ef');mk(pp,'#38bdf8');
+    return {traces,n:{hb:hb.x.length/3,sb:sb.x.length/3,pp:pp.x.length/3}};
+  }
+
+  function setSvg(id,inner,vb){const el=$(id);if(!el)return;el.setAttribute('viewBox',vb);el.innerHTML=inner;}
+
+  /* ---- state ---- */
+  let L=null, protein=null, box={center:[0,0,0],size:20};
+
+  const PG={
+    open(){var m=$('poseModal');m.classList.remove('hidden');m.classList.add('flex');PG.stage('random');if(!L)PG.build();else PG.init.regen();},
+    close(){PG._stopAnim();var m=$('poseModal');m.classList.remove('flex');m.classList.add('hidden');if(window.Plotly){try{Plotly.purge('poseBox3D');}catch(e){}}},
+
+    setPreset(smi){$('poseSmiles').value=smi;PG.build();},
+    build(){const smi=$('poseSmiles').value.trim();
+      fetch(POSE_LIGAND_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({smiles:smi})})
+        .then(r=>r.ok?r.json():null)
+        .then(res=>{ if(res&&res.ok){res.source=res.source||'rdkit';PG._setLigand(res);} else PG._fallback(smi); })
+        .catch(()=>PG._fallback(smi));},
+    _fallback(smi){const j=PE.buildLigand(smi); if(j.ok)j.source='js'; PG._setLigand(j);},
+    _setLigand(res){const e=$('poseSmiles');
+      if(!res||!res.ok){e.style.borderColor='#fb7185';PG._derivedErr((res&&res.err)||'parse failed');return;}
+      e.style.borderColor='#1e293b';L=res;PG._derived();PG.init.cur=null;
+      if(PG._stage==='min')PG.min.enter();else if(PG._stage==='mc')PG.mc.enter();else PG.init.regen();},
+    _derivedErr(msg){$('poseDerived').innerHTML='<span style="color:#fb7185;">⚠ '+msg+'</span>';},
+    _derived(){
+      let h='<span><span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1.5">Formula</span><span class="font-mono text-slate-200">'+L.formula+'</span></span>'
+        +'<div class="w-px h-3 bg-slate-700"></div>'
+        +'<span><span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1.5">Rotatable</span><span class="font-mono text-cyan-300">N = '+L.N+'</span></span>'
+        +'<div class="w-px h-3 bg-slate-700"></div>'
+        +'<span><span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1.5">Search space</span><span class="font-mono text-violet-300">6 + '+L.N+' = '+(6+L.N)+' D</span></span>';
+      if(protein){h+='<div class="w-px h-3 bg-slate-700"></div><span><span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1.5">Target</span><span class="font-mono text-slate-200">'+(protein.id||'uploaded')+' · '+protein.chains.length+' ch · '+protein.nres+' res</span></span>'
+        +'<div class="w-px h-3 bg-slate-700"></div><span style="display:inline-flex;align-items:center;gap:5px;"><span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider">Box center</span>'
+        +['x','y','z'].map((ax,k)=>'<input id="poseC'+ax+'" type="number" step="0.5" value="'+box.center[k].toFixed(1)+'" onchange="PoseGen.setCenter()" title="docking box center '+ax+' (Å)" style="width:62px;font-family:ui-monospace,monospace;font-size:11px;background:#0b1120;border:1px solid #1e293b;border-radius:6px;padding:2px 6px;color:#22d3ee;outline:none;text-align:right;">').join('')
+        +'<span style="color:#475569;font-size:10px;">Å</span></span>';}
+      h+='<div class="flex-1"></div><span class="text-[9px] px-2 py-0.5 rounded-full" style="'+(L.source==='rdkit'?'background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);color:#34d399;':'background:rgba(148,163,184,.1);border:1px solid #334155;color:#94a3b8;')+'">'+(L.source==='rdkit'?'RDKit · 3D ETKDG':'in-browser · 2D layout')+'</span>';
+      $('poseDerived').innerHTML=h;},
+
+    /* editable docking-box center → reposition box + ligand in the current stage */
+    setCenter(){const v=['poseCx','poseCy','poseCz'].map(id=>{const e=$(id);return e?parseFloat(e.value):NaN;});
+      if(v.some(x=>!isFinite(x)))return; box.center=v;
+      if(PG._stage==='min'){if(PG.min.cur)PG.min._draw();}
+      else if(PG._stage==='mc'){if(PG.mc.pose){PG.mc.score=PG.mc._score(PG.mc.pose);PG.mc._draw();PG.mc._stats();}}
+      else PG.init.draw(PG.init.cur||PG.init.rand());},
+
+    /* ---- shared drawing (used by every stage) ---- */
+    _show(view){$('poseSvgBox').style.display=view==='2d'?'block':'none';$('poseBox3D').style.display=view==='3d'?'block':'none';
+      var lg=$('poseLegend3D');if(lg)lg.style.display=view==='3d'?'block':'none';var h=$('poseBox3DHint');if(h)h.style.display=view==='3d'?'block':'none';},
+    _draw3D(world,opt){opt=opt||{};const site=PG.init.site();
+      const ligAtoms=world.map((p,i)=>({x:p[0],y:p[1],z:p[2],el:L.atoms[i]}));
+      let data=[];if(site)data=data.concat(site.traces);
+      data.push(boxTrace3D(box.center,box.size));
+      data=data.concat(stickTraces(ligAtoms,L.BONDS.map(b=>[b.a,b.b]),true,7,3.2));
+      if(site&&opt.interactions){const ix=interactions(L,world,site);data=data.concat(ix.traces);PG.init._ix=ix.n;}
+      try{Plotly.react('poseBox3D',data,layout3D(),{responsive:true,displayModeBar:false,displaylogo:false});}catch(e){}},
+    _draw2D(model){const bp=boxParams(L);setSvg('poseSvgBox',svgBoxWire(CAM,bp.S,230,210,bp.half)+svgMol(L,model,CAM,{scale:bp.S,cx:230,cy:210}),'0 0 460 420');},
+    _worldFromInternal(model){let c=[0,0,0];model.forEach(p=>{c[0]+=p[0];c[1]+=p[1];c[2]+=p[2];});const n=model.length||1;c=[c[0]/n,c[1]/n,c[2]/n];
+      return model.map(p=>[p[0]-c[0]+box.center[0],p[1]-c[1]+box.center[1],p[2]-c[2]+box.center[2]]);},
+    _spark(id,vals,col){const el=$(id);if(!el)return;if(!vals.length){el.innerHTML='';return;}
+      const W=184,H=44,pad=4;const mn=Math.min(...vals),mx=Math.max(...vals),rng=(mx-mn)||1;
+      const pts=vals.map((v,i)=>[pad+(W-2*pad)*(vals.length===1?1:i/(vals.length-1)),H-pad-(H-2*pad)*((v-mn)/rng)]);
+      const d='M'+pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L');
+      el.innerHTML='<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.6" stroke-linejoin="round"/><circle cx="'+pts[pts.length-1][0].toFixed(1)+'" cy="'+pts[pts.length-1][1].toFixed(1)+'" r="2.4" fill="'+col+'"/>';},
+
+    /* ---- stage manager ---- */
+    _stage:'random', _raf:null,
+    _stopAnim(){if(PG._raf){cancelAnimationFrame(PG._raf);PG._raf=null;}if(PG.min)PG.min._running=false;if(PG.mc)PG.mc._running=false;},
+    stage(name){PG._stopAnim();PG._stage=name;const S={random:'Random',min:'Min',mc:'MC'};
+      Object.keys(S).forEach(nm=>{const on=nm===name;const b=$('poseSt'+S[nm]);if(b)b.classList.toggle('on',on);
+        const c=$('poseCtrl'+S[nm]);if(c)c.style.display=on?'flex':'none';const sd=$('poseSide'+S[nm]);if(sd)sd.style.display=on?'flex':'none';});
+      var proc=$('poseProcPanel');if(proc)proc.style.display=(name==='random')?'none':'block';
+      const titles={random:'Random placement inside the docking box',min:'Ligand geometry relaxation',mc:'Monte-Carlo + BFGS pose search'};
+      const hints={random:'Random initialization inside the search box.',min:'Relax the embedded conformer before docking.',mc:'Global search: perturb → BFGS → Metropolis accept/reject.'};
+      var vt=$('poseViewTitle');if(vt)vt.textContent=titles[name];var sh=$('poseStageHint');if(sh)sh.textContent=hints[name];
+      if(!L)return;
+      if(name==='random')PG.init.regen();else if(name==='min')PG.min.enter();else if(name==='mc')PG.mc.enter();
+      if(PG.init.use3D())setTimeout(()=>{try{Plotly.Plots.resize('poseBox3D');}catch(e){}},60);},
+
+    /* ---- stage ②: ligand minimization (illustrative steepest descent) ---- */
+    min:{cur:null,target:null,iter:0,E0:0,_running:false,_hist:[],
+      enter(){PG.min.reset();},
+      reset(){PG._stopAnim();PG.min._running=false;
+        const tgt=L.REF.map(p=>p.slice());
+        const tors=L.TORS.map(()=>(Math.random()*2-1)*1.1);
+        let start=PE.computePose(L,[1,0,0,0],[0,0,0],tors).map(p=>p.slice());
+        start=start.map(p=>[p[0]+(Math.random()*2-1)*0.35,p[1]+(Math.random()*2-1)*0.35,p[2]+(Math.random()*2-1)*0.35]);
+        PG.min.cur=start;PG.min.target=tgt;PG.min.iter=0;PG.min.E0=PG.min._energy(start);PG.min._hist=[PG.min.E0];
+        var pt=$('poseProcTitle');if(pt)pt.textContent='Strain energy';
+        var rb=$('poseMinRunBtn');if(rb)rb.textContent='▶ Minimize';
+        PG.min._draw();PG.min._stats();},
+      _energy(coords){let e=0;L.BONDS.forEach(b=>{const d=dist(coords[b.a],coords[b.b]);const d0=dist(PG.min.target[b.a],PG.min.target[b.b]);e+=(d-d0)*(d-d0)*40;});
+        for(let i=0;i<coords.length;i++)e+=dist(coords[i],PG.min.target[i])*dist(coords[i],PG.min.target[i])*1.2;return e;},
+      _rmsd(){let s=0;const a=PG.min.cur,b=PG.min.target;for(let i=0;i<a.length;i++)s+=dist(a[i],b[i])*dist(a[i],b[i]);return Math.sqrt(s/a.length);},
+      _draw(){const coords=PG.min.cur;if(PG.init.use3D()){PG._show('3d');PG._draw3D(PG._worldFromInternal(coords),{interactions:false});}else{PG._show('2d');PG._draw2D(coords);}},
+      _stats(){const E=PG.min._energy(PG.min.cur);var e;
+        e=$('poseProcVal');if(e)e.textContent=E.toFixed(1);e=$('poseProcSub');if(e)e.textContent='iter '+PG.min.iter+' · ΔE '+(PG.min.E0-E).toFixed(1);
+        PG._spark('poseProcChart',PG.min._hist,'#34d399');
+        e=$('poseMinEstart');if(e)e.textContent=PG.min.E0.toFixed(1);e=$('poseMinEcur');if(e)e.textContent=E.toFixed(1);
+        e=$('poseMinDelta');if(e)e.textContent='−'+(PG.min.E0-E).toFixed(1);e=$('poseMinIter');if(e)e.textContent=PG.min.iter;
+        e=$('poseMinRmsd');if(e)e.textContent=PG.min._rmsd().toFixed(2)+' Å';},
+      run(){if(PG.min._running){PG.min._running=false;PG._stopAnim();var b=$('poseMinRunBtn');if(b)b.textContent='▶ Minimize';return;}
+        PG.min._running=true;var b=$('poseMinRunBtn');if(b)b.textContent='⏸ Pause';PG.min._loop();},
+      _loop(){if(!PG.min._running)return;const a=PG.min.cur,b=PG.min.target,step=0.16;let moved=0;
+        for(let i=0;i<a.length;i++)for(let k=0;k<3;k++){const d=b[i][k]-a[i][k];a[i][k]+=d*step;moved+=Math.abs(d);}
+        PG.min.iter++;PG.min._hist.push(PG.min._energy(a));if(PG.min._hist.length>140)PG.min._hist.shift();
+        PG.min._draw();PG.min._stats();
+        if(moved<0.03||PG.min.iter>240){PG.min._running=false;var bt=$('poseMinRunBtn');if(bt)bt.textContent='✓ Converged';return;}
+        PG._raf=requestAnimationFrame(PG.min._loop);},
+    },
+
+    /* ---- stage ③: Monte-Carlo + BFGS (illustrative) ---- */
+    mc:{pose:null,best:null,bestScore:1e9,score:0,nstep:0,acc:0,T:1.2,scorer:'surrogate',_daBusy:false,_running:false,_hist:[],_bhist:[],
+      enter(){PG.mc.reset();},
+      setT(t){PG.mc.T=t;document.querySelectorAll('#poseMcTempToggles [data-t]').forEach(b=>{const on=Math.abs(+b.dataset.t-t)<1e-6;b.style.borderColor=on?'#22d3ee':'#1e293b';b.style.background=on?'rgba(34,211,238,.1)':'#0b1120';b.style.color=on?'#22d3ee':'#94a3b8';});var v=$('poseMcTempVal');if(v)v.textContent=t.toFixed(1);},
+      /* scorer selector: live search always uses the fast surrogate; DeepAtom evaluates the best pose on demand (server CNN) */
+      setScorer(v){PG.mc.scorer=v;const da=(v==='deepatom');var b=$('poseDaScoreBtn');if(b)b.style.display=da?'inline-block':'none';var c=$('poseDaCard');if(c)c.style.display=da?'flex':'none';
+        if(da&&!PG.mc.daPk)PG.mc._daSet('idle — run the search, then score the best pose',null,null);},
+      _daSet(status,pk,dg){var e;e=$('poseDaStatus');if(e)e.textContent=status;e=$('poseDaPk');if(e)e.textContent=(pk!=null?pk.toFixed(2):'—');e=$('poseDaDg');if(e)e.textContent=(dg!=null?dg.toFixed(2):'—');PG.mc.daPk=pk;},
+      _ligandPdb(coords){const R=(s,n)=>String(s).padStart(n);let out='';
+        for(let i=0;i<L.atoms.length;i++){const el=L.atoms[i],p=coords[i];const name=((el.length===1?' '+el:el)+'  ').slice(0,4);
+          out+='HETATM'+R(i+1,5)+' '+name+' LIG A'+R(1,4)+'    '+R(p[0].toFixed(3),8)+R(p[1].toFixed(3),8)+R(p[2].toFixed(3),8)+'  1.00  0.00          '+R(el.toUpperCase(),2)+'\n';}
+        return out+'END\n';},
+      scoreDeepAtom(){if(!L)return;if(!protein||!protein.raw){PG.mc._daSet('load a target protein (.pdb) first',null,null);return;}
+        if(PG.mc._daBusy)return;PG.mc._daBusy=true;var b=$('poseDaScoreBtn');if(b)b.textContent='⏳ scoring…';PG.mc._daSet('scoring best pose on the server…',null,null);
+        const lig=PG.mc._ligandPdb(PG.mc._world(PG.mc.best));
+        fetch('/pose/deepatom_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:(protein.id||'pose')+'_mc',smiles:(L.smiles||'')})})
+          .then(r=>r.ok?r.json():null).then(res=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';
+            if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));PG.mc._daSet('scored ✓ '+(res.elapsed?('('+res.elapsed+')'):''),pk,dg);}
+            else PG.mc._daSet((res&&res.err)||'DeepAtom unavailable on server',null,null);})
+          .catch(()=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';PG.mc._daSet('request failed (is the endpoint deployed?)',null,null);});},
+      _randPose(){const q=PE.randomQuat();return {off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],e:PE.q2e(q),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
+      _quat(p){return PE.eulerToQuat(p.e[0],p.e[1],p.e[2]);},
+      _world(p){const base=PE.computePose(L,PG.mc._quat(p),[0,0,0],p.tors);const lc=[box.center[0]+p.off[0]*box.size*0.32,box.center[1]+p.off[1]*box.size*0.32,box.center[2]+p.off[2]*box.size*0.32];return base.map(q=>[q[0]+lc[0],q[1]+lc[1],q[2]+lc[2]]);},
+      _score(p){const w=PG.mc._world(p);let clash=0;const site=PG.init.site();
+        if(site){const pa=site.atoms;for(let i=0;i<w.length;i++){const a=w[i];for(let j=0;j<pa.length;j++){const dx=a[0]-pa[j].x,dy=a[1]-pa[j].y,dz=a[2]-pa[j].z;const d2=dx*dx+dy*dy+dz*dz;if(d2<6.25)clash+=(2.5-Math.sqrt(d2));}}}
+        let c=[0,0,0];w.forEach(q=>{c[0]+=q[0];c[1]+=q[1];c[2]+=q[2];});const n=w.length;c=[c[0]/n,c[1]/n,c[2]/n];
+        return clash*0.6+dist(c,box.center)*0.4;},
+      _copy(p){return {off:p.off.slice(),e:p.e.slice(),tors:p.tors.slice()};},
+      _perturb(p,s){const q=PG.mc._copy(p);const k=Math.floor(Math.random()*3);
+        if(k===0){const ax=Math.floor(Math.random()*3);q.off[ax]=Math.max(-1,Math.min(1,q.off[ax]+(Math.random()*2-1)*s));}
+        else if(k===1){const ax=Math.floor(Math.random()*3);q.e[ax]+=(Math.random()*2-1)*s;}
+        else if(q.tors.length){const ti=Math.floor(Math.random()*q.tors.length);q.tors[ti]+=(Math.random()*2-1)*s*2;}
+        return q;},
+      _bfgs(p){let best=p,bs=PG.mc._score(p);for(let it=0;it<8;it++){const t=PG.mc._perturb(best,0.12);const s=PG.mc._score(t);if(s<bs){bs=s;best=t;}}return {pose:best,score:bs};},
+      reset(){PG._stopAnim();PG.mc._running=false;PG.mc.pose=PG.mc._randPose();PG.mc.score=PG.mc._score(PG.mc.pose);PG.mc.best=PG.mc._copy(PG.mc.pose);PG.mc.bestScore=PG.mc.score;PG.mc.nstep=0;PG.mc.acc=0;PG.mc._hist=[PG.mc.score];PG.mc._bhist=[PG.mc.bestScore];
+        PG.mc.setT(PG.mc.T);var sel=$('poseMcScorer');if(sel)sel.value=PG.mc.scorer;PG.mc.setScorer(PG.mc.scorer);var pt=$('poseProcTitle');if(pt)pt.textContent='Score (lower = better)';var rb=$('poseMcRunBtn');if(rb)rb.textContent='▶ Run search';PG.mc._draw();PG.mc._stats();},
+      _draw(){const w=PG.mc._world(PG.mc.pose);if(PG.init.use3D()){PG._show('3d');PG._draw3D(w,{interactions:true});}else{PG._show('2d');const bp=boxParams(L);PG._draw2D(PE.computePose(L,PG.mc._quat(PG.mc.pose),PG.mc.pose.off.map(v=>v*bp.tmax),PG.mc.pose.tors));}},
+      _stats(){var e;e=$('poseProcVal');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseProcSub');if(e)e.textContent='step '+PG.mc.nstep+' · best '+PG.mc.bestScore.toFixed(2);PG._spark('poseProcChart',PG.mc._hist,'#38bdf8');
+        e=$('poseMcStep');if(e)e.textContent=PG.mc.nstep;e=$('poseMcScore');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseMcBest');if(e)e.textContent=PG.mc.bestScore.toFixed(2);e=$('poseMcAcc');if(e)e.textContent=PG.mc.acc+' / '+PG.mc.nstep;e=$('poseMcTempVal');if(e)e.textContent=PG.mc.T.toFixed(1);},
+      step(){if(!L)return;PG.mc.nstep++;let prop=PG.mc._perturb(PG.mc._perturb(PG.mc._perturb(PG.mc.pose,0.3),0.3),0.3);const opt=PG.mc._bfgs(prop);const dS=opt.score-PG.mc.score;
+        if(dS<0||Math.random()<Math.exp(-dS/PG.mc.T)){PG.mc.pose=opt.pose;PG.mc.score=opt.score;PG.mc.acc++;if(opt.score<PG.mc.bestScore){PG.mc.bestScore=opt.score;PG.mc.best=PG.mc._copy(opt.pose);}}
+        PG.mc._hist.push(PG.mc.score);PG.mc._bhist.push(PG.mc.bestScore);if(PG.mc._hist.length>140){PG.mc._hist.shift();PG.mc._bhist.shift();}PG.mc._draw();PG.mc._stats();},
+      run(){if(PG.mc._running){PG.mc._running=false;PG._stopAnim();var b=$('poseMcRunBtn');if(b)b.textContent='▶ Run search';return;}PG.mc._running=true;var b=$('poseMcRunBtn');if(b)b.textContent='⏸ Pause';PG.mc._loop();},
+      _loop(){if(!PG.mc._running)return;PG.mc.step();if(PG.mc.nstep>=150){PG.mc._running=false;var b=$('poseMcRunBtn');if(b)b.textContent='✓ Done';PG.mc.pose=PG.mc._copy(PG.mc.best);PG.mc.score=PG.mc.bestScore;PG.mc._draw();PG.mc._stats();if(PG.mc.scorer==='deepatom')PG.mc.scoreDeepAtom();return;}PG._raf=requestAnimationFrame(PG.mc._loop);},
+    },
+
+    init:{ex:8,cur:null,_states:[],
+      rand(){return {seed:Math.floor(Math.random()*4294967295),off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],quat:PE.randomQuat(),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
+      use3D(){return !!(protein&&window.Plotly);},
+      ligCenter(st){return [box.center[0]+st.off[0]*box.size*0.32, box.center[1]+st.off[1]*box.size*0.32, box.center[2]+st.off[2]*box.size*0.32];},
+      draw(st){if(!L)return;PG.init.cur=st;
+        if(PG.init.use3D())PG.init.render3D(st); else PG.init.draw2D(st);
+        const center=PG.init.use3D()?PG.init.ligCenter(st):st.off.map(v=>v*boxParams(L).tmax);
+        $('poseCurSeed').textContent=st.seed;$('poseCurPos').textContent='('+center.map(v=>(+v).toFixed(2)).join(', ')+')';
+        $('poseCurQuat').textContent=st.quat.map(v=>v.toFixed(2)).join(', ');
+        $('poseCurTors').textContent=st.tors.length?st.tors.map(v=>(v*180/Math.PI).toFixed(0)+'°').join(' '):'(rigid)';
+        PG.init.card();},
+      draw2D(st){PG._show('2d');const bp=boxParams(L);const pos=st.off.map(v=>v*bp.tmax);
+        PG._draw2D(PE.computePose(L,st.quat,pos,st.tors));},
+      site(){ if(!protein)return null;
+        if(protein._site&&protein._siteCenter&&dist(protein._siteCenter,box.center)<0.05)return protein._site;
+        const R=Math.max(8,box.size*0.5+1);const bc=box.center;
+        const byRes={};protein.atoms.forEach(a=>{const k=a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]=[])).push(a);});
+        const dc=a=>Math.hypot(a.x-bc[0],a.y-bc[1],a.z-bc[2]);
+        let sel=[];Object.keys(byRes).forEach(k=>{const g=byRes[k];if(g[0].het)return; if(g.some(a=>dc(a)<R))sel=sel.concat(g);});
+        if(sel.length>1400){sel.sort((a,b)=>dc(a)-dc(b));sel=sel.slice(0,1400);}
+        const bonds=inferBonds(sel);const traces=stickTraces(sel,bonds,false,5,2);const aromatics=protAromatics(sel);
+        const nres=Object.keys(byRes).filter(k=>!byRes[k][0].het&&byRes[k].some(a=>dc(a)<R)).length;
+        protein._site={atoms:sel,bonds,traces,aromatics,nres};protein._siteCenter=box.center.slice();return protein._site;},
+      render3D(st){PG._show('3d');
+        const base=PE.computePose(L,st.quat,[0,0,0],st.tors);const lc=PG.init.ligCenter(st);
+        const coords=base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]);
+        PG._draw3D(coords,{interactions:true});
+        const cx=$('poseCurIx');if(cx)cx.innerHTML=protein?('<span style="color:#fde047;">'+PG.init._ix.hb+'</span> H-bond · <span style="color:#d946ef;">'+PG.init._ix.sb+'</span> salt · <span style="color:#38bdf8;">'+PG.init._ix.pp+'</span> π'):'—';},
+      shuffle(){PG.init.draw(PG.init.rand());},
+      setEx(n){PG.init.ex=n;document.querySelectorAll('#poseExhToggles [data-ex]').forEach(t=>{const on=+t.dataset.ex===n;t.style.borderColor=on?'#22d3ee':'#1e293b';t.style.background=on?'rgba(34,211,238,.1)':'#0b1120';t.style.color=on?'#22d3ee':'#94a3b8';});PG.init.regen();},
+      regen(){if(!L)return;PG.init.draw(PG.init.cur||PG.init.rand());const g=$('poseSeedGrid');let h='';const st=[];const thumbS=fitScale(L,30);const bp=boxParams(L);
+        for(let i=0;i<PG.init.ex;i++){const s=PG.init.rand();st.push(s);const pos=s.off.map(v=>v*bp.tmax*0.6);
+          const mol=svgMol(L,PE.computePose(L,s.quat,pos,s.tors),CAM,{scale:thumbS,cx:54,cy:52,small:true});
+          h+='<div onclick="PoseGen.init.load('+i+')" style="border:1px solid #1e293b;border-radius:11px;background:#0b1120;overflow:hidden;cursor:pointer;" onmouseover="this.style.borderColor=\'#22d3ee\'" onmouseout="this.style.borderColor=\'#1e293b\'"><svg viewBox="0 0 108 104" style="width:100%;height:80px;display:block;">'+mol+'</svg><div style="padding:5px 7px;border-top:1px solid #1e293b;font-family:ui-monospace,monospace;font-size:9px;color:#64748b;display:flex;justify-content:space-between;"><span>seed</span><b style="color:#22d3ee;font-weight:600;">'+String(s.seed).slice(0,7)+'</b></div></div>
+<!-- ══ Pose Generation Modal ═══════════════════════════════════════════════════ -->
+<div id="poseModal" onclick="if(event.target.id==='poseModal')PoseGen.close()"
+     class="hidden fixed inset-0 bg-black/85 z-[9998] flex items-center justify-center">
+  <div onclick="event.stopImmediatePropagation()"
+       class="bg-slate-900 w-[97%] max-w-7xl h-[94vh] rounded-3xl flex flex-col overflow-hidden border border-slate-700 shadow-2xl"
+       style="animation:modalPop .25s cubic-bezier(.34,1.56,.64,1)">
+
+    <!-- Header -->
+    <div class="px-6 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span style="width:34px;height:34px;border-radius:10px;background:linear-gradient(150deg,#0e7490,#6d28d9);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-linejoin="round"><path d="M12 3.2 19.4 7.6v8.8L12 20.8 4.6 16.4V7.6L12 3.2z" stroke="#67e8f9" stroke-width="1.5"/><circle cx="12" cy="12" r="2.4" stroke="#c4b5fd" stroke-width="1.5"/></svg>
+        </span>
+        <div>
+          <h2 class="font-semibold text-white text-sm title-font leading-tight">Pose Generation — Random Start in the Docking Box</h2>
+          <p class="text-[10px] text-slate-400 mt-0.5">Ligand &amp; target → random initialization inside the search box · faithful to AutoDock Vina <span class="font-mono text-cyan-300">conf::randomize()</span></p>
+        </div>
+      </div>
+      <button onclick="PoseGen.close()" class="text-sm px-3 py-1.5 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white flex-shrink-0">✕</button>
+    </div>
+
+    <!-- Input bar -->
+    <div class="px-6 py-2.5 bg-slate-950 border-b border-slate-800 flex-shrink-0" style="display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="flex-shrink:0;">Ligand SMILES</span>
+        <input id="poseSmiles" class="path-input" style="flex:1;min-width:220px;" spellcheck="false" value="CC(=O)Oc1ccccc1C(=O)O" onkeydown="if(event.key==='Enter')PoseGen.build()">
+        <div class="px-5 py-2 border-b border-slate-800 flex items-center gap-2 bg-slate-900/60 flex-shrink-0 flex-wrap">
+          <span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1">Stage</span>
+          <button id="poseStRandom" onclick="PoseGen.stage('random')" class="pose-stage on">① Random Start</button>
+          <button id="poseStMin" onclick="PoseGen.stage('min')" class="pose-stage">② Ligand Minimization</button>
+          <button id="poseStMC" onclick="PoseGen.stage('mc')" class="pose-stage">③ Monte-Carlo + BFGS</button>
+          <span class="text-[10.5px] text-slate-600 ml-2" id="poseStageHint">Random initialization inside the search box.</span>
+        </div>
+        <button id="poseBuildBtn" onclick="PoseGen.build()" style="padding:7px 16px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;">⌬ Build</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="flex-shrink:0;">Target protein</span>
+        <input id="posePdbId" class="path-input" style="width:120px;flex-shrink:0;" spellcheck="false" placeholder="PDB ID e.g. 1HSG" onkeydown="if(event.key==='Enter')PoseGen.fetchPdb()">
+        <button onclick="PoseGen.fetchPdb()" style="padding:6px 12px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#67e8f9;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;">Fetch from RCSB</button>
+        <button onclick="document.getElementById('posePdbFile').click()" style="padding:6px 12px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;">⤓ Upload .pdb</button>
+        <input id="posePdbFile" type="file" accept=".pdb,.ent,.txt" style="display:none;" onchange="PoseGen.loadPdbFile(this.files[0])">
+        <span id="poseProteinStatus" class="text-[11px] text-slate-600" style="flex:1;">No target loaded — docking box defaults to ligand frame.</span>
+      </div>
+      <div id="poseDerived" class="text-[11px] text-slate-400" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;"></div>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <!-- Connected-trajectory ribbon: pose flows ① → ② → ③ ; camera + step/score data connected -->
+      <div class="px-5 py-1.5 border-b border-slate-800 bg-slate-950/50 flex items-center gap-1.5 flex-shrink-0 flex-wrap" style="font-size:10.5px;">
+        <span class="text-slate-600 font-semibold uppercase mr-1" style="font-size:9px;letter-spacing:.12em;">Trajectory</span>
+        <span id="poseTrajR" class="pose-traj">① start —</span>
+        <span id="poseTrajA1" style="color:#1e293b;">→</span>
+        <span id="poseTrajM" class="pose-traj">② min —</span>
+        <span id="poseTrajA2" style="color:#1e293b;">→</span>
+        <span id="poseTrajC" class="pose-traj">③ MC —</span>
+        <span class="ml-auto text-slate-600" style="font-size:9.5px;display:flex;align-items:center;gap:4px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h3l1.6-2h6.8L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>shared camera</span>
+      </div>
+      <div class="flex-1 min-h-0 flex overflow-hidden">
+        <div class="flex-1 bg-[#05070f] flex flex-col min-h-0 overflow-hidden">
+          <div class="flex-1 min-h-0 relative">
+            <svg id="poseSvgBox" style="position:absolute;inset:0;width:100%;height:100%;"></svg>
+            <div id="poseBox3D" style="display:none;position:absolute;inset:0;"></div>
+            <div id="poseLegend3D" style="display:none;position:absolute;top:8px;left:10px;font-size:10px;font-family:ui-monospace,monospace;line-height:1.75;background:rgba(8,12,20,.72);border:1px solid #1e293b;border-radius:9px;padding:7px 10px;pointer-events:none;">
+              <div style="margin-bottom:2px;"><span style="color:#22c55e;">●</span> ligand&nbsp;&nbsp;<span style="color:#97a3b0;">●</span> protein&nbsp;<span style="color:#3b6cf6;">●</span>N <span style="color:#ef4444;">●</span>O</div>
+              <div><span style="color:#fde047;">┄┄</span> H-bond&nbsp;&nbsp;<span style="color:#d946ef;">┄┄</span> salt bridge&nbsp;&nbsp;<span style="color:#38bdf8;">┄┄</span> π–π</div>
+            </div>
+            <div id="poseProcPanel" style="display:none;position:absolute;top:8px;right:10px;width:208px;background:rgba(8,12,20,.85);border:1px solid #1e293b;border-radius:11px;padding:10px 12px;pointer-events:none;">
+              <div id="poseProcTitle" style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">Energy</div>
+              <div id="poseProcVal" style="font-family:ui-monospace,monospace;font-size:19px;font-weight:700;color:#34d399;line-height:1.1;margin-top:1px;">—</div>
+              <svg id="poseProcChart" viewBox="0 0 184 44" style="width:100%;height:44px;margin-top:5px;display:block;"></svg>
+              <div id="poseProcSub" style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;margin-top:2px;">—</div>
+            </div>
+            <button id="poseFsBtn" onclick="PoseGen.toggleFullscreen()" title="Fullscreen" style="position:absolute;top:8px;right:10px;z-index:6;pointer-events:auto;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-size:13px;line-height:1;cursor:pointer;">&#9974;</button>
+            <div id="poseBox3DHint" style="display:none;position:absolute;bottom:8px;left:10px;font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;pointer-events:none;"><div id="poseViewMenu" style="display:none;pointer-events:auto;margin-bottom:6px;min-width:174px;background:rgba(8,12,20,.94);border:1px solid #1e293b;border-radius:10px;padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.5);"><button id="poseSurfBtn" onclick="PoseGen.toggleSurface()" title="Solvent-excluded molecular surface: a 1.4 &#197; water probe rolled over the pocket atoms&#39; van der Waals spheres. Shows the SHAPE of the binding cavity, not the fold." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9677; Surface</button><button id="poseSSBtn" onclick="PoseGen.toggleSS()" title="Secondary structure via DSSP-style backbone H-bond assignment: &#945;-helix (i&#8594;i+4), &#946;-sheet (parallel / antiparallel bridges), loop. Red helix &#183; cyan sheet &#183; grey loop." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#12336; Secondary structure</button><button id="poseProtBtn" onclick="PoseGen.toggleProtein()" title="Show or hide the protein pocket atoms (sticks). The surface and secondary-structure overlays are independent of this." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #0e7490;background:rgba(34,211,238,.16);color:#67e8f9;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#11041; Protein atoms</button><div id="poseSSLegend" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;"><span style="color:#ef4444;">&#9644;</span> helix <b id="poseSSa" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#22d3ee;">&#9644;</span> sheet <b id="poseSSb" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#8ca0b3;">&#9644;</span> loop <b id="poseSSl" style="color:#e2e8f0;">0</b></div><div id="poseSurfNote" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;">SES &#183; 1.4 &#197; water probe</div></div><button id="poseViewToggle" onclick="PoseGen.toggleViewMenu()" title="View layers" style="pointer-events:auto;padding:4px 11px;border-radius:8px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9776; View</button></div>
+          </div>
+          <!-- Random controls -->
+          <div id="poseCtrlRandom" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:flex;">
+            <button onclick="PoseGen.init.shuffle()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">⟳ New random pose</button>
+            <button onclick="PoseGen.init.regen()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">Regenerate all seeds</button>
+            <div class="flex-1"></div>
+            <span class="text-[11px] text-slate-500">Exhaustiveness</span>
+            <div id="poseExhToggles" style="display:flex;gap:6px;">
+              <button data-ex="4" onclick="PoseGen.init.setEx(4)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">4</button>
+              <button data-ex="8" onclick="PoseGen.init.setEx(8)" style="padding:6px 11px;border-radius:9px;border:1px solid #22d3ee;background:rgba(34,211,238,.1);color:#22d3ee;font-size:11px;cursor:pointer;font-family:inherit;">8</button>
+              <button data-ex="16" onclick="PoseGen.init.setEx(16)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">16</button>
+            </div>
+          </div>
+          <!-- Minimization controls -->
+          <div id="poseCtrlMin" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:none;">
+            <button id="poseMinRunBtn" onclick="PoseGen.min.run()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">▶ Minimize</button>
+            <button onclick="PoseGen.min.reset()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">↺ Perturb &amp; reset</button>
+            <div class="flex-1"></div>
+            <span class="text-[10.5px] text-slate-500">steepest-descent on bond/angle/torsion strain · illustrative (MMFF runs server-side)</span>
+          </div>
+          <!-- Monte-Carlo controls -->
+          <div id="poseCtrlMC" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:none;">
+            <button id="poseMcRunBtn" onclick="PoseGen.mc.run()" style="padding:8px 14px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">▶ Run search</button>
+            <button onclick="PoseGen.mc.step()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">Step</button>
+            <button onclick="PoseGen.mc.reset()" style="padding:8px 14px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">↺ Reset</button>
+            <span class="text-[11px] text-slate-500 ml-1">Scorer</span>
+            <select id="poseMcScorer" onchange="PoseGen.mc.setScorer(this.value)" style="background:#0b1120;border:1px solid #1e293b;border-radius:9px;color:#cbd5e1;font-size:11px;padding:6px 8px;font-family:inherit;cursor:pointer;outline:none;">
+              <option value="surrogate">Surrogate · clash + restraint</option>
+              <option value="deepatom">DeepAtom ΔG (server CNN)</option>
+            </select>
+            <button id="poseDaScoreBtn" onclick="PoseGen.mc.scoreDeepAtom()" style="display:none;padding:6px 12px;border-radius:9px;border:1px solid #6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score best pose</button>
+            <div class="flex-1"></div>
+            <span class="text-[11px] text-slate-500">Temp</span>
+            <div id="poseMcTempToggles" style="display:flex;gap:6px;">
+              <button data-t="0.5" onclick="PoseGen.mc.setT(0.5)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">cold</button>
+              <button data-t="1.2" onclick="PoseGen.mc.setT(1.2)" style="padding:6px 11px;border-radius:9px;border:1px solid #22d3ee;background:rgba(34,211,238,.1);color:#22d3ee;font-size:11px;cursor:pointer;font-family:inherit;">warm</button>
+              <button data-t="2.5" onclick="PoseGen.mc.setT(2.5)" style="padding:6px 11px;border-radius:9px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;cursor:pointer;font-family:inherit;">hot</button>
+            </div>
+          </div>
+        </div>
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 overflow-y-auto" style="width:336px;">
+          <!-- Random sidebar -->
+          <div id="poseSideRandom" class="px-4 py-4" style="display:flex;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Stochastic initialization</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">Each run starts from a <b class="text-slate-200">random state</b> in the box; minimization then Monte-Carlo + BFGS refine it. <span class="font-mono text-[11px] text-cyan-300">conf::randomize()</span> draws:</p>
+            <div id="poseProteinCard"></div>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Current start state</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">seed</span><span id="poseCurSeed" style="color:#22d3ee;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">center (x,y,z)</span><span id="poseCurPos" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">quaternion</span><span id="poseCurQuat" style="color:#e2e8f0;font-size:10px;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">torsions</span><span id="poseCurTors" style="color:#e2e8f0;font-size:10px;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">contacts</span><span id="poseCurIx" style="color:#e2e8f0;font-size:10px;">—</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;"><p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="margin:0;">Independent runs</p><span class="text-[9px] px-2 py-0.5 rounded-full" style="background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);color:#34d399;">exhaustiveness</span></div>
+            <div id="poseSeedGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;"></div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Translation: uniform in box · Rotation: <b style="color:#a78bfa;">uniform random orientation</b> (Shoemake) · Torsions: uniform in [−π, π].</p>
+          </div>
+          <!-- Minimization sidebar -->
+          <div id="poseSideMin" class="px-4 py-4" style="display:none;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Ligand minimization</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">The protein pocket is held <b class="text-slate-200">fixed</b>; the ligand's pose relaxes against it — sliding out of steric clashes and unwinding strained torsions as it descends the strain-energy well. Hit <b class="text-cyan-300">Minimize</b> to watch it settle.</p>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 9px;">Strain energy <span style="color:#34d399;">· editable</span></p>
+              <div style="font-family:ui-monospace,monospace;font-size:11.5px;color:#cbd5e1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 3px;">
+                <span style="color:#64748b;">E =</span>
+                <input id="poseEwTors" type="number" step="1" min="0" value="12" onchange="PoseGen.min.setWeights()" title="torsional-strain weight" style="width:44px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#34d399;outline:none;text-align:center;">
+                <span>· Σθ²</span><span style="color:#475569;">&nbsp;+&nbsp;</span>
+                <input id="poseEwClash" type="number" step="1" min="0" value="8" onchange="PoseGen.min.setWeights()" title="clash weight (ligand ↔ fixed protein)" style="width:44px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#34d399;outline:none;text-align:center;">
+                <span>· Σ&nbsp;max(0,</span>
+                <input id="poseEd0" type="number" step="0.1" min="0.4" value="3.2" onchange="PoseGen.min.setWeights()" title="clash onset distance d₀ (Å)" style="width:48px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#67e8f9;outline:none;text-align:center;">
+                <span>− d)²</span><span style="color:#475569;">&nbsp;+&nbsp;</span>
+                <input id="poseEwCenter" type="number" step="0.5" min="0" value="2" onchange="PoseGen.min.setWeights()" title="centering restraint weight" style="width:44px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#34d399;outline:none;text-align:center;">
+                <span>· ‖c−c₀‖²</span>
+              </div>
+              <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:9px 0 0;">θ ligand torsions · d ligand–protein atom gap (<b style="color:#94a3b8;">protein fixed</b>) · c ligand centroid, c₀ box center. Edit a coefficient to reshape the well and re-run.</p>
+            </div>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Relaxation</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">degrees of freedom</span><span id="poseMinAtoms" style="color:#22d3ee;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">start strain</span><span id="poseMinEstart" style="color:#fb7185;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">current</span><span id="poseMinEcur" style="color:#34d399;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">Δ energy</span><span id="poseMinDelta" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">iteration</span><span id="poseMinIter" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">RMSD→min</span><span id="poseMinRmsd" style="color:#e2e8f0;">—</span></div>
+            </div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Illustrative coordinate-descent on the ligand's 6 rigid-body + N torsional DOFs against a rigid receptor. Production minimization uses MMFF94 / a real force field, optionally with a flexible pocket (server-side).</p>
+          </div>
+          <!-- Monte-Carlo sidebar -->
+          <div id="poseSideMC" class="px-4 py-4" style="display:none;flex-direction:column;gap:14px;">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Monte-Carlo + BFGS</p>
+            <p class="text-[12px] text-slate-400 leading-relaxed">Vina's global search iterates: <b class="text-slate-200">random perturbation</b> → <b class="text-violet-300">BFGS</b> local optimization → <b class="text-slate-200">Metropolis</b> accept/reject, tracking the best pose. Lower score = better.</p>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 9px;">Search score <span style="color:#38bdf8;">· editable</span></p>
+              <div style="font-family:ui-monospace,monospace;font-size:11.5px;color:#cbd5e1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 3px;">
+                <span style="color:#64748b;">S =</span>
+                <input id="poseScwClash" type="number" step="0.1" min="0" value="0.6" onchange="PoseGen.mc.setScore()" title="clash weight (ligand ↔ pocket)" style="width:46px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#38bdf8;outline:none;text-align:center;">
+                <span>· Σ&nbsp;max(0,</span>
+                <input id="poseScd0" type="number" step="0.1" min="0.4" value="2.5" onchange="PoseGen.mc.setScore()" title="clash onset distance d₀ (Å)" style="width:48px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#67e8f9;outline:none;text-align:center;">
+                <span>− d)</span><span style="color:#475569;">&nbsp;+&nbsp;</span>
+                <input id="poseScwCenter" type="number" step="0.1" min="0" value="0.4" onchange="PoseGen.mc.setScore()" title="box-center restraint weight" style="width:46px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#38bdf8;outline:none;text-align:center;">
+                <span>· ‖c−c₀‖</span>
+              </div>
+              <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:9px 0 0;">d ligand–protein atom gap · c ligand centroid, c₀ box center. Lower S = better; drives every search step. Edit a coefficient to retune, then re-run. DeepAtom scores the best pose separately (below).</p>
+            </div>
+            <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Search trace</p>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">start pose</span><span id="poseMcSrc" style="color:#a78bfa;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">step</span><span id="poseMcStep" style="color:#22d3ee;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">current score</span><span id="poseMcScore" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">best score</span><span id="poseMcBest" style="color:#34d399;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">accepted</span><span id="poseMcAcc" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">temperature</span><span id="poseMcTempVal" style="color:#e2e8f0;">—</span></div>
+            </div>
+            <div id="poseDaCard" style="display:none;flex-direction:column;gap:0;background:#140d24;border:1px solid #3b2a6b;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#a78bfa;margin:0 0 8px;">DeepAtom affinity · ShuffleNetV3</p>
+              <div style="display:flex;flex-direction:column;gap:4px;padding:0 0 9px;margin-bottom:5px;border-bottom:1px solid rgba(59,42,107,.5);">
+                <label for="poseDaOutDir" style="font-size:9.5px;color:#7c6bae;font-family:ui-monospace,monospace;letter-spacing:.03em;">server output dir · <b style="color:#c4b5fd;">.atomtypes</b> + <b style="color:#c4b5fd;">.npz</b> + results</label>
+                <input id="poseDaOutDir" type="text" spellcheck="false" autocomplete="off" placeholder="/path/to/writable/scratch  (blank → temp dir)" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:10.5px;background:#0a0716;border:1px solid #3b2a6b;border-radius:6px;padding:4px 7px;color:#c4b5fd;outline:none;" onfocus="this.style.borderColor='#7c5cff'" onblur="this.style.borderColor='#3b2a6b'">
+              </div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(59,42,107,.5);"><span style="color:#7c6bae;">predicted pK</span><span id="poseDaPk" style="color:#c4b5fd;font-weight:700;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(59,42,107,.5);"><span style="color:#7c6bae;">ΔG (kcal/mol)</span><span id="poseDaDg" style="color:#e2e8f0;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#7c6bae;">status</span><span id="poseDaStatus" style="color:#94a3b8;font-size:10px;">idle</span></div>
+              <p style="font-size:10px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:8px 0 0;">Server-side CNN scores the <b>best</b> pose on demand (prep + grid + inference take seconds–minutes) — it does not drive the per-step search. pK = −ΔG/1.36.</p>
+            </div>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">The editable surrogate above drives the per-step search (clash + box-center restraint). Production docking uses the full Vina scoring function on GPU/CPU (server-side).</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+  .pose-chip{padding:5px 10px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .14s;}
+  .pose-chip:hover{border-color:#22d3ee;color:#67e8f9;}
+  .pose-stage{padding:5px 13px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .14s;}
+  .pose-stage:hover{border-color:#334a6b;color:#cbd5e1;}
+  .pose-stage.on{border-color:#0e4f63;background:rgba(34,211,238,.12);color:#67e8f9;}
+  .pose-traj{padding:2px 8px;border-radius:7px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-family:ui-monospace,monospace;white-space:nowrap;transition:all .14s;}
+  .pose-traj.on{border-color:#0e4f63;background:rgba(34,211,238,.1);color:#cbd5e1;}
+</style>
+<!-- ══ /Pose Generation Modal ═══════════════════════════════════════════════════ -->
+
+<script>
+/* ============================================================================
+   Pose-Gen engine — SMILES parsing, rotatable-bond perception, torsion tree,
+   2D layout, pose math, PDB parsing.  Pure (no DOM). Node-testable.
+   ============================================================================ */
+(function(root){
+  /* ---- vec math ---- */
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const nrm=a=>{const m=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/m,a[1]/m,a[2]/m];};
+  function matVec(M,v){return [M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]];}
+  function matMul(A,B){const C=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)C[i][j]+=A[i][k]*B[k][j];return C;}
+  function rotX(t){const c=Math.cos(t),s=Math.sin(t);return [[1,0,0],[0,c,-s],[0,s,c]];}
+  function rotY(t){const c=Math.cos(t),s=Math.sin(t);return [[c,0,s],[0,1,0],[-s,0,c]];}
+  function quatToMat(q){const a=q[0],b=q[1],c=q[2],d=q[3];
+    const aa=a*a,ab=a*b,ac=a*c,ad=a*d,bb=b*b,bc=b*c,bd=b*d,cc=c*c,cd=c*d,dd=d*d;
+    return [[aa+bb-cc-dd,2*(-ad+bc),2*(ac+bd)],[2*(ad+bc),aa-bb+cc-dd,2*(-ab+cd)],[2*(-ac+bd),2*(ab+cd),aa-bb-cc+dd]];}
+  function normQuat(q){const m=Math.hypot(q[0],q[1],q[2],q[3])||1;return [q[0]/m,q[1]/m,q[2]/m,q[3]/m];}
+  function eulerToQuat(rx,ry,rz){const cx=Math.cos(rx/2),sx=Math.sin(rx/2),cy=Math.cos(ry/2),sy=Math.sin(ry/2),cz=Math.cos(rz/2),sz=Math.sin(rz/2);
+    return normQuat([cx*cy*cz+sx*sy*sz,sx*cy*cz-cx*sy*sz,cx*sy*cz+sx*cy*sz,cx*cy*sz-sx*sy*cz]);}
+  function randomQuat(){const u1=Math.random(),u2=Math.random(),u3=Math.random();const s1=Math.sqrt(1-u1),s2=Math.sqrt(u1),t1=2*Math.PI*u2,t2=2*Math.PI*u3;
+    return [s2*Math.cos(t2),s1*Math.sin(t1),s1*Math.cos(t1),s2*Math.sin(t2)];}
+  function rotAxis(p,piv,k,th){const v=sub(p,piv),ct=Math.cos(th),st=Math.sin(th),kv=dot(k,v),kc=cross(k,v);
+    return [piv[0]+v[0]*ct+kc[0]*st+k[0]*kv*(1-ct),piv[1]+v[1]*ct+kc[1]*st+k[1]*kv*(1-ct),piv[2]+v[2]*ct+kc[2]*st+k[2]*kv*(1-ct)];}
+  function q2e(q){q=normQuat(q);const w=q[0],x=q[1],y=q[2],z=q[3];
+    const rx=Math.atan2(2*(w*x+y*z),1-2*(x*x+y*y));let sp=2*(w*y-z*x);sp=Math.max(-1,Math.min(1,sp));const ry=Math.asin(sp);
+    const rz=Math.atan2(2*(w*z+x*y),1-2*(y*y+z*z));return [rx,ry,rz];}
+
+  /* ---- element table ---- */
+  const ELEM={ C:{col:'#cbd5e1',r:9}, N:{col:'#60a5fa',r:9.5}, O:{col:'#fb7185',r:9.5},
+    S:{col:'#fbbf24',r:11}, P:{col:'#fb923c',r:11}, F:{col:'#86efac',r:8},
+    Cl:{col:'#86efac',r:10}, Br:{col:'#fca5a5',r:11}, I:{col:'#c4b5fd',r:12},
+    B:{col:'#fcd34d',r:9.5}, H:{col:'#e2e8f0',r:6}, '*':{col:'#f0abfc',r:9} };
+  function elInfo(e){return ELEM[e]||ELEM['*'];}
+
+  /* ---- SMILES parser (organic subset + brackets, rings, branches, aromatics) ---- */
+  const ORG2=['Cl','Br'];
+  function bondOrder(ch){return ch==='='?2:ch==='#'?3:ch===':'?4:1;}
+  function parseSMILES(smi){
+    const atoms=[], bonds=[];
+    let prev=-1, pend=null; const stack=[]; const ring={};
+    const addBond=(a,b,o)=>{ if(a===b)return; bonds.push({a,b,order:o}); };
+    const addAtom=(el,arom)=>{
+      const idx=atoms.length; atoms.push({el,arom:!!arom});
+      if(prev>=0){ const o = pend!=null?pend : ((atoms[prev].arom&&arom)?4:1); addBond(prev,idx,o); }
+      pend=null; prev=idx; return idx;
+    };
+    const doRing=(label)=>{
+      if(ring[label]==null){ ring[label]={atom:prev,bond:pend}; pend=null; }
+      else { const r=ring[label]; const o = pend!=null?pend : (r.bond!=null?r.bond : ((atoms[prev].arom&&atoms[r.atom].arom)?4:1));
+        addBond(r.atom,prev,o); ring[label]=null; pend=null; }
+    };
+    let i=0;
+    while(i<smi.length){
+      const ch=smi[i];
+      if(ch==='('){ stack.push(prev); i++; continue; }
+      if(ch===')'){ prev=stack.pop(); i++; continue; }
+      if(ch==='-'||ch==='='||ch==='#'||ch===':'||ch==='/'||ch==='\\'){ pend=bondOrder(ch); i++; continue; }
+      if(ch==='.'){ prev=-1; pend=null; i++; continue; }
+      if(ch==='%'){ const lab=parseInt(smi.substr(i+1,2),10); i+=3; doRing('%'+lab); continue; }
+      if(ch>='0'&&ch<='9'){ doRing(ch); i++; continue; }
+      if(ch==='['){
+        const j=smi.indexOf(']',i); const body=smi.slice(i+1,j);
+        const m=body.match(/^(\d*)([A-Z][a-z]?|se|as|[bcnops])/);
+        let el='*', arom=false;
+        if(m){ let sym=m[2]; arom=/^[bcnops]$|^se$|^as$/.test(sym); el = arom? (sym==='se'?'Se':sym==='as'?'As':sym.toUpperCase()) : sym; }
+        addAtom(el,arom); i=j+1; continue;
+      }
+      // organic subset
+      const two=smi.substr(i,2);
+      if(ORG2.indexOf(two)>=0){ addAtom(two,false); i+=2; continue; }
+      if(/[A-Z]/.test(ch)){ addAtom(ch,false); i++; continue; }
+      if(/[bcnops]/.test(ch)){ addAtom(ch.toUpperCase(),true); i++; continue; }
+      i++; // skip unknown (e.g. H inside? @, +, -, stray)
+    }
+    // keep only the largest connected component (ligand = one molecule)
+    return largestComponent(atoms,bonds);
+  }
+  function buildAdj(n,bonds){ const adj=Array.from({length:n},()=>[]); bonds.forEach((b,id)=>{ adj[b.a].push({to:b.b,id}); adj[b.b].push({to:b.a,id}); }); return adj; }
+  function largestComponent(atoms,bonds){
+    const n=atoms.length; if(!n) return {atoms,bonds};
+    const adj=buildAdj(n,bonds); const comp=new Array(n).fill(-1); let nc=0; const sizes=[];
+    for(let s=0;s<n;s++){ if(comp[s]>=0)continue; const q=[s]; comp[s]=nc; let cnt=0; while(q.length){const u=q.pop();cnt++;for(const e of adj[u])if(comp[e.to]<0){comp[e.to]=nc;q.push(e.to);}} sizes.push(cnt); nc++; }
+    if(nc===1) return {atoms,bonds};
+    let best=0; for(let c=1;c<nc;c++) if(sizes[c]>sizes[best]) best=c;
+    const keep=[]; const remap=new Array(n).fill(-1);
+    atoms.forEach((a,i)=>{ if(comp[i]===best){ remap[i]=keep.length; keep.push(a);} });
+    const kb=bonds.filter(b=>comp[b.a]===best).map(b=>({a:remap[b.a],b:remap[b.b],order:b.order}));
+    return {atoms:keep,bonds:kb};
+  }
+
+  /* ---- bridges (Tarjan) ---- */
+  function findBridges(n,adj){
+    const disc=new Array(n).fill(-1), low=new Array(n).fill(0), br={}; let t=0;
+    const st=[];
+    for(let s=0;s<n;s++){ if(disc[s]>=0)continue;
+      st.push({u:s,pe:-1,ix:0}); disc[s]=low[s]=t++;
+      while(st.length){ const fr=st[st.length-1]; const u=fr.u;
+        if(fr.ix<adj[u].length){ const e=adj[u][fr.ix++]; if(e.id===fr.pe)continue;
+          if(disc[e.to]<0){ disc[e.to]=low[e.to]=t++; st.push({u:e.to,pe:e.id,ix:0}); }
+          else low[u]=Math.min(low[u],disc[e.to]);
+        } else { st.pop(); if(st.length){ const p=st[st.length-1]; low[p.u]=Math.min(low[p.u],low[u]); if(low[u]>disc[p.u]) br[fr.pe]=true; } }
+      }
+    }
+    return br;
+  }
+
+  /* ---- rotatable-bond perception ---- */
+  function perceive(mol){
+    const {atoms,bonds}=mol; const n=atoms.length; const adj=buildAdj(n,bonds);
+    const deg=new Array(n).fill(0); bonds.forEach(b=>{deg[b.a]++;deg[b.b]++;});
+    const br=findBridges(n,adj);
+    // an aromatic-flagged bond that is a bridge cannot be in a ring → it is a single bond
+    const orders=bonds.map((b,id)=> (b.order===4 && br[id]) ? 1 : b.order );
+    // amide C–N where C has a double bond to O
+    const hasCarbonyl=(c)=>bonds.some((b,k)=>orders[k]===2 && (b.a===c||b.b===c) && atoms[(b.a===c?b.b:b.a)].el==='O');
+    const rot={};
+    bonds.forEach((b,id)=>{
+      if(orders[id]!==1) return;
+      if(!br[id]) return;
+      if(deg[b.a]<2||deg[b.b]<2) return;
+      const ea=atoms[b.a].el, eb=atoms[b.b].el;
+      // amide: C–N with carbonyl on the C
+      if((ea==='C'&&eb==='N'&&hasCarbonyl(b.a))||(eb==='C'&&ea==='N'&&hasCarbonyl(b.b))) return;
+      rot[id]=true;
+    });
+    return {deg,bridges:br,rotatable:rot,orders};
+  }
+
+  /* ---- ring detection (simple cycles among non-bridge bonds) for layout ---- */
+  function simpleRings(mol,bridges){
+    const {atoms,bonds}=mol; const n=atoms.length;
+    const radj=Array.from({length:n},()=>[]);
+    bonds.forEach((b,id)=>{ if(!bridges[id]){ radj[b.a].push(b.b); radj[b.b].push(b.a); } });
+    const seen=new Array(n).fill(false); const rings=[];
+    for(let s=0;s<n;s++){ if(seen[s]||radj[s].length===0)continue;
+      // BFS component
+      const q=[s], comp=[]; seen[s]=true;
+      while(q.length){ const u=q.pop(); comp.push(u); for(const v of radj[u]) if(!seen[v]){seen[v]=true;q.push(v);} }
+      // simple cycle iff every vertex has ring-degree 2
+      if(comp.every(v=>radj[v].length===2)){
+        // order around the cycle
+        const order=[comp[0]]; let prev=-1, cur=comp[0];
+        for(let k=0;k<comp.length-1;k++){ const nx=radj[cur].find(w=>w!==prev); prev=cur; cur=nx; order.push(cur); }
+        rings.push(order);
+      }
+    }
+    return rings;
+  }
+
+  /* ---- 2D layout: BFS tree init + ring polygon snap + force relax ---- */
+  function layout2D(mol,bridges){
+    const {atoms,bonds}=mol; const n=atoms.length; const L=1.4;
+    const adj=Array.from({length:n},()=>[]); bonds.forEach(b=>{adj[b.a].push(b.b);adj[b.b].push(b.a);});
+    const pos=Array.from({length:n},()=>[0,0]);
+    // BFS tree init
+    const placed=new Array(n).fill(false);
+    const ang=new Array(n).fill(0);
+    if(n>0){ const q=[0]; placed[0]=true; pos[0]=[0,0]; ang[0]=Math.PI/2;
+      while(q.length){ const u=q.shift(); const nb=adj[u].filter(v=>!placed[v]); let base=ang[u]+Math.PI;
+        const spread=Math.PI*2/3; nb.forEach((v,k)=>{ const a=base + (k-(nb.length-1)/2)*(spread/Math.max(1,nb.length));
+          pos[v]=[pos[u][0]+L*Math.cos(a), pos[u][1]+L*Math.sin(a)]; ang[v]=a; placed[v]=true; q.push(v); }); }
+    }
+    // ring polygon snap (overwrite ring atoms to a regular polygon at their centroid)
+    simpleRings(mol,bridges).forEach(ring=>{
+      const k=ring.length; const cx=ring.reduce((s,i)=>s+pos[i][0],0)/k, cy=ring.reduce((s,i)=>s+pos[i][1],0)/k;
+      const R=L/(2*Math.sin(Math.PI/k)); const a0=Math.atan2(pos[ring[0]][1]-cy,pos[ring[0]][0]-cx);
+      ring.forEach((idx,j)=>{ const a=a0 + j*2*Math.PI/k; pos[idx]=[cx+R*Math.cos(a), cy+R*Math.sin(a)]; });
+    });
+    // force relax (spring on bonds + repulsion) — light, to relieve overlaps
+    const bonded=new Set(bonds.map(b=>Math.min(b.a,b.b)+'_'+Math.max(b.a,b.b)));
+    for(let it=0;it<160;it++){ const f=Array.from({length:n},()=>[0,0]); const cool=1-it/200;
+      for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){ const dx=pos[i][0]-pos[j][0],dy=pos[i][1]-pos[j][1]; let d2=dx*dx+dy*dy; if(d2<1e-4)d2=1e-4; const d=Math.sqrt(d2);
+        const rep=0.55*L*L/d2; f[i][0]+=rep*dx/d; f[i][1]+=rep*dy/d; f[j][0]-=rep*dx/d; f[j][1]-=rep*dy/d; }
+      bonds.forEach(b=>{ const dx=pos[b.b][0]-pos[b.a][0],dy=pos[b.b][1]-pos[b.a][1]; const d=Math.hypot(dx,dy)||1e-4; const s=0.10*(d-L);
+        f[b.a][0]+=s*dx/d; f[b.a][1]+=s*dy/d; f[b.b][0]-=s*dx/d; f[b.b][1]-=s*dy/d; });
+      for(let i=0;i<n;i++){ const m=Math.hypot(f[i][0],f[i][1]); const cap=0.25*L; const sc=m>cap?cap/m:1; pos[i][0]+=f[i][0]*sc*cool; pos[i][1]+=f[i][1]*sc*cool; }
+    }
+    // center + scale so median bond length == L
+    const cx=pos.reduce((s,p)=>s+p[0],0)/Math.max(1,n), cy=pos.reduce((s,p)=>s+p[1],0)/Math.max(1,n);
+    const lens=bonds.map(b=>Math.hypot(pos[b.a][0]-pos[b.b][0],pos[b.a][1]-pos[b.b][1])).sort((x,y)=>x-y);
+    const med=lens.length?lens[Math.floor(lens.length/2)]:L; const sc=med>1e-3?L/med:1;
+    return pos.map(p=>[ (p[0]-cx)*sc, (p[1]-cy)*sc, 0 ]);
+  }
+
+  /* ---- torsion tree (generalized): rigid fragments → fragment tree from largest ---- */
+  function buildTree(mol,rotatable){
+    const {atoms,bonds}=mol; const n=atoms.length;
+    const radj=Array.from({length:n},()=>[]);
+    bonds.forEach((b,id)=>{ if(!rotatable[id]){ radj[b.a].push(b.b); radj[b.b].push(b.a); } });
+    const frag=new Array(n).fill(-1); const fragments=[];
+    for(let s=0;s<n;s++){ if(frag[s]>=0)continue; const fid=fragments.length; const q=[s]; frag[s]=fid; const comp=[];
+      while(q.length){ const u=q.pop(); comp.push(u); for(const v of radj[u]) if(frag[v]<0){frag[v]=fid;q.push(v);} } fragments.push(comp); }
+    let rootFrag=0; for(let i=1;i<fragments.length;i++) if(fragments[i].length>fragments[rootFrag].length) rootFrag=i;
+    // fragment adjacency via rotatable bonds
+    const fadj=Array.from({length:fragments.length},()=>[]);
+    const rotBonds=[]; bonds.forEach((b,id)=>{ if(rotatable[id]){ rotBonds.push({id,a:b.a,b:b.b}); fadj[frag[b.a]].push({to:frag[b.b],bond:{a:b.a,b:b.b}}); fadj[frag[b.b]].push({to:frag[b.a],bond:{a:b.b,b:b.a}}); } });
+    // BFS fragment tree from root; record parent
+    const par=new Array(fragments.length).fill(-1); const parBond=new Array(fragments.length).fill(null);
+    const vis=new Array(fragments.length).fill(false); const orderF=[]; const q=[rootFrag]; vis[rootFrag]=true;
+    while(q.length){ const u=q.shift(); orderF.push(u); for(const e of fadj[u]) if(!vis[e.to]){ vis[e.to]=true; par[e.to]=u; parBond[e.to]={from:e.bond.a,to:e.bond.b}; q.push(e.to); } }
+    // downstream atoms for a child fragment = all atoms in its fragment-subtree
+    function subtreeAtoms(childFrag){ const out=[]; const qq=[childFrag]; const seen=new Set([childFrag]);
+      while(qq.length){ const u=qq.pop(); out.push(...fragments[u]); for(const e of fadj[u]) if(!seen.has(e.to)&&e.to!==par[u]){ /*move away from root*/ }
+        // proper: traverse children only (those whose par is u)
+      }
+      return out; }
+    // build proper subtree via parent pointers
+    const childrenOf=Array.from({length:fragments.length},()=>[]);
+    for(let fcur=0;fcur<fragments.length;fcur++) if(par[fcur]>=0) childrenOf[par[fcur]].push(fcur);
+    function subtree(f){ const out=[]; const stk=[f]; while(stk.length){ const u=stk.pop(); out.push(...fragments[u]); for(const c of childrenOf[u]) stk.push(c);} return out; }
+    const TORS=[];
+    orderF.forEach(f=>{ if(par[f]<0)return; const pb=parBond[f]; // from in parent frag, to in child frag
+      TORS.push({ from:pb.from, to:pb.to, moves:subtree(f) }); });
+    return { ROOT:fragments[rootFrag].slice(), TORS, frag, fragCount:fragments.length };
+  }
+
+  /* ---- assemble a full ligand model from SMILES ---- */
+  function buildLigand(smi){
+    const mol=parseSMILES(smi);
+    if(!mol.atoms.length) return {ok:false,err:'No atoms parsed'};
+    if(mol.atoms.length>140) return {ok:false,err:'Too large for client preview ('+mol.atoms.length+' heavy atoms)'};
+    const per=perceive(mol);
+    const ref=layout2D(mol,per.bridges);
+    const tree=buildTree(mol,per.rotatable);
+    const rotIds=Object.keys(per.rotatable).map(Number);
+    // formula
+    const counts={}; mol.atoms.forEach(a=>counts[a.el]=(counts[a.el]||0)+1);
+    const order=['C','H','N','O','S','P','F','Cl','Br','I'];
+    let formula=''; order.forEach(e=>{ if(counts[e]) formula+=e+(counts[e]>1?counts[e]:''); });
+    Object.keys(counts).sort().forEach(e=>{ if(order.indexOf(e)<0) formula+=e+(counts[e]>1?counts[e]:''); });
+    // bond metadata: type + torsion index
+    const torsionOfBond={}; // bondId -> torsion index in TORS
+    // map each rotatable bond to its TORS entry (match by endpoints)
+    mol.bonds.forEach((b,id)=>{ if(per.rotatable[id]){ const ti=tree.TORS.findIndex(t=>(t.from===b.a&&t.to===b.b)||(t.from===b.b&&t.to===b.a)); torsionOfBond[id]=ti; } });
+    const BONDS=mol.bonds.map((b,id)=>({a:b.a,b:b.b,order:per.orders[id],
+      type: per.rotatable[id]?'rot':(per.bridges[id]?'rigid':'ring'),
+      ti: per.rotatable[id]?torsionOfBond[id]:-1 }));
+    const TINFO=tree.TORS.map((t,i)=>({ n: mol.atoms[t.from].el+'–'+mol.atoms[t.to].el, a:'A'+t.from+'–A'+t.to }));
+    return {ok:true, smiles:smi, atoms:mol.atoms.map(a=>a.el), arom:mol.atoms.map(a=>a.arom),
+      REF:ref, BONDS, ROOT:tree.ROOT, TORS:tree.TORS, TINFO, N:tree.TORS.length, formula,
+      counts };
+  }
+
+  /* ---- compute pose: torsions (parent-first) then quaternion rotation + translation ---- */
+  function computePose(L,quat,trans,thetas){
+    const c=L.REF.map(p=>p.slice());
+    L.TORS.forEach((t,i)=>{ const ang=thetas[i]||0; if(!ang)return; const k=nrm(sub(c[t.to],c[t.from])), piv=c[t.from];
+      t.moves.forEach(id=>{ if(id!==t.from) c[id]=rotAxis(c[id],piv,k,ang); }); });
+    const cen=L.ROOT.reduce((a,id)=>add(a,c[id]),[0,0,0]).map(x=>x/Math.max(1,L.ROOT.length));
+    const R=quatToMat(normQuat(quat));
+    return c.map(p=>add(add(matVec(R,sub(p,cen)),cen),trans));
+  }
+
+  /* ---- PDB parser ---- */
+  function parsePDB(text){
+    const ca=[], het=[], atoms=[]; const chains={}; const resset={}; let natoms=0;
+    let mn=[1e9,1e9,1e9], mx=[-1e9,-1e9,-1e9];
+    const TWO=['CL','BR','FE','ZN','MG','MN','SE','NA','CA','CU','NI','CO','HG','CD','K','I','F','P','S','B'];
+    function elemOf(ln,name,isHet){
+      let e=ln.slice(76,78).trim();
+      if(e){return e[0].toUpperCase()+e.slice(1).toLowerCase();}
+      let nm=name.replace(/[0-9'"]/g,'').trim().toUpperCase();
+      if(isHet&&nm.length>=2&&TWO.indexOf(nm.slice(0,2))>=0){const t=nm.slice(0,2);return t[0]+t.slice(1).toLowerCase();}
+      return (nm[0]||'C');
+    }
+    const lines=text.split('\n');
+    for(const ln of lines){ const rec=ln.slice(0,6);
+      if(rec==='ATOM  '||rec==='HETATM'){
+        const x=parseFloat(ln.slice(30,38)), y=parseFloat(ln.slice(38,46)), z=parseFloat(ln.slice(46,54));
+        if(isNaN(x)||isNaN(y)||isNaN(z))continue; natoms++;
+        if(x<mn[0])mn[0]=x; if(y<mn[1])mn[1]=y; if(z<mn[2])mn[2]=z;
+        if(x>mx[0])mx[0]=x; if(y>mx[1])mx[1]=y; if(z>mx[2])mx[2]=z;
+        const name=ln.slice(12,16).trim(); const chain=ln[21]||'A'; const resn=ln.slice(17,20).trim(); const resseq=ln.slice(22,26).trim();
+        const isHet=rec==='HETATM'; const water=(resn==='HOH'||resn==='WAT');
+        const el=elemOf(ln,name,isHet);
+        if(!water) atoms.push({x,y,z,el,name,resn,resseq,chain,het:isHet});
+        if(rec==='ATOM  '){ chains[chain]=1; resset[chain+'|'+resseq]=1; if(name==='CA') ca.push([x,y,z,chain]); }
+        else { if(!water&&resn!=='SO4'&&resn!=='PO4') het.push([x,y,z,resn]); }
+      }
+    }
+    const protCenter=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2];
+    let hetCenter=null, hetSize=null;
+    if(het.length){ hetCenter=[0,0,0]; het.forEach(h=>{hetCenter[0]+=h[0];hetCenter[1]+=h[1];hetCenter[2]+=h[2];}); hetCenter=hetCenter.map(v=>v/het.length);
+      let hmn=[1e9,1e9,1e9],hmx=[-1e9,-1e9,-1e9]; het.forEach(h=>{for(let k=0;k<3;k++){if(h[k]<hmn[k])hmn[k]=h[k];if(h[k]>hmx[k])hmx[k]=h[k];}});
+      hetSize=Math.max(16, Math.ceil(Math.max(hmx[0]-hmn[0],hmx[1]-hmn[1],hmx[2]-hmn[2])+8)); }
+    const center=hetCenter||protCenter;
+    const size=hetSize||22;
+    return { ca, het, atoms, chains:Object.keys(chains), nres:Object.keys(resset).length, natoms, min:mn, max:mx,
+      center, size, hasLigand:het.length>0, protCenter };
+  }
+
+  const API={ sub,add,dot,cross,nrm,matVec,matMul,rotX,rotY,quatToMat,normQuat,eulerToQuat,randomQuat,rotAxis,q2e,
+    elInfo, parseSMILES, perceive, simpleRings, layout2D, buildTree, buildLigand, computePose, parsePDB, findBridges, buildAdj };
+  if(typeof module!=='undefined'&&module.exports) module.exports=API; else root.PoseEngine=API;
+})(typeof window!=='undefined'?window:globalThis);
+/* ════════════════ Pose Generation — UI controller (uses PoseEngine) ════════════════ */
+(function(){
+  const PE=window.PoseEngine;
+  const POSE_LIGAND_API='/pose/ligand';   // RDKit backend; falls back to in-browser engine if unavailable
+  const $=id=>document.getElementById(id);
+  const CAM=PE.matMul(PE.rotY(0.32),PE.rotX(-0.36));
+
+  /* ---- helpers ---- */
+  function molExtent(L){let m=0;for(const p of L.REF){const d=Math.hypot(p[0],p[1],p[2]);if(d>m)m=d;}return m||1;}
+  function fitScale(L,px){return px/molExtent(L);}
+  function boxParams(L){const ext=molExtent(L),half=Math.max(4,ext*1.3),S=150/half,tmax=Math.max(0.6,(half-ext)*0.85);return {ext,half,S,tmax};}
+  function kv(k,v,col){return '<div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.5);"><span style="color:#64748b;">'+k+'</span><span style="color:'+(col||'#e2e8f0')+';">'+v+'</span></div>';}
+
+  /* ---- render ---- */
+  function project(coords,cam,scale,cx,cy){return coords.map(p=>{const cp=PE.matVec(cam,p);return {x:cx+scale*cp[0],y:cy-scale*cp[1],z:cp[2]};});}
+  function svgMol(L,coords,cam,opt){
+    const scale=opt.scale,cx=opt.cx,cy=opt.cy,labels=opt.labels,rootHi=opt.rootHi,hot=opt.hot==null?-1:opt.hot,small=opt.small;
+    const P=project(coords,cam,scale,cx,cy);let s='';
+    const root=new Set(L.ROOT);
+    L.BONDS.forEach(bd=>{const A=P[bd.a],B=P[bd.b];const dep=(A.z+B.z)/2;const ds=Math.min(1.4,Math.max(.7,1+dep*0.07));
+      let col=bd.type==='rot'?'#a78bfa':bd.type==='ring'?'#5b6b86':'#647089';let w=(small?1.6:3.0)*ds;
+      if(bd.type==='rot'&&bd.ti===hot){col='#c4b5fd';w*=1.5;}
+      if(bd.order===2){const dx=B.x-A.x,dy=B.y-A.y,Ln=Math.hypot(dx,dy)||1,ox=-dy/Ln*2.2,oy=dx/Ln*2.2;
+        s+='<line x1="'+(A.x+ox)+'" y1="'+(A.y+oy)+'" x2="'+(B.x+ox)+'" y2="'+(B.y+oy)+'" stroke="'+col+'" stroke-width="'+(w*.8)+'" stroke-linecap="round"/>';
+        s+='<line x1="'+(A.x-ox)+'" y1="'+(A.y-oy)+'" x2="'+(B.x-ox)+'" y2="'+(B.y-oy)+'" stroke="'+col+'" stroke-width="'+(w*.8)+'" stroke-linecap="round"/>';
+      } else { s+='<line x1="'+A.x+'" y1="'+A.y+'" x2="'+B.x+'" y2="'+B.y+'" stroke="'+col+'" stroke-width="'+w+'" stroke-linecap="round"/>'; }
+      if(bd.type==='rot'&&!small){const mx=(A.x+B.x)/2,my=(A.y+B.y)/2,r=bd.ti===hot?6:4.5;
+        s+='<circle cx="'+mx+'" cy="'+my+'" r="'+r+'" fill="none" stroke="'+(bd.ti===hot?'#c4b5fd':'#a78bfa')+'" stroke-width="1.3" stroke-dasharray="2.2 2"/>';}
+    });
+    const ord=P.map((p,i)=>i).sort((i,j)=>P[i].z-P[j].z);
+    ord.forEach(i=>{const p=P[i],el=L.atoms[i],info=PE.elInfo(el),dep=p.z,ds=Math.min(1.45,Math.max(.65,1+dep*0.07));const r=(small?info.r*0.42:info.r)*ds;
+      if(rootHi&&root.has(i))s+='<circle cx="'+p.x+'" cy="'+p.y+'" r="'+(r+5)+'" fill="none" stroke="#22d3ee" stroke-width="1.6" opacity=".55"/>';
+      s+='<circle cx="'+p.x+'" cy="'+p.y+'" r="'+r+'" fill="'+elcol(el,true)+'" stroke="#05070f" stroke-width="'+(small?1:1.5)+'"/>';
+      s+='<circle cx="'+(p.x-r*0.3)+'" cy="'+(p.y-r*0.3)+'" r="'+(r*0.34)+'" fill="#fff" opacity=".3"/>';
+      if(labels&&!small&&el!=='C')s+='<text x="'+p.x+'" y="'+(p.y+r+11)+'" font-size="9.5" fill="#94a3b8" text-anchor="middle" font-family="ui-monospace,monospace">'+el+'</text>';
+    });
+    return s;
+  }
+  function svgBoxWire(cam,scale,cx,cy,B){
+    const c=[[-B,-B,-B],[B,-B,-B],[B,B,-B],[-B,B,-B],[-B,-B,B],[B,-B,B],[B,B,B],[-B,B,B]];
+    const P=project(c,cam,scale,cx,cy);const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];let s='';
+    E.forEach((e,idx)=>{s+='<line x1="'+P[e[0]].x+'" y1="'+P[e[0]].y+'" x2="'+P[e[1]].x+'" y2="'+P[e[1]].y+'" stroke="#22d3ee" stroke-width="1" opacity="'+(idx<4?'.22':'.42')+'" stroke-dasharray="'+(idx<4?'4 4':'0')+'"/>';});
+    return s;
+  }
+  /* ---- Plotly 3D: ball-and-stick pocket + ligand + interactions ---- */
+  function layout3D(rev){const ax={showgrid:false,zeroline:false,showticklabels:false};   // matches vina.js _sceneP
+    return {paper_bgcolor:'transparent',plot_bgcolor:'transparent',margin:{l:0,r:0,t:0,b:0},showlegend:false,font:{color:'#94a3b8'},uirevision:(rev||'none'),
+      scene:{xaxis:ax,yaxis:ax,zaxis:ax,aspectmode:'data',bgcolor:'#05070f',dragmode:'orbit',uirevision:(rev||'none'),camera:{eye:{x:1.35,y:1.35,z:1.05}}}};}
+  function boxTrace3D(c,size){const h=size/2;const C=[[-h,-h,-h],[h,-h,-h],[h,h,-h],[-h,h,-h],[-h,-h,h],[h,-h,h],[h,h,h],[-h,h,h]].map(d=>[c[0]+d[0],c[1]+d[1],c[2]+d[2]]);
+    const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];const x=[],y=[],z=[];
+    E.forEach(e=>{x.push(C[e[0]][0],C[e[1]][0],null);y.push(C[e[0]][1],C[e[1]][1],null);z.push(C[e[0]][2],C[e[1]][2],null);});
+    return {type:'scatter3d',mode:'lines',x:x,y:y,z:z,line:{color:'#22d3ee',width:3,dash:'dot'},hoverinfo:'skip',showlegend:false};}
+
+  const COV={H:0.31,C:0.76,N:0.71,O:0.66,S:1.05,P:1.07,F:0.57,Cl:1.02,Br:1.20,I:1.39,Se:1.20,B:0.84,Zn:1.22,Fe:1.32,Mg:1.41,Mn:1.39,Ca:1.76,Na:1.66,K:2.03,Cu:1.32,Ni:1.24,Co:1.26};
+  function covr(el){return COV[el]||0.76;}
+  function elcol(el,ligC){ if(el==='C')return ligC?'#22c55e':'#97a3b0';
+    const M={N:'#3b6cf6',O:'#ef4444',S:'#e6b800',P:'#f97316',H:'#e3eaf1',F:'#67e8f9',Cl:'#22c55e',Br:'#b45309',I:'#7c3aed',Se:'#f59e0b'};
+    return M[el]||(PE.elInfo(el)||{}).col||'#c4b5fd'; }
+  function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);}
+
+  // covalent bonds by distance (one-off per pocket)
+  function inferBonds(atoms){const b=[];const n=atoms.length;
+    for(let i=0;i<n;i++){const a=atoms[i];for(let j=i+1;j<n;j++){const c=atoms[j];
+      const dx=a.x-c.x,dy=a.y-c.y,dz=a.z-c.z;const d2=dx*dx+dy*dy+dz*dz;
+      const mx=covr(a.el)+covr(c.el)+0.45; if(d2<mx*mx&&d2>0.20)b.push([i,j]); }}
+    return b;}
+  // two-tone sticks (split each bond at midpoint) grouped by colour + atom spheres
+  function stickTraces(atoms,bonds,ligC,width,mksz){
+    const byCol={}; const half=(col,p,m)=>{const g=byCol[col]||(byCol[col]={x:[],y:[],z:[]});g.x.push(p.x,m.x,null);g.y.push(p.y,m.y,null);g.z.push(p.z,m.z,null);};
+    bonds.forEach(pr=>{const a=atoms[pr[0]],c=atoms[pr[1]];const m={x:(a.x+c.x)/2,y:(a.y+c.y)/2,z:(a.z+c.z)/2};half(elcol(a.el,ligC),a,m);half(elcol(c.el,ligC),c,m);});
+    const traces=Object.keys(byCol).map(col=>({type:'scatter3d',mode:'lines',x:byCol[col].x,y:byCol[col].y,z:byCol[col].z,line:{color:col,width:width},hoverinfo:'skip',showlegend:false}));
+    traces.push({type:'scatter3d',mode:'markers',x:atoms.map(a=>a.x),y:atoms.map(a=>a.y),z:atoms.map(a=>a.z),
+      marker:{color:atoms.map(a=>elcol(a.el,ligC)),size:atoms.map(a=>a.el==='H'?mksz*0.55:(a.el==='C'?mksz:mksz*1.3)),line:{width:0}},
+      text:atoms.map(a=>(a.name||a.el)+(a.resn?(' · '+a.resn+a.resseq):'')),hoverinfo:ligC?'skip':'text',showlegend:false});
+    return traces;
+  }
+  // dashed 3D line → on/off sub-segments
+  function pushDash(acc,p,q,dash,gap){const dx=q[0]-p[0],dy=q[1]-p[1],dz=q[2]-p[2];const L=Math.hypot(dx,dy,dz)||1;const ux=dx/L,uy=dy/L,uz=dz/L;let t=0,on=true;
+    while(t<L-1e-6){const t2=Math.min(L,t+(on?dash:gap));if(on){acc.x.push(p[0]+ux*t,p[0]+ux*t2,null);acc.y.push(p[1]+uy*t,p[1]+uy*t2,null);acc.z.push(p[2]+uz*t,p[2]+uz*t2,null);}t=t2;on=!on;}}
+  // smallest 5-/6-ring through each ligand bond
+  function smallRings(L){const n=L.atoms.length;const adj=Array.from({length:n},()=>[]);
+    L.BONDS.forEach(b=>{adj[b.a].push(b.b);adj[b.b].push(b.a);});const seen={};const rings=[];
+    L.BONDS.forEach(b=>{const u=b.a,v=b.b;const ded={},prev={};ded[u]=0;prev[u]=-1;const q=[u];let qi=0;
+      while(qi<q.length){const x=q[qi++];for(const w of adj[x]){if((x===u&&w===v)||(x===v&&w===u))continue;if(ded[w]===undefined){ded[w]=ded[x]+1;prev[w]=x;q.push(w);}}}
+      if(ded[v]!==undefined){const sz=ded[v]+1;if(sz>=5&&sz<=6){const path=[];let c=v;while(c!==-1&&c!==undefined){path.push(c);c=prev[c];}const key=path.slice().sort((a,b)=>a-b).join(',');if(!seen[key]){seen[key]=1;rings.push(path);}}}});
+    return rings;}
+  function ringCentroid(coords,idx){const c=[0,0,0];idx.forEach(i=>{c[0]+=coords[i][0];c[1]+=coords[i][1];c[2]+=coords[i][2];});return [c[0]/idx.length,c[1]/idx.length,c[2]/idx.length];}
+  // ligand carboxylate O atoms (C bonded to ≥2 O) — anionic
+  function ligCarboxylate(L,coords){const out=[];const adj={};L.BONDS.forEach(b=>{(adj[b.a]||(adj[b.a]=[])).push(b.b);(adj[b.b]||(adj[b.b]=[])).push(b.a);});
+    L.atoms.forEach((el,i)=>{if(el==='C'){const os=(adj[i]||[]).filter(j=>L.atoms[j]==='O');if(os.length>=2)os.forEach(j=>out.push(coords[j]));}});return out;}
+  // aromatic-residue ring centroids in the pocket
+  function protAromatics(sel){const byRes={};sel.forEach(a=>{const k=a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]={resn:a.resn,at:{}})).at[a.name]=[a.x,a.y,a.z];});
+    const want={PHE:['CG','CD1','CD2','CE1','CE2','CZ'],TYR:['CG','CD1','CD2','CE1','CE2','CZ'],HIS:['CG','ND1','CD2','CE1','NE2'],TRP:['CD2','CE2','CE3','CZ2','CH2','CZ3']};const out=[];
+    Object.keys(byRes).forEach(k=>{const r=byRes[k];const names=want[r.resn];if(!names)return;const pts=names.map(n=>r.at[n]).filter(Boolean);if(pts.length>=4){const c=[0,0,0];pts.forEach(p=>{c[0]+=p[0];c[1]+=p[1];c[2]+=p[2];});out.push([c[0]/pts.length,c[1]/pts.length,c[2]/pts.length]);}});return out;}
+  // ligand↔pocket interactions for the current pose
+  function interactions(L,coords,site){
+    const hb={x:[],y:[],z:[]},sb={x:[],y:[],z:[]},pp={x:[],y:[],z:[]};
+    const ligNO=[];L.atoms.forEach((el,i)=>{if(el==='N'||el==='O')ligNO.push({el,p:coords[i]});});
+    const protNO=site.atoms.filter(a=>a.el==='N'||a.el==='O');
+    ligNO.forEach(l=>protNO.forEach(a=>{if(dist(l.p,[a.x,a.y,a.z])<3.5)pushDash(hb,l.p,[a.x,a.y,a.z],0.32,0.22);}));
+    const acidicO=site.atoms.filter(a=>(a.resn==='ASP'||a.resn==='GLU')&&a.el==='O'&&a.name[0]==='O'&&(a.name.indexOf('D')>0||a.name.indexOf('E')>0));
+    const basicN=site.atoms.filter(a=>((a.resn==='LYS'&&a.name==='NZ')||(a.resn==='ARG'&&a.name[0]==='N'&&a.name!=='N')||(a.resn==='HIS'&&(a.name==='ND1'||a.name==='NE2'))));
+    const ligN=ligNO.filter(l=>l.el==='N');const ligAnion=ligCarboxylate(L,coords);
+    ligN.forEach(l=>acidicO.forEach(a=>{if(dist(l.p,[a.x,a.y,a.z])<4.2)pushDash(sb,l.p,[a.x,a.y,a.z],0.5,0.3);}));
+    ligAnion.forEach(p=>basicN.forEach(a=>{if(dist(p,[a.x,a.y,a.z])<4.2)pushDash(sb,p,[a.x,a.y,a.z],0.5,0.3);}));
+    const lrings=smallRings(L).filter(r=>r.every(i=>'CNOS'.indexOf(L.atoms[i])>=0)).map(r=>ringCentroid(coords,r));
+    site.aromatics.forEach(pc=>lrings.forEach(rc=>{if(dist(rc,pc)<6.0)pushDash(pp,rc,pc,0.55,0.35);}));
+    const traces=[];const mk=(acc,col)=>{if(acc.x.length)traces.push({type:'scatter3d',mode:'lines',x:acc.x,y:acc.y,z:acc.z,line:{color:col,width:4},hoverinfo:'skip',showlegend:false});};
+    mk(hb,'#fde047');mk(sb,'#d946ef');mk(pp,'#38bdf8');
+    return {traces,n:{hb:hb.x.length/3,sb:sb.x.length/3,pp:pp.x.length/3}};
+  }
+
+  function setSvg(id,inner,vb){const el=$(id);if(!el)return;el.setAttribute('viewBox',vb);el.innerHTML=inner;}
+
+  /* ---- state ---- */
+  let L=null, protein=null, box={center:[0,0,0],size:20};
+
+  const PG={
+    open(){var m=$('poseModal');m.classList.remove('hidden');m.classList.add('flex');PG.stage('random');if(!L)PG.build();},
+    close(){PG._stopAnim();var m=$('poseModal');m.classList.remove('flex');m.classList.add('hidden');if(window.Plotly){try{Plotly.purge('poseBox3D');}catch(e){}}},
+
+    setPreset(smi){$('poseSmiles').value=smi;PG.build();},
+    build(){const smi=$('poseSmiles').value.trim();
+      fetch(POSE_LIGAND_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({smiles:smi})})
+        .then(r=>r.ok?r.json():null)
+        .then(res=>{ if(res&&res.ok){res.source=res.source||'rdkit';PG._setLigand(res);} else PG._fallback(smi); })
+        .catch(()=>PG._fallback(smi));},
+    _fallback(smi){const j=PE.buildLigand(smi); if(j.ok)j.source='js'; PG._setLigand(j);},
+    _setLigand(res){const e=$('poseSmiles');
+      if(!res||!res.ok){e.style.borderColor='#fb7185';PG._derivedErr((res&&res.err)||'parse failed');return;}
+      e.style.borderColor='#1e293b';L=res;PG._derived();PG.init.cur=null;PG._poseSrc='random';PG._invalidate();PG.stage(PG._stage);},
+    _derivedErr(msg){$('poseDerived').innerHTML='<span style="color:#fb7185;">⚠ '+msg+'</span>';},
+    _derived(){var d=$('poseDerived');if(!d)return;
+      const lab=(t)=>'<span class="text-[10px] font-semibold text-slate-600 uppercase tracking-wider mr-1.5">'+t+'</span>';
+      const sep='<div class="w-px h-3 bg-slate-700"></div>';
+      const inp=(id,val,step,min,title)=>'<input id="'+id+'" type="number" step="'+step+'"'+(min!=null?' min="'+min+'"':'')+' value="'+val+'" onchange="PoseGen.setCenter()" title="'+title+'" style="width:60px;font-family:ui-monospace,monospace;font-size:11px;background:#0b1120;border:1px solid #1e293b;border-radius:6px;padding:2px 6px;color:#22d3ee;outline:none;text-align:right;">';
+      let h='';
+      if(L){h+=lab('Formula')+'<span class="font-mono text-slate-200">'+L.formula+'</span>'
+        +sep+lab('Rotatable')+'<span class="font-mono text-cyan-300">N = '+L.N+'</span>'
+        +sep+lab('Search space')+'<span class="font-mono text-violet-300">6 + '+L.N+' = '+(6+L.N)+' D</span>';}
+      if(protein){if(h)h+=sep;h+=lab('Target')+'<span class="font-mono text-slate-200">'+(protein.id||'uploaded')+' · '+protein.chains.length+' ch · '+protein.nres+' res</span>'
+        +sep+'<span style="display:inline-flex;align-items:center;gap:5px;">'+lab('Box center')
+        +['x','y','z'].map((ax,k)=>inp('poseC'+ax,box.center[k].toFixed(1),'0.5',null,'docking box center '+ax+' (Å)')).join('')
+        +'<span style="color:#475569;font-size:10px;">Å</span></span>'
+        +sep+'<span style="display:inline-flex;align-items:center;gap:5px;">'+lab('Box length')
+        +inp('poseLen',box.size.toFixed(0),'1','6','docking box edge length (Å)')+'<span style="color:#475569;font-size:10px;">Å</span></span>';}
+      if(L)h+='<div class="flex-1"></div><span class="text-[9px] px-2 py-0.5 rounded-full" style="'+(L.source==='rdkit'?'background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);color:#34d399;':'background:rgba(148,163,184,.1);border:1px solid #334155;color:#94a3b8;')+'">'+(L.source==='rdkit'?'RDKit · 3D ETKDG':'in-browser · 2D layout')+'</span>';
+      d.innerHTML=h;},
+
+    /* editable docking box (center + length) → rebuild pocket and re-derive the current stage */
+    setCenter(){const v=['poseCx','poseCy','poseCz'].map(id=>{const e=$(id);return e?parseFloat(e.value):NaN;});
+      if(v.some(x=>!isFinite(x)))return; box.center=v;
+      const le=$('poseLen');if(le){const s=parseFloat(le.value);if(isFinite(s)&&s>=4)box.size=s;}
+      if(protein){protein._site=null;protein._siteCenter=null;}     // box moved/resized → rebuild pocket
+      PG._invalidate();PG.stage(PG._stage);},
+
+    /* ---- shared drawing (used by every stage) ---- */
+    _show(view){$('poseSvgBox').style.display=view==='2d'?'block':'none';$('poseBox3D').style.display=view==='3d'?'block':'none';
+      var lg=$('poseLegend3D');if(lg)lg.style.display=view==='3d'?'block':'none';var h=$('poseBox3DHint');if(h)h.style.display=view==='3d'?'block':'none';},
+    _draw3D(world,opt){opt=opt||{};const site=PG.init.site();
+      const ligAtoms=world.map((p,i)=>({x:p[0],y:p[1],z:p[2],el:L.atoms[i]}));
+      let data=[];if(site){data=data.concat(opt.proteinAtoms?stickTraces(opt.proteinAtoms,site.bonds,false,5,2):site.traces);}
+      data.push(boxTrace3D(box.center,box.size));
+      data=data.concat(stickTraces(ligAtoms,L.BONDS.map(b=>[b.a,b.b]),true,7,3.2));
+      if(site&&opt.interactions){const ix=interactions(L,world,site);data=data.concat(ix.traces);PG.init._ix=ix.n;}
+      PG._last3D={world:world,opt:opt};                                                          // remember last 3D draw so view toggles can replay it
+      if(PG._showSurface&&site){try{data=data.concat(PG._surfaceTraces(site));}catch(e){}}        // 1.4 Å water-probe molecular surface of the pocket
+      if(PG._showSS){try{data=data.concat(PG._ssTraces());}catch(e){}}                            // DSSP-style backbone: helix / sheet / loop
+      const rev=protein?('p:'+protein.id):'none';const lay=layout3D(rev);
+      // preserve the user's current camera (zoom/rotation) across same-structure redraws
+      try{const gd=$('poseBox3D');const cur=gd&&gd._fullLayout&&gd._fullLayout.scene&&gd._fullLayout.scene.camera;
+        if(cur&&PG._lastRev===rev)lay.scene.camera=cur;}catch(e){}
+      PG._lastRev=rev;
+      try{Plotly.react('poseBox3D',data,lay,{responsive:true,displayModeBar:false,displaylogo:false});}catch(e){}},
+    _draw2D(model){const bp=boxParams(L);setSvg('poseSvgBox',svgBoxWire(CAM,bp.S,230,210,bp.half)+svgMol(L,model,CAM,{scale:bp.S,cx:230,cy:210}),'0 0 460 420');},
+    _worldFromInternal(model){let c=[0,0,0];model.forEach(p=>{c[0]+=p[0];c[1]+=p[1];c[2]+=p[2];});const n=model.length||1;c=[c[0]/n,c[1]/n,c[2]/n];
+      return model.map(p=>[p[0]-c[0]+box.center[0],p[1]-c[1]+box.center[1],p[2]-c[2]+box.center[2]]);},
+    /* draw a pose {off,quat,tors} — same convention for ALL stages so they show the same ligand */
+    _ligCenter(off){return [box.center[0]+off[0]*box.size*0.32, box.center[1]+off[1]*box.size*0.32, box.center[2]+off[2]*box.size*0.32];},
+    _drawPose(pose,opt){const off=pose.off,quat=pose.quat,tors=pose.tors;
+      if(PG.init.use3D()){PG._show('3d');const base=PE.computePose(L,quat,[0,0,0],tors);const lc=PG._ligCenter(off);
+        PG._draw3D(base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]),opt);}
+      else{PG._show('2d');const bp=boxParams(L);PG._draw2D(PE.computePose(L,quat,off.map(v=>v*bp.tmax),tors));}},
+    _spark(id,vals,col){const el=$(id);if(!el)return;if(!vals.length){el.innerHTML='';return;}
+      const W=184,H=44,pad=4;const mn=Math.min(...vals),mx=Math.max(...vals),rng=(mx-mn)||1;
+      const pts=vals.map((v,i)=>[pad+(W-2*pad)*(vals.length===1?1:i/(vals.length-1)),H-pad-(H-2*pad)*((v-mn)/rng)]);
+      const d='M'+pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L');
+      el.innerHTML='<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.6" stroke-linejoin="round"/><circle cx="'+pts[pts.length-1][0].toFixed(1)+'" cy="'+pts[pts.length-1][1].toFixed(1)+'" r="2.4" fill="'+col+'"/>';},
+
+    /* ---- stage manager ---- */
+    /* ONE shared pose (PG.init.cur) flows through all 3 stages; each stage transforms it forward and every
+       tab renders it. _poseVer bumps only on DISCRETE pose changes (new random / seed pick / a completed
+       minimize or search) so a stage keeps its chart while the pose is unchanged, and re-derives once it moves. */
+    _stage:'random', _raf:null, _lastRev:null, _poseVer:0, _poseSrc:'random', _ready:{random:false,min:false,mc:false},
+    _bump(){PG._poseVer++;},
+    _invalidate(){PG._ready.random=false;PG.min._work=null;PG.mc._work=null;PG._bump();},   // box / protein change: regrid seeds, drop stale min/MC results, force re-derive
+    /* connected-trajectory ribbon: shows the shared pose flowing ① → ② → ③ (snapshot metrics, frozen per run) */
+    _updateTraj(){
+      var r=$('poseTrajR');if(r)r.innerHTML='① start <b style="color:#cbd5e1;">'+(PG.init.cur?'✓':'—')+'</b>';
+      var m=$('poseTrajM');if(m)m.innerHTML='② min <b style="color:#34d399;">'+(PG.min._work?(PG.min.E0.toFixed(0)+'→'+PG.min.Efin.toFixed(0)):'—')+'</b>';
+      var c=$('poseTrajC');if(c)c.innerHTML='③ MC <b style="color:#38bdf8;">'+(PG.mc._work&&PG.mc._hist.length?(PG.mc._hist[0].toFixed(1)+'→'+PG.mc.bestScore.toFixed(1)):'—')+'</b>';
+      ['R','M','C'].forEach(k=>{const seg=$('poseTraj'+k);if(seg)seg.classList.toggle('on',(PG._stage==='random'&&k==='R')||(PG._stage==='min'&&k==='M')||(PG._stage==='mc'&&k==='C'));});
+      var a1=$('poseTrajA1'),a2=$('poseTrajA2');if(a1)a1.style.color=PG.min._work?'#475569':'#1e293b';if(a2)a2.style.color=PG.mc._work?'#475569':'#1e293b';},
+    _stopAnim(){if(PG._raf){cancelAnimationFrame(PG._raf);PG._raf=null;}if(PG.min)PG.min._running=false;if(PG.mc)PG.mc._running=false;},
+    stage(name){PG._stopAnim();PG._stage=name;const S={random:'Random',min:'Min',mc:'MC'};
+      Object.keys(S).forEach(nm=>{const on=nm===name;const b=$('poseSt'+S[nm]);if(b)b.classList.toggle('on',on);
+        const c=$('poseCtrl'+S[nm]);if(c)c.style.display=on?'flex':'none';const sd=$('poseSide'+S[nm]);if(sd)sd.style.display=on?'flex':'none';});
+      var proc=$('poseProcPanel');if(proc)proc.style.display=(name==='random')?'none':'block';
+      const titles={random:'Random placement inside the docking box',min:'Ligand geometry relaxation',mc:'Monte-Carlo + BFGS pose search'};
+      const hints={random:'Random initialization inside the search box.',min:'Relax the embedded conformer before docking.',mc:'Global search: perturb → BFGS → Metropolis accept/reject.'};
+      var vt=$('poseViewTitle');if(vt)vt.textContent=titles[name];var sh=$('poseStageHint');if(sh)sh.textContent=hints[name];
+      if(!L)return;
+      if(name==='random')PG.init.enter();else if(name==='min')PG.min.enter();else if(name==='mc')PG.mc.enter();
+      PG._updateTraj();
+      if(PG.init.use3D())setTimeout(()=>{try{Plotly.Plots.resize('poseBox3D');}catch(e){}},60);},
+
+    /* ---- stage ②: minimization — PROTEIN HELD FIXED; the ligand pose relaxes against the fixed pocket.
+       Strain energy  E = wT·Σθ²  +  wC·Σ max(0, d0−d)²  +  wK·‖c − c_box‖²   (coefficients editable in the sidebar) ---- */
+    min:{w:{tors:12,clash:8,d0:3.2,center:2},pocket:null,world0:null,_work:null,iter:0,E0:0,Efin:0,_ver:-1,_running:false,_hist:[],
+      enter(){if(PG.min._ver===PG._poseVer&&PG.min._work)PG.min._restore();else PG.min.reset();},
+      _restore(){var pt=$('poseProcTitle');if(pt)pt.textContent='Strain energy';PG.min._reflectW();var rb=$('poseMinRunBtn');if(rb)rb.textContent=(PG.min.iter>0?'▶ Continue':'▶ Minimize');PG.min._draw();PG.min._stats();},
+      _reflectW(){const set=(id,v)=>{var e=$(id);if(e&&document.activeElement!==e)e.value=v;};set('poseEwTors',PG.min.w.tors);set('poseEwClash',PG.min.w.clash);set('poseEd0',PG.min.w.d0);set('poseEwCenter',PG.min.w.center);},
+      _readW(){const get=(id,d)=>{var e=$(id);var v=e?parseFloat(e.value):NaN;return isFinite(v)?v:d;};
+        PG.min.w={tors:get('poseEwTors',12),clash:get('poseEwClash',8),d0:Math.max(0.4,get('poseEd0',3.2)),center:get('poseEwCenter',2)};},
+      setWeights(){PG.min._readW();PG.min.reset();},                                 // edited formula → re-derive the well from the current pose
+      _sync(){const w=PG.min._work,a=PG.init.cur;if(!a||!w)return;a.off=w.off.slice();a.quat=PE.eulerToQuat(w.e[0],w.e[1],w.e[2]);a.tors=w.tors.slice();},
+      _pocketAtoms(){const site=PG.init.site();if(!site)return [];const bc=box.center,h=box.size/2+1.5;
+        let sel=site.atoms.filter(at=>Math.abs(at.x-bc[0])<=h&&Math.abs(at.y-bc[1])<=h&&Math.abs(at.z-bc[2])<=h);
+        if(sel.length>220){const dc=a=>Math.hypot(a.x-bc[0],a.y-bc[1],a.z-bc[2]);sel.sort((a,b)=>dc(a)-dc(b));sel=sel.slice(0,220);}return sel;},
+      _world(wk){const base=PE.computePose(L,PE.eulerToQuat(wk.e[0],wk.e[1],wk.e[2]),[0,0,0],wk.tors);const lc=PG._ligCenter(wk.off);return base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]);},
+      _energy(wk){wk=wk||PG.min._work;const W=PG.min.w;let e=0;
+        for(let i=0;i<wk.tors.length;i++)e+=wk.tors[i]*wk.tors[i]*W.tors;             // internal torsional strain
+        const wd=PG.min._world(wk),pk=PG.min.pocket||[],d0=W.d0;                       // ligand ↔ FIXED protein clash
+        for(let i=0;i<wd.length;i++){const a=wd[i];for(let j=0;j<pk.length;j++){const dx=a[0]-pk[j].x,dy=a[1]-pk[j].y,dz=a[2]-pk[j].z;const d2=dx*dx+dy*dy+dz*dz;if(d2<d0*d0){const ov=d0-Math.sqrt(d2);e+=ov*ov*W.clash;}}}
+        let c=[0,0,0];wd.forEach(p=>{c[0]+=p[0];c[1]+=p[1];c[2]+=p[2];});const n=wd.length||1;c=[c[0]/n,c[1]/n,c[2]/n];   // keep the ligand seated in the pocket
+        e+=((c[0]-box.center[0])**2+(c[1]-box.center[1])**2+(c[2]-box.center[2])**2)*W.center;return e;},
+      reset(){PG._stopAnim();PG.min._running=false;PG.min._readW();
+        const a=PG.init.cur||(PG.init.cur=PG.init.rand());
+        PG.min._work={off:a.off.slice(),e:PE.q2e(a.quat),tors:a.tors.slice()};
+        PG.min.pocket=PG.min._pocketAtoms();PG.min.world0=PG.min._world(PG.min._work);
+        PG.min.iter=0;PG.min.E0=PG.min._energy();PG.min.Efin=PG.min.E0;PG.min._hist=[PG.min.E0];PG.min._ver=PG._poseVer;
+        PG.min._reflectW();var pt=$('poseProcTitle');if(pt)pt.textContent='Strain energy';var rb=$('poseMinRunBtn');if(rb)rb.textContent='▶ Minimize';
+        PG.min._draw();PG.min._stats();},
+      _rmsd(){const wd=PG.min._world(PG.min._work),w0=PG.min.world0||wd;let s=0;for(let i=0;i<wd.length;i++)s+=dist(wd[i],w0[i])**2;return Math.sqrt(s/Math.max(1,wd.length));},
+      _draw(){const a=PG.init.cur;PG._drawPose({off:a.off,quat:a.quat,tors:a.tors},{interactions:false});},   // pocket rendered at its fixed coordinates (no override)
+      _stats(){const E=PG.min.Efin;var e;
+        e=$('poseProcVal');if(e)e.textContent=E.toFixed(1);e=$('poseProcSub');if(e)e.textContent='iter '+PG.min.iter+' · ΔE '+(PG.min.E0-E).toFixed(1);
+        PG._spark('poseProcChart',PG.min._hist,'#34d399');
+        e=$('poseMinEstart');if(e)e.textContent=PG.min.E0.toFixed(1);e=$('poseMinEcur');if(e)e.textContent=E.toFixed(1);
+        e=$('poseMinDelta');if(e)e.textContent='−'+(PG.min.E0-E).toFixed(1);e=$('poseMinIter');if(e)e.textContent=PG.min.iter;
+        e=$('poseMinRmsd');if(e)e.textContent=PG.min._rmsd().toFixed(2)+' Å';
+        e=$('poseMinAtoms');if(e)e.textContent=L.atoms.length+' lig moved · '+((PG.min.pocket||[]).length)+' pocket fixed';PG._updateTraj();},
+      run(){if(PG.min._running){PG.min._running=false;PG._stopAnim();var b=$('poseMinRunBtn');if(b)b.textContent='▶ Minimize';return;}
+        PG.min._running=true;var b=$('poseMinRunBtn');if(b)b.textContent='⏸ Pause';PG.min._loop();},
+      _loop(){if(!PG.min._running)return;
+        const wk=PG.min._work,f=Math.max(0.3,1-PG.min.iter/180),steps={off:0.05*f,e:0.06*f,tors:0.06*f};
+        let E=PG.min._energy(wk);const Estart=E;
+        const tryDof=(arr,idx,st)=>{const o=arr[idx];arr[idx]=o+st;const ep=PG.min._energy(wk);arr[idx]=o-st;const em=PG.min._energy(wk);arr[idx]=o;
+          if(ep<E&&ep<=em){arr[idx]=o+st;E=ep;}else if(em<E){arr[idx]=o-st;E=em;}};                          // coordinate descent: ligand DOFs only
+        for(let k=0;k<3;k++)tryDof(wk.off,k,steps.off);
+        for(let k=0;k<3;k++)tryDof(wk.e,k,steps.e);
+        for(let k=0;k<wk.tors.length;k++)tryDof(wk.tors,k,steps.tors);
+        PG.min._sync();PG.min.iter++;PG.min.Efin=E;PG.min._hist.push(E);if(PG.min._hist.length>140)PG.min._hist.shift();
+        PG.min._draw();PG.min._stats();
+        if((Estart-E)<0.05||PG.min.iter>200){PG.min._running=false;PG._poseSrc='minimized';PG._bump();PG.min._ver=PG._poseVer;var bt=$('poseMinRunBtn');if(bt)bt.textContent='✓ Converged';return;}
+        PG._raf=requestAnimationFrame(PG.min._loop);},
+    },
+
+    /* ---- stage ③: Monte-Carlo + BFGS (illustrative) ---- */
+    mc:{sw:{clash:0.6,d0:2.5,center:0.4},best:null,bestScore:1e9,score:0,nstep:0,acc:0,T:1.2,scorer:'surrogate',daPk:null,_daBusy:false,_running:false,_hist:[],_bhist:[],_ver:-1,_work:null,_srcLabel:'random',
+      enter(){if(PG.mc._ver===PG._poseVer&&PG.mc._work)PG.mc._restore();else PG.mc.reset();},
+      _restore(){var pt=$('poseProcTitle');if(pt)pt.textContent='Score (lower = better)';var sel=$('poseMcScorer');if(sel)sel.value=PG.mc.scorer;PG.mc.setScorer(PG.mc.scorer);PG.mc.setT(PG.mc.T);PG.mc._reflectSW();var rb=$('poseMcRunBtn');if(rb)rb.textContent=(PG.mc.nstep>=150?'✓ Done':(PG.mc.nstep>0?'▶ Continue':'▶ Run search'));PG.mc._draw();PG.mc._stats();},
+      _reflectSW(){const set=(id,v)=>{var e=$(id);if(e&&document.activeElement!==e)e.value=v;};set('poseScwClash',PG.mc.sw.clash);set('poseScd0',PG.mc.sw.d0);set('poseScwCenter',PG.mc.sw.center);},
+      _readSW(){const get=(id,d)=>{var e=$(id);var v=e?parseFloat(e.value):NaN;return isFinite(v)?v:d;};
+        PG.mc.sw={clash:get('poseScwClash',0.6),d0:Math.max(0.4,get('poseScd0',2.5)),center:get('poseScwCenter',0.4)};},
+      setScore(){PG.mc._readSW();PG.mc.reset();},                                    // edited score formula → re-derive from the current pose
+      _sync(){const w=PG.mc._work,a=PG.init.cur;if(!a||!w)return;a.off=w.off.slice();a.quat=PG.mc._quat(w);a.tors=w.tors.slice();},   // mirror the working pose → shared pose (live)
+      setT(t){PG.mc.T=t;document.querySelectorAll('#poseMcTempToggles [data-t]').forEach(b=>{const on=Math.abs(+b.dataset.t-t)<1e-6;b.style.borderColor=on?'#22d3ee':'#1e293b';b.style.background=on?'rgba(34,211,238,.1)':'#0b1120';b.style.color=on?'#22d3ee':'#94a3b8';});var v=$('poseMcTempVal');if(v)v.textContent=t.toFixed(1);},
+      /* scorer selector: live search always uses the fast surrogate; DeepAtom evaluates the best pose on demand (server CNN) */
+      setScorer(v){PG.mc.scorer=v;const da=(v==='deepatom');var b=$('poseDaScoreBtn');if(b)b.style.display=da?'inline-block':'none';var c=$('poseDaCard');if(c)c.style.display=da?'flex':'none';
+        if(da&&!PG.mc.daPk)PG.mc._daSet('idle — run the search, then score the best pose',null,null);},
+      _daSet(status,pk,dg){var e;e=$('poseDaStatus');if(e)e.textContent=status;e=$('poseDaPk');if(e)e.textContent=(pk!=null?pk.toFixed(2):'—');e=$('poseDaDg');if(e)e.textContent=(dg!=null?dg.toFixed(2):'—');PG.mc.daPk=pk;},
+      _ligandPdb(coords){const R=(s,n)=>String(s).padStart(n);let out='';
+        for(let i=0;i<L.atoms.length;i++){const el=L.atoms[i],p=coords[i];const name=((el.length===1?' '+el:el)+'  ').slice(0,4);
+          out+='HETATM'+R(i+1,5)+' '+name+' LIG A'+R(1,4)+'    '+R(p[0].toFixed(3),8)+R(p[1].toFixed(3),8)+R(p[2].toFixed(3),8)+'  1.00  0.00          '+R(el.toUpperCase(),2)+'\n';}
+        return out+'END\n';},
+      scoreDeepAtom(){if(!L)return;if(!protein||!protein.raw){PG.mc._daSet('load a target protein (.pdb) first',null,null);return;}
+        if(PG.mc._daBusy)return;PG.mc._daBusy=true;var b=$('poseDaScoreBtn');if(b)b.textContent='⏳ scoring…';PG.mc._daSet('scoring best pose on the server…',null,null);
+        const lig=PG.mc._ligandPdb(PG.mc._world(PG.mc.best));
+        var od=$('poseDaOutDir');var outDir=od?od.value.trim():'';
+        fetch('/pose/deepatom_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:(protein.id||'pose')+'_mc',smiles:(L.smiles||''),out_dir:outDir})})
+          .then(r=>r.ok?r.json():null).then(res=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';
+            if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
+              const p=res.produced||{};const note=(p.npz&&p.atomtypes)?(' · '+p.atomtypes.length+' atomtypes, '+p.npz.length+' npz'):'';
+              PG.mc._daSet('scored ✓ '+(res.elapsed?('('+res.elapsed+')'):'')+note,pk,dg);}
+            else PG.mc._daSet((res&&res.err)||'DeepAtom unavailable on server',null,null);})
+          .catch(()=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';PG.mc._daSet('request failed (is the endpoint deployed?)',null,null);});},
+      _randPose(){const q=PE.randomQuat();return {off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],e:PE.q2e(q),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
+      _quat(p){return PE.eulerToQuat(p.e[0],p.e[1],p.e[2]);},
+      _world(p){const base=PE.computePose(L,PG.mc._quat(p),[0,0,0],p.tors);const lc=[box.center[0]+p.off[0]*box.size*0.32,box.center[1]+p.off[1]*box.size*0.32,box.center[2]+p.off[2]*box.size*0.32];return base.map(q=>[q[0]+lc[0],q[1]+lc[1],q[2]+lc[2]]);},
+      _score(p){const S=PG.mc.sw,d0=S.d0;const w=PG.mc._world(p);let clash=0;const site=PG.init.site();
+        if(site){const pa=site.atoms;for(let i=0;i<w.length;i++){const a=w[i];for(let j=0;j<pa.length;j++){const dx=a[0]-pa[j].x,dy=a[1]-pa[j].y,dz=a[2]-pa[j].z;const d2=dx*dx+dy*dy+dz*dz;if(d2<d0*d0)clash+=(d0-Math.sqrt(d2));}}}
+        let c=[0,0,0];w.forEach(q=>{c[0]+=q[0];c[1]+=q[1];c[2]+=q[2];});const n=w.length;c=[c[0]/n,c[1]/n,c[2]/n];
+        return clash*S.clash+dist(c,box.center)*S.center;},
+      _copy(p){return {off:p.off.slice(),e:p.e.slice(),tors:p.tors.slice()};},
+      _perturb(p,s){const q=PG.mc._copy(p);const k=Math.floor(Math.random()*3);
+        if(k===0){const ax=Math.floor(Math.random()*3);q.off[ax]=Math.max(-1,Math.min(1,q.off[ax]+(Math.random()*2-1)*s));}
+        else if(k===1){const ax=Math.floor(Math.random()*3);q.e[ax]+=(Math.random()*2-1)*s;}
+        else if(q.tors.length){const ti=Math.floor(Math.random()*q.tors.length);q.tors[ti]+=(Math.random()*2-1)*s*2;}
+        return q;},
+      _bfgs(p){let best=p,bs=PG.mc._score(p);for(let it=0;it<8;it++){const t=PG.mc._perturb(best,0.12);const s=PG.mc._score(t);if(s<bs){bs=s;best=t;}}return {pose:best,score:bs};},
+      reset(){PG._stopAnim();PG.mc._running=false;PG.mc._readSW();
+        const a=PG.init.cur||(PG.init.cur=PG.init.rand());        // search starts from the SHARED pose (whatever ① or ② last produced)
+        PG.mc._work={off:a.off.slice(),e:PE.q2e(a.quat),tors:a.tors.slice()};PG.mc._srcLabel=PG._poseSrc;
+        PG.mc.score=PG.mc._score(PG.mc._work);PG.mc.best=PG.mc._copy(PG.mc._work);PG.mc.bestScore=PG.mc.score;PG.mc.nstep=0;PG.mc.acc=0;PG.mc._hist=[PG.mc.score];PG.mc._bhist=[PG.mc.bestScore];PG.mc._ver=PG._poseVer;
+        PG.mc._reflectSW();PG.mc.setT(PG.mc.T);var sel=$('poseMcScorer');if(sel)sel.value=PG.mc.scorer;PG.mc.setScorer(PG.mc.scorer);var pt=$('poseProcTitle');if(pt)pt.textContent='Score (lower = better)';var rb=$('poseMcRunBtn');if(rb)rb.textContent='▶ Run search';PG.mc._draw();PG.mc._stats();},
+      _pose(){const w=PG.mc._work;return {off:w.off,quat:PG.mc._quat(w),tors:w.tors};},
+      _draw(){PG._drawPose(PG.mc._pose(),{interactions:true});},
+      _stats(){var e;e=$('poseProcVal');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseProcSub');if(e)e.textContent='step '+PG.mc.nstep+' · best '+PG.mc.bestScore.toFixed(2);PG._spark('poseProcChart',PG.mc._hist,'#38bdf8');
+        e=$('poseMcStep');if(e)e.textContent=PG.mc.nstep;e=$('poseMcScore');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseMcBest');if(e)e.textContent=PG.mc.bestScore.toFixed(2);e=$('poseMcAcc');if(e)e.textContent=PG.mc.acc+' / '+PG.mc.nstep;e=$('poseMcTempVal');if(e)e.textContent=PG.mc.T.toFixed(1);
+        e=$('poseMcSrc');if(e)e.textContent=PG.mc._srcLabel+' pose';PG._updateTraj();},
+      step(){if(!L)return;PG.mc.nstep++;let prop=PG.mc._perturb(PG.mc._perturb(PG.mc._perturb(PG.mc._work,0.3),0.3),0.3);const opt=PG.mc._bfgs(prop);const dS=opt.score-PG.mc.score;
+        if(dS<0||Math.random()<Math.exp(-dS/PG.mc.T)){PG.mc._work=opt.pose;PG.mc.score=opt.score;PG.mc.acc++;if(opt.score<PG.mc.bestScore){PG.mc.bestScore=opt.score;PG.mc.best=PG.mc._copy(opt.pose);}}
+        PG.mc._sync();PG.mc._hist.push(PG.mc.score);PG.mc._bhist.push(PG.mc.bestScore);if(PG.mc._hist.length>140){PG.mc._hist.shift();PG.mc._bhist.shift();}PG.mc._draw();PG.mc._stats();},
+      run(){if(PG.mc._running){PG.mc._running=false;PG._stopAnim();var b=$('poseMcRunBtn');if(b)b.textContent='▶ Run search';return;}PG.mc._running=true;var b=$('poseMcRunBtn');if(b)b.textContent='⏸ Pause';PG.mc._loop();},
+      _loop(){if(!PG.mc._running)return;PG.mc.step();if(PG.mc.nstep>=150){PG.mc._running=false;var b=$('poseMcRunBtn');if(b)b.textContent='✓ Done';PG.mc._work=PG.mc._copy(PG.mc.best);PG.mc.score=PG.mc.bestScore;PG.mc._sync();PG._poseSrc='searched';PG._bump();PG.mc._ver=PG._poseVer;PG.mc._draw();PG.mc._stats();if(PG.mc.scorer==='deepatom')PG.mc.scoreDeepAtom();return;}PG._raf=requestAnimationFrame(PG.mc._loop);},
+    },
+
+    init:{ex:8,cur:null,_states:[],
+      enter(){if(!PG._ready.random)PG.init.regen();else PG.init.restore();},
+      restore(){if(!L)return;PG.init.draw(PG.init.cur||PG.init.rand());},
+      rand(){return {seed:Math.floor(Math.random()*4294967295),off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],quat:PE.randomQuat(),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
+      use3D(){return !!(protein&&window.Plotly);},
+      ligCenter(st){return [box.center[0]+st.off[0]*box.size*0.32, box.center[1]+st.off[1]*box.size*0.32, box.center[2]+st.off[2]*box.size*0.32];},
+      draw(st){if(!L)return;PG.init.cur=st;
+        if(PG.init.use3D())PG.init.render3D(st); else PG.init.draw2D(st);
+        const center=PG.init.use3D()?PG.init.ligCenter(st):st.off.map(v=>v*boxParams(L).tmax);
+        const T=(id,v)=>{var e=$(id);if(e)e.textContent=v;};
+        T('poseCurSeed',st.seed);T('poseCurPos','('+center.map(v=>(+v).toFixed(2)).join(', ')+')');
+        T('poseCurQuat',st.quat.map(v=>v.toFixed(2)).join(', '));
+        T('poseCurTors',st.tors.length?st.tors.map(v=>(v*180/Math.PI).toFixed(0)+'°').join(' '):'(rigid)');
+        PG.init.card();PG._updateTraj();},
+      draw2D(st){PG._show('2d');const bp=boxParams(L);const pos=st.off.map(v=>v*bp.tmax);
+        PG._draw2D(PE.computePose(L,st.quat,pos,st.tors));},
+      site(){ if(!protein)return null;
+        if(protein._site&&protein._siteCenter&&dist(protein._siteCenter,box.center)<0.05)return protein._site;
+        const R=Math.max(8,box.size*0.5+1);const bc=box.center;
+        const byRes={};protein.atoms.forEach(a=>{const k=a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]=[])).push(a);});
+        const dc=a=>Math.hypot(a.x-bc[0],a.y-bc[1],a.z-bc[2]);
+        let sel=[];Object.keys(byRes).forEach(k=>{const g=byRes[k];if(g[0].het)return; if(g.some(a=>dc(a)<R))sel=sel.concat(g);});
+        if(sel.length>1400){sel.sort((a,b)=>dc(a)-dc(b));sel=sel.slice(0,1400);}
+        const bonds=inferBonds(sel);const traces=stickTraces(sel,bonds,false,5,2);const aromatics=protAromatics(sel);
+        const nres=Object.keys(byRes).filter(k=>!byRes[k][0].het&&byRes[k].some(a=>dc(a)<R)).length;
+        protein._site={atoms:sel,bonds,traces,aromatics,nres};protein._siteCenter=box.center.slice();return protein._site;},
+      render3D(st){PG._show('3d');
+        const base=PE.computePose(L,st.quat,[0,0,0],st.tors);const lc=PG.init.ligCenter(st);
+        const coords=base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]);
+        PG._draw3D(coords,{interactions:true});
+        const cx=$('poseCurIx');if(cx)cx.innerHTML=protein?('<span style="color:#fde047;">'+PG.init._ix.hb+'</span> H-bond · <span style="color:#d946ef;">'+PG.init._ix.sb+'</span> salt · <span style="color:#38bdf8;">'+PG.init._ix.pp+'</span> π'):'—';},
+      shuffle(){PG._poseSrc='random';PG.init.draw(PG.init.rand());PG._bump();},
+      setEx(n){PG.init.ex=n;document.querySelectorAll('#poseExhToggles [data-ex]').forEach(t=>{const on=+t.dataset.ex===n;t.style.borderColor=on?'#22d3ee':'#1e293b';t.style.background=on?'rgba(34,211,238,.1)':'#0b1120';t.style.color=on?'#22d3ee':'#94a3b8';});PG.init.regen();},
+      regen(){if(!L)return;PG._ready.random=true;PG.init.draw(PG.init.cur||PG.init.rand());const g=$('poseSeedGrid');let h='';const st=[];const thumbS=fitScale(L,30);const bp=boxParams(L);
+        for(let i=0;i<PG.init.ex;i++){const s=PG.init.rand();st.push(s);const pos=s.off.map(v=>v*bp.tmax*0.6);
+          const mol=svgMol(L,PE.computePose(L,s.quat,pos,s.tors),CAM,{scale:thumbS,cx:54,cy:52,small:true});
+          h+='<div onclick="PoseGen.init.load('+i+')" style="border:1px solid #1e293b;border-radius:11px;background:#0b1120;overflow:hidden;cursor:pointer;" onmouseover="this.style.borderColor=\'#22d3ee\'" onmouseout="this.style.borderColor=\'#1e293b\'"><svg viewBox="0 0 108 104" style="width:100%;height:80px;display:block;">'+mol+'</svg><div style="padding:5px 7px;border-top:1px solid #1e293b;font-family:ui-monospace,monospace;font-size:9px;color:#64748b;display:flex;justify-content:space-between;"><span>seed</span><b style="color:#22d3ee;font-weight:600;">'+String(s.seed).slice(0,7)+'</b></div></div>';}
+        if(g)g.innerHTML=h;PG.init._states=st;},
+      load(i){PG._poseSrc='random';PG.init.draw(PG.init._states[i]);PG._bump();},
+      card(){var bl=$('poseBoxLabel');var pc=$('poseProteinCard');if(!pc)return;if(!protein){if(bl)bl.textContent='20³ Å';
+          pc.innerHTML='<div style="font-size:11.5px;color:#64748b;background:#0b1120;border:1px dashed #1e293b;border-radius:11px;padding:11px;">Load a target protein (PDB ID or .pdb) to render it in 3D and auto-center the docking box on its binding pocket. The box center and length stay editable in the bar above.</div>';return;}
+        if(bl)bl.textContent=protein.size+'³ Å';
+        pc.innerHTML='<div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">'
+          +'<p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Target — '+(protein.id||'uploaded')+'</p>'
+          +kv('chains',protein.chains.join(', ')||'—')+kv('residues',protein.nres)+kv('atoms',protein.natoms)
+          +(protein._site?kv('pocket shown',protein._site.nres+' res · sticks','#97a3b0'):'')
+          +kv('box center',box.center.map(v=>v.toFixed(1)).join(', '),'#22d3ee')
+          +kv('box size',box.size+' Å'+(protein.hasLigand?'  (from ligand)':''),'#34d399')
+          +(window.Plotly?'':kv('render','Plotly absent — 2D box','#fbbf24'))+'</div>';},
+    },
+
+    /* ---- protein intake ---- */
+    fetchPdb(){const id=$('posePdbId').value.trim().toUpperCase();if(!/^[0-9A-Za-z]{4}$/.test(id)){PG._status('Enter a 4-character PDB ID.','#fbbf24');return;}
+      PG._status('Fetching '+id+' from RCSB…','#67e8f9');
+      fetch('https://files.rcsb.org/download/'+id+'.pdb').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text();})
+        .then(txt=>PG._applyProtein(PE.parsePDB(txt),id,txt))
+        .catch(err=>PG._status('Could not fetch '+id+' ('+err.message+'). Upload the .pdb instead.','#fb7185'));},
+    loadPdbFile(file){if(!file)return;PG._status('Reading '+file.name+'…','#67e8f9');const fr=new FileReader();
+      fr.onload=()=>{try{PG._applyProtein(PE.parsePDB(fr.result),file.name.replace(/\.[^.]+$/,''),fr.result);}catch(e){PG._status('Parse error: '+e.message,'#fb7185');}};
+      fr.onerror=()=>PG._status('Could not read file.','#fb7185');fr.readAsText(file);},
+    _applyProtein(p,id,raw){if(!p.natoms){PG._status('No ATOM/HETATM records found in '+id+'.','#fb7185');return;}
+      p.id=id;p.raw=raw||'';protein=p;box={center:p.center,size:p.size};
+      PG._status('✓ '+id+' — '+p.chains.length+' chains, '+p.nres+' residues, '+p.natoms+' atoms. Box auto-centered'+(p.hasLigand?' on bound ligand.':' on protein.'),'#34d399');
+      PG._derived();PG._invalidate();PG.stage(PG._stage);
+      if(PG.init.use3D())setTimeout(()=>{try{Plotly.Plots.resize('poseBox3D');}catch(e){}},80);},
+    _status(msg,col){const e=$('poseProteinStatus');if(!e)return;e.textContent=msg;e.style.color=col||'#64748b';},
+  };
+
+  /* ============================================================================
+     VIEW LAYERS — molecular Surface (1.4 Å water probe) + Secondary Structure (DSSP-lite)
+     Two optional overlays for the 3D pocket view, toggled by the buttons in the
+     #poseBox3DHint bar. Both follow the workflow in agent_info.txt:
+       • Surface depends only on atom coordinates + van der Waals radii. A water-sized
+         probe (1.4 Å) is rolled over the pocket atoms' vdW spheres → the solvent-excluded
+         CONTACT surface: the SHAPE of the cavity the ligand sits in, not the fold.
+       • Secondary structure comes from the backbone hydrogen-bond pattern (Kabsch–Sander /
+         DSSP): i→i+4 H-bonds = α-helix, parallel/antiparallel bridges = β-sheet, rest = loop.
+         Coloured red / cyan / grey, like Maestro.
+     Both are rigid-receptor properties, cached per (protein, box) and reused across every
+     pose / MC frame, so nothing heavy recomputes while the search animates.
+     ============================================================================ */
+  const VDW={H:1.20,C:1.70,N:1.55,O:1.52,S:1.80,P:1.80,F:1.47,Cl:1.75,Br:1.85,I:1.98,Se:1.90,B:1.92,Zn:1.39,Fe:2.00,Mg:1.73,Mn:2.00,Ca:2.31,Na:2.27,K:2.75,Cu:1.40,Ni:1.63,Co:2.00};
+  function vdw(el){return VDW[el]||1.70;}
+  const PROBE=1.4;                                   // water radius (Å) — the rolling probe
+  function fiboSphere(n){const p=[],inc=Math.PI*(3-Math.sqrt(5)),off=2/n;for(let i=0;i<n;i++){const y=i*off-1+off/2,r=Math.sqrt(Math.max(0,1-y*y)),phi=i*inc;p.push([Math.cos(phi)*r,y,Math.sin(phi)*r]);}return p;}
+  // Solvent-excluded CONTACT dots: points on each atom's vdW sphere that (a) are not buried in
+  // a neighbour and (b) where a rolled probe does not clash — the part a 1.4 Å water can touch.
+  function surfaceDots(atoms,probe,dens){
+    const A=atoms.filter(a=>a.el!=='H');const n=A.length;if(!n)return {x:[],y:[],z:[]};
+    const R=new Array(n);for(let i=0;i<n;i++)R[i]=vdw(A[i].el);
+    let maxR=0;for(let i=0;i<n;i++)if(R[i]>maxR)maxR=R[i];
+    const cell=Math.max(2.5,maxR+probe),gk=v=>Math.floor(v/cell),key=(a,b,c)=>a+'_'+b+'_'+c;
+    const grid={};for(let i=0;i<n;i++){const a=A[i],k=key(gk(a.x),gk(a.y),gk(a.z));(grid[k]||(grid[k]=[])).push(i);}
+    function near(x,y,z){const out=[],cx=gk(x),cy=gk(y),cz=gk(z);for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){const c=grid[key(cx+dx,cy+dy,cz+dz)];if(c)for(let m=0;m<c.length;m++)out.push(c[m]);}return out;}
+    const sph=fiboSphere(dens),X=[],Y=[],Z=[];
+    for(let i=0;i<n;i++){const a=A[i],ri=R[i],nb=near(a.x,a.y,a.z);
+      for(let s=0;s<sph.length;s++){const u=sph[s];
+        const px=a.x+u[0]*ri,py=a.y+u[1]*ri,pz=a.z+u[2]*ri;                                   // point on the vdW surface
+        const cx=a.x+u[0]*(ri+probe),cy=a.y+u[1]*(ri+probe),cz=a.z+u[2]*(ri+probe);           // probe centre if rolled here
+        let hide=false;
+        for(let t=0;t<nb.length;t++){const j=nb[t];if(j===i)continue;const b=A[j],rj=R[j];
+          const ax=px-b.x,ay=py-b.y,az=pz-b.z;if(ax*ax+ay*ay+az*az<(rj-0.02)*(rj-0.02)){hide=true;break;}            // buried in a neighbour
+          const ex=cx-b.x,ey=cy-b.y,ez=cz-b.z;if(ex*ex+ey*ey+ez*ez<(rj+probe-0.02)*(rj+probe-0.02)){hide=true;break;}} // probe would clash → unreachable
+        if(!hide){X.push(px);Y.push(py);Z.push(pz);}
+      }
+    }
+    return {x:X,y:Y,z:Z};
+  }
+  PG._surfaceTraces=function(site){
+    if(!protein||!site)return [];
+    const kkey=box.center.map(v=>(+v).toFixed(2)).join(',')+'|'+box.size+'|'+site.atoms.length;
+    if(!protein._surf||protein._surf.key!==kkey){
+      const d=surfaceDots(site.atoms,PROBE,54);
+      let x=d.x,y=d.y,z=d.z;const N=x.length,CAP=14000;                                        // keep the translucent cloud light
+      if(N>CAP){const st=N/CAP,xx=[],yy=[],zz=[];for(let i=0;i<CAP;i++){const k=Math.floor(i*st);xx.push(x[k]);yy.push(y[k]);zz.push(z[k]);}x=xx;y=yy;z=zz;}
+      protein._surf={key:kkey,tr:[{type:'scatter3d',mode:'markers',x:x,y:y,z:z,marker:{color:'#9fb4c9',size:2.1,opacity:0.26,line:{width:0}},hoverinfo:'skip',showlegend:false}]};
+    }
+    return protein._surf.tr;
+  };
+
+  /* ---- DSSP-lite: secondary structure from the backbone H-bond pattern ---- */
+  function buildResidues(atoms){
+    const map={};for(const a of atoms){if(a.het)continue;const k=a.chain+'|'+a.resseq;let r=map[k];
+      if(!r){r={chain:a.chain,seq:parseInt(a.resseq,10),resn:a.resn,key:k,N:null,CA:null,C:null,O:null};map[k]=r;}
+      if(a.name==='N')r.N=[a.x,a.y,a.z];else if(a.name==='CA')r.CA=[a.x,a.y,a.z];else if(a.name==='C')r.C=[a.x,a.y,a.z];else if(a.name==='O')r.O=[a.x,a.y,a.z];}
+    const byChain={};Object.keys(map).forEach(k=>{const r=map[k];(byChain[r.chain]||(byChain[r.chain]=[])).push(r);});
+    Object.keys(byChain).forEach(c=>byChain[c].sort((a,b)=>a.seq-b.seq));return byChain;
+  }
+  function dsspAssign(byChain){
+    // Pool ALL residues (H-bonds span the whole structure, so inter-chain sheets are found).
+    // Sequence neighbours are looked up by chain|seq so helix turns / bridge patterns stay chain-aware.
+    const all=[];Object.keys(byChain).forEach(ch=>byChain[ch].forEach(r=>all.push(r)));
+    const n=all.length,ss={},Q=0.084*332;                                                        // Kabsch–Sander electrostatic factor
+    const idx={};for(let i=0;i<n;i++)idx[all[i].chain+'|'+all[i].seq]=i;                          // chain|seq → global index
+    const nb=(i,d)=>idx[all[i].chain+'|'+(all[i].seq+d)];                                         // same-chain sequence neighbour
+    for(let i=0;i<n;i++){const r=all[i];r.H=null;const pi=nb(i,-1);                               // amide H ~1 Å off N, anti to prev C=O
+      if(pi!==undefined){const p=all[pi];if(r.N&&p.C&&p.O){const dx=p.C[0]-p.O[0],dy=p.C[1]-p.O[1],dz=p.C[2]-p.O[2],L2=Math.hypot(dx,dy,dz)||1;r.H=[r.N[0]+dx/L2,r.N[1]+dy/L2,r.N[2]+dz/L2];}}}
+    const D=(p,q)=>Math.hypot(p[0]-q[0],p[1]-q[1],p[2]-q[2])||1e-3;
+    function hb(i,j){if(i==null||j==null||i<0||j<0||i>=n||j>=n)return false;const A=all[i],B=all[j];   // CO(i)···NH(j) H-bond?
+      if(A===B||!A.C||!A.O||!B.N||!B.H)return false;
+      if(A.CA&&B.CA&&Math.hypot(A.CA[0]-B.CA[0],A.CA[1]-B.CA[1],A.CA[2]-B.CA[2])>9)return false;      // cheap CA reject
+      const E=Q*(1/D(A.O,B.N)+1/D(A.C,B.H)-1/D(A.O,B.H)-1/D(A.C,B.N));return E<-0.5;}
+    const hel=new Array(n).fill(false),sht=new Array(n).fill(false);
+    for(let i=0;i<n;i++)for(const t of [3,4,5]){const j=nb(i,t);if(j!==undefined&&hb(i,j)){for(let k=1;k<t;k++){const m=nb(i,k);if(m!==undefined)hel[m]=true;}}}   // 3/4/5-turns → helix
+    const cell=7.0,gk=v=>Math.floor(v/cell),key=(a,b,c)=>a+'_'+b+'_'+c,grid={};                   // β-bridges: only test spatially close pairs
+    for(let i=0;i<n;i++){const p=all[i].CA;if(!p)continue;const k=key(gk(p[0]),gk(p[1]),gk(p[2]));(grid[k]||(grid[k]=[])).push(i);}
+    for(let i=0;i<n;i++){const p=all[i].CA;if(!p)continue;const cx=gk(p[0]),cy=gk(p[1]),cz=gk(p[2]);
+      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){const cellArr=grid[key(cx+dx,cy+dy,cz+dz)];if(!cellArr)continue;
+        for(const j of cellArr){if(j<=i)continue;
+          if(all[i].chain===all[j].chain&&Math.abs(all[i].seq-all[j].seq)<3)continue;             // sequence-adjacent = turn, not a bridge
+          const im=nb(i,-1),ip=nb(i,1),jm=nb(j,-1),jp=nb(j,1);
+          const anti=(hb(i,j)&&hb(j,i))||(hb(im,jp)&&hb(jm,ip));
+          const para=(hb(im,j)&&hb(j,ip))||(hb(jm,i)&&hb(i,jp));
+          if(anti||para){sht[i]=true;sht[j]=true;}
+        }}}
+    for(let i=0;i<n;i++)ss[all[i].key]=hel[i]?'H':(sht[i]?'E':'C');                               // helix wins (DSSP priority)
+    return ss;
+  }
+  function catmull(p0,p1,p2,p3,t){const t2=t*t,t3=t2*t;return [0,1,2].map(k=>0.5*(2*p1[k]+(-p0[k]+p2[k])*t+(2*p0[k]-5*p1[k]+4*p2[k]-p3[k])*t2+(-p0[k]+3*p1[k]-3*p2[k]+p3[k])*t3));}
+  const SSCOL={H:'#ef4444',E:'#22d3ee',C:'#8ca0b3'};                                             // helix red · sheet cyan · loop grey
+  PG._ssTraces=function(){
+    if(!protein)return [];
+    const byChain=protein._res||(protein._res=buildResidues(protein.atoms));
+    const ss=protein._ss||(protein._ss=dsspAssign(byChain));
+    const kkey=box.center.map(v=>(+v).toFixed(2)).join(',')+'|'+box.size+'|cartoon';
+    if(protein._ssTr&&protein._ssTr.key===kkey)return protein._ssTr.tr;
+    const bc=box.center,Rss=Math.max(16,box.size*0.6+10);                                         // render the backbone that frames the pocket
+    // ---- little vector helpers ----
+    const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+      cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],
+      scl=(a,s)=>[a[0]*s,a[1]*s,a[2]*s],mag=a=>Math.hypot(a[0],a[1],a[2]),
+      norm=a=>{const L=mag(a)||1;return [a[0]/L,a[1]/L,a[2]/L];},
+      dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+    // ---- one combined mesh, coloured per-vertex by secondary structure ----
+    const G={x:[],y:[],z:[],i:[],j:[],k:[],col:[]};
+    const HT=0.26;                                                                                // ribbon half-thickness (the flat "edge")
+    const rectProf=(hw,ht)=>[[hw,ht],[0,ht],[-hw,ht],[-hw,0],[-hw,-ht],[0,-ht],[hw,-ht],[hw,0]];  // 8 pts round a flat rectangle
+    const circProf=r=>{const p=[];for(let m=0;m<8;m++){const t=m*Math.PI/4;p.push([r*Math.cos(t),r*Math.sin(t)]);}return p;};
+    function ring(P,side,up,prof,color){const base=G.x.length;
+      for(let m=0;m<8;m++){const a=prof[m][0],c=prof[m][1];
+        G.x.push(P[0]+a*side[0]+c*up[0]);G.y.push(P[1]+a*side[1]+c*up[1]);G.z.push(P[2]+a*side[2]+c*up[2]);G.col.push(color);}
+      return base;}
+    function stitch(a0,b0){for(let m=0;m<8;m++){const n=(m+1)%8;G.i.push(a0+m,a0+m);G.j.push(a0+n,b0+n);G.k.push(b0+n,b0+m);}}
+    function cap(base,ctr,color,rev){const ci=G.x.length;G.x.push(ctr[0]);G.y.push(ctr[1]);G.z.push(ctr[2]);G.col.push(color);
+      for(let m=0;m<8;m++){const n=(m+1)%8;if(rev){G.i.push(ci);G.j.push(base+n);G.k.push(base+m);}else{G.i.push(ci);G.j.push(base+m);G.k.push(base+n);}}}
+
+    let total=0;Object.keys(byChain).forEach(ch=>byChain[ch].forEach(r=>{if(r.CA)total++;}));
+    const S=total>1200?2:(total>600?3:(total>300?4:6));                                           // spline samples per residue span (scale with size)
+
+    Object.keys(byChain).forEach(chain=>{
+      const R=byChain[chain].filter(r=>r.CA);const n=R.length;if(n<2)return;
+      // per-residue frame: Carson–Bugg peptide-plane side vector (flips consistent to avoid twisting)
+      const fr=[];let prevSide=null;
+      for(let i=0;i<n;i++){
+        const ca=R[i].CA,caP=(R[i-1]&&R[i-1].CA)||ca,caN=(R[i+1]&&R[i+1].CA)||ca;
+        const tan=norm(sub(caN,caP));
+        let side;const co=(R[i].O&&R[i].C)?norm(sub(R[i].O,R[i].C)):null;                          // carbonyl C=O gives the ribbon "width" direction
+        side=co?sub(co,scl(tan,dot(co,tan))):[0,0,0];
+        if(mag(side)<0.1){const t=Math.abs(tan[0])<0.9?[1,0,0]:[0,1,0];side=cross(tan,t);}
+        side=norm(side);if(prevSide&&dot(side,prevSide)<0)side=scl(side,-1);
+        let up=norm(cross(tan,side));side=norm(cross(up,tan));
+        fr.push({ca,tan,side,up,ss:(ss[R[i].key]||'C'),seq:R[i].seq});prevSide=side;
+      }
+      // one light smoothing pass over side vectors (helps helices read cleanly)
+      const sm=fr.map((f,i)=>{const a=fr[Math.max(0,i-1)],c=fr[Math.min(n-1,i+1)];
+        let side=norm([a.side[0]+2*f.side[0]+c.side[0],a.side[1]+2*f.side[1]+c.side[1],a.side[2]+2*f.side[2]+c.side[2]]);
+        let up=norm(cross(f.tan,side));side=norm(cross(up,f.tan));return {ca:f.ca,tan:f.tan,side,up,ss:f.ss,seq:f.seq};});
+      for(let i=0;i<n;i++)fr[i]=sm[i];
+      const bonded=(a,b)=>b>=0&&b<n&&Math.abs(fr[b].seq-fr[a].seq)===1&&dist(fr[b].ca,fr[a].ca)<4.6;
+      const bondedE=(a,b)=>bonded(a,b)&&fr[a].ss==='E'&&fr[b].ss==='E';
+      // per-residue width + cross-section type + colour (β-strands get an arrowhead at their C-terminal end)
+      const W=new Array(n),T=new Array(n),COL=new Array(n);
+      for(let i=0;i<n;i++){const s=fr[i].ss;
+        if(s==='H'){W[i]=1.15;T[i]='rect';COL[i]=SSCOL.H;}
+        else if(s==='E'){T[i]='rect';COL[i]=SSCOL.E;
+          if(!bondedE(i,i+1))W[i]=0.05;                        // last strand residue = arrow tip
+          else if(bondedE(i,i+1)&&!bondedE(i+1,i+2))W[i]=1.95;  // next is the tip → this is the barb (widest)
+          else W[i]=1.25;}                                      // strand body
+        else {W[i]=0.34;T[i]='circ';COL[i]=SSCOL.C;}}           // loop = thin round tube
+      // walk bonded stretches; render those that touch the pocket
+      let a=0;
+      while(a<n){let b=a;while(bonded(b,b+1))b++;
+        let near=false;for(let q=a;q<=b;q++){if(dist(fr[q].ca,bc)<Rss){near=true;break;}}
+        if(near&&b>a){
+          const CA=q=>fr[Math.max(a,Math.min(b,q))].ca;
+          let prevBase=null,firstBase=null,firstP=null,firstCol=null,lastP=null,lastCol=null;
+          for(let seg=a;seg<b;seg++){
+            const P0=CA(seg-1),P1=CA(seg),P2=CA(seg+1),P3=CA(seg+2),sd1=fr[seg].side,sd2=fr[seg+1].side;
+            for(let t=(seg===a?0:1);t<=S;t++){
+              const tt=t/S,ri=(t<S)?seg:seg+1;
+              const P=catmull(P0,P1,P2,P3,tt);
+              let tan=sub(catmull(P0,P1,P2,P3,Math.min(1,tt+0.02)),catmull(P0,P1,P2,P3,Math.max(0,tt-0.02)));
+              if(mag(tan)<1e-6)tan=fr[ri].tan;tan=norm(tan);
+              let side=norm([sd1[0]*(1-tt)+sd2[0]*tt,sd1[1]*(1-tt)+sd2[1]*tt,sd1[2]*(1-tt)+sd2[2]*tt]);
+              let up=norm(cross(tan,side));side=norm(cross(up,tan));
+              const w=W[seg]*(1-tt)+W[seg+1]*tt,col=COL[ri],prof=(T[ri]==='circ')?circProf(w):rectProf(w,HT);
+              const base=ring(P,side,up,prof,col);
+              if(firstBase===null){firstBase=base;firstP=P;firstCol=col;}
+              if(prevBase!==null)stitch(prevBase,base);
+              prevBase=base;lastP=P;lastCol=col;
+            }
+          }
+          if(firstBase!==null){cap(firstBase,firstP,firstCol,true);cap(prevBase,lastP,lastCol,false);}
+        }
+        a=b+1;
+      }
+    });
+    const tr=G.x.length?[{type:'mesh3d',x:G.x,y:G.y,z:G.z,i:G.i,j:G.j,k:G.k,vertexcolor:G.col,flatshading:false,
+      lighting:{ambient:0.55,diffuse:0.8,specular:0.5,roughness:0.35,fresnel:0.15},lightposition:{x:0,y:0,z:1e5},
+      hoverinfo:'skip',showlegend:false}]:[];
+    protein._ssTr={key:kkey,tr:tr};return tr;
+  };
+  PG._ssComposition=function(){                                                                  // helix/sheet/loop split for the POCKET residues
+    const out={H:0,E:0,C:0};if(!protein)return out;
+    const byChain=protein._res||(protein._res=buildResidues(protein.atoms));
+    const ss=protein._ss||(protein._ss=dsspAssign(byChain));
+    const site=PG.init.site&&PG.init.site();if(!site)return out;
+    const seen={};site.atoms.forEach(a=>{if(a.het)return;const k=a.chain+'|'+a.resseq;if(seen[k])return;seen[k]=1;out[ss[k]||'C']++;});
+    return out;
+  };
+
+  /* ---- view-layer state + toggles (buttons live in the #poseBox3DHint bar) ---- */
+  PG._showSurface=false;PG._showSS=false;
+  PG.toggleSurface=function(){PG._showSurface=!PG._showSurface;PG._syncViewBtns();PG._redraw3D();};
+  PG.toggleSS=function(){PG._showSS=!PG._showSS;PG._syncViewBtns();PG._ssReadout();PG._redraw3D();};
+  PG._syncViewBtns=function(){
+    const ON={bd:'#0e7490',bg:'rgba(34,211,238,.16)',fg:'#67e8f9'},OFF={bd:'#1e293b',bg:'rgba(11,17,32,.85)',fg:'#94a3b8'};
+    const s=$('poseSurfBtn');if(s){const a=PG._showSurface?ON:OFF;s.style.borderColor=a.bd;s.style.background=a.bg;s.style.color=a.fg;}
+    const t=$('poseSSBtn');if(t){const b=PG._showSS?ON:OFF;t.style.borderColor=b.bd;t.style.background=b.bg;t.style.color=b.fg;}
+    const sn=$('poseSurfNote');if(sn)sn.style.display=PG._showSurface?'inline-block':'none';
+    const lg=$('poseSSLegend');if(lg)lg.style.display=PG._showSS?'inline-block':'none';
+  };
+  PG._ssReadout=function(){if(!PG._showSS)return;try{const c=PG._ssComposition(),set=(id,v)=>{const e=$(id);if(e)e.textContent=v;};set('poseSSa',c.H);set('poseSSb',c.E);set('poseSSl',c.C);}catch(e){}};
+  // replay the last 3D draw (surface/SS traces get folded in by _draw3D when their flags are on)
+  PG._redraw3D=function(){if(!protein||!window.Plotly||!PG._last3D)return;try{PG._draw3D(PG._last3D.world,PG._last3D.opt);}catch(e){}};
+
+
+  window.PoseGen=PG;
+})();
+
+</script>
+<script>window.addEventListener('load',function(){setTimeout(function(){if(window.PoseGen)PoseGen.open();},150);});</script>
+</body></html>

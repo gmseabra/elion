@@ -40,13 +40,7 @@ src/elion.egg-info/SOURCES.txt
 src/elion.egg-info/top_level.txt
 
 # User data
-src/vina/docking_score/
 src/elion/properties/deepatom/data/
 src/elion/generators/TS/data/
-
-# HPG local scripts
-src/vina/internal_utils/
-
-# temp
-src/TS/
-src/visualizer/vina/
+src/elion/properties/Yupu_GIGN/data/
+src/Elion-AGI-Ecosystem/

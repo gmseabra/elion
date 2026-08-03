@@ -27,3 +27,6 @@ seaborn>=0.12
 
 # ── external, NOT on PyPI (provide via PYTHONPATH if you use those routes) ──
 #   shufflenet_v3   — ships with the external DeepAtom project (deepatom_saliency)
+
+# ── added with the Thompson-Sampling monitor + pose tooling ──────────────────
+psutil>=5.9          # ts_routes: CPU/GPU monitor SSE endpoints
