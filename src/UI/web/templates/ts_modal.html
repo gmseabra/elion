@@ -292,3 +292,9 @@
 <script src="{{ url_for('static', filename='js/ts/ts_warmup.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ts/ts_worker_bridge.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ts/ts_run.js') }}"></script>
+<!-- ts_rl.js — 🧪 RL diagnostics tab. Self-installing (injects its own button,
+     pane and scoped stylesheet); needs no markup above. MUST load after
+     ts_core.js: it reads _TS_PANE / _TS_TAB_ACTIVE / _ts, which are top-level
+     `const` and therefore NOT window properties, so they only resolve as bare
+     identifiers once ts_core.js has run. -->
+<script src="{{ url_for('static', filename='js/ts/ts_rl.js') }}"></script>

@@ -361,6 +361,39 @@
       const dx=a.x-c.x,dy=a.y-c.y,dz=a.z-c.z;const d2=dx*dx+dy*dy+dz*dz;
       const mx=covr(a.el)+covr(c.el)+0.45; if(d2<mx*mx&&d2>0.20)b.push([i,j]); }}
     return b;}
+  /* ---- ☰ View › H Hydrogens: drop H atoms and repair the bond indices --------
+     Bonds are index pairs INTO the atom array, so removing atoms invalidates
+     every index after the first removal. Build a forward map in the same pass,
+     then both REMAP the survivors and DROP any bond that touched a hydrogen.
+     A plain atoms.filter() leaves bonds pointing at the wrong atoms — which
+     renders as sticks joining unrelated atoms, i.e. it looks like a chemistry
+     bug rather than an indexing one.
+
+     Two bond shapes are in play here and both must survive:
+       ligand  L.BONDS      -> {a, b, order}   (order and any extra fields kept)
+       protein inferBonds() -> [i, j]          (plain pairs)
+     stickTraces accepts either, so this returns whichever it was given.
+
+     Cosmetic only. Every analytical path already drops H on its own and does
+     not consult this flag: _surfaceTraces (pose.js ~1725/1753), bond-order
+     perception (~428), the Vina engine's typing, and interactions(), which
+     reads L.atoms / world / site.atoms directly rather than the draw arrays. */
+  function stripH(atoms,bonds){
+    const n=atoms?atoms.length:0,map=new Array(n),keep=[];
+    for(let i=0;i<n;i++){
+      if(atoms[i]&&atoms[i].el!=='H'){map[i]=keep.length;keep.push(atoms[i]);}else map[i]=-1;
+    }
+    const nb=[];
+    (bonds||[]).forEach(bd=>{
+      if(!bd)return;
+      const arr=Array.isArray(bd);
+      const i0=arr?bd[0]:bd.a, j0=arr?bd[1]:bd.b;
+      const ii=(i0>=0&&i0<n)?map[i0]:-1, jj=(j0>=0&&j0<n)?map[j0]:-1;
+      if(ii<0||jj<0)return;                                  // touched a hydrogen -> drop
+      nb.push(arr?(bd.length>2?[ii,jj,bd[2]]:[ii,jj]):Object.assign({},bd,{a:ii,b:jj}));
+    });
+    return {atoms:keep,bonds:nb,map:map,removed:n-keep.length};
+  }
   /* ---- perceive bond orders for a coordinates-only ligand (PDB/PDBQT) --------
      PDB files carry no bond orders, so a benzene ring or an amide C=O renders as
      plain single sticks. This recovers orders from geometry so stickTraces can
@@ -666,10 +699,17 @@
         PG._prevLig=L;
       }
       const ligAtoms=world.map((p,i)=>({x:p[0],y:p[1],z:p[2],el:L.atoms[i]}));
-      let data=[];if(site&&!PG._hideProtein){data=data.concat(opt.proteinAtoms?stickTraces(opt.proteinAtoms,site.bonds,false,5,2):site.traces);}
+      let data=[];
+      if(site&&!PG._hideProtein){
+        if(opt.proteinAtoms){
+          const pf=PG._hideH?stripH(opt.proteinAtoms,site.bonds):{atoms:opt.proteinAtoms,bonds:site.bonds};
+          data=data.concat(stickTraces(pf.atoms,pf.bonds,false,5,2));
+        }else data=data.concat(PG._siteTraces(site));
+      }
       data.push(boxTrace3D(box.center,box.size));
       const _nBefore=data.length;                                                              // DEBUG: mark where ligand traces start
-      data=data.concat(stickTraces(ligAtoms,L.BONDS,true,7,3.2));
+      const _lf=PG._hideH?stripH(ligAtoms,L.BONDS):{atoms:ligAtoms,bonds:L.BONDS};
+      data=data.concat(stickTraces(_lf.atoms,_lf.bonds,true,7,3.2));
 
       /* ---- pinned ligands ------------------------------------------------
          The active ligand above lives in the single `L` slot and is drawn at
@@ -687,7 +727,8 @@
           if(L&&(pl===L||(L._label&&L._label===nm)))return;            // already on screen as the active ligand
           var c=pl._realCenter;
           var at=pl.REF.map(function(p,i){return {x:p[0]+c[0],y:p[1]+c[1],z:p[2]+c[2],el:pl.atoms[i],name:nm};});
-          data=data.concat(stickTraces(at,pl.BONDS,true,6,2.8,PG._PIN_COL));
+          var pf2=PG._hideH?stripH(at,pl.BONDS):{atoms:at,bonds:pl.BONDS};
+          data=data.concat(stickTraces(pf2.atoms,pf2.bonds,true,6,2.8,PG._PIN_COL));
           _pinDrawn.push(nm);
         });
       }catch(e){PG._log('pinned ligand draw failed:',e&&e.message);}
@@ -944,7 +985,8 @@
         PG.mc._reflectSW();PG.mc.setT(PG.mc.T);var sel=$('poseMcScorer');if(sel)sel.value=PG.mc.scorer;PG.mc.setScorer(PG.mc.scorer);var isV=PG.mc.searchScore==='vina';var ss=$('poseSearchScore');if(ss)ss.value=PG.mc.searchScore;var sc=$('poseSurrCard');if(sc)sc.style.display=isV?'none':'block';var vn=$('poseVinaSearchNote');if(vn)vn.style.display=isV?'flex':'none';var pt=$('poseProcTitle');if(pt)pt.textContent=isV?'Vina ΔG (lower = better)':'Score (lower = better)';var rb=$('poseMcRunBtn');if(rb)rb.textContent='▶ Run search';PG.mc._draw();PG.mc._stats();},
       _pose(){const w=PG.mc._work;return {off:w.off,quat:PG.mc._quat(w),tors:w.tors};},
       _draw(){PG._drawPose(PG.mc._pose(),{interactions:true});},
-      _stats(){var e;e=$('poseProcVal');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseProcSub');if(e)e.textContent='step '+PG.mc.nstep+' · best '+PG.mc.bestScore.toFixed(2);PG._spark('poseProcChart',PG.mc._hist,'#38bdf8');
+      _stats(){if(PG.vina&&PG.vina.eng&&PG.vina.eng._running)return;      // the Vina engine owns the overlay while it runs
+        var e;e=$('poseProcVal');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseProcSub');if(e)e.textContent='step '+PG.mc.nstep+' · best '+PG.mc.bestScore.toFixed(2);PG._spark('poseProcChart',PG.mc._hist,'#38bdf8');
         e=$('poseMcStep');if(e)e.textContent=PG.mc.nstep;e=$('poseMcScore');if(e)e.textContent=PG.mc.score.toFixed(2);e=$('poseMcBest');if(e)e.textContent=PG.mc.bestScore.toFixed(2);e=$('poseMcAcc');if(e)e.textContent=PG.mc.acc+' / '+PG.mc.nstep;e=$('poseMcTempVal');if(e)e.textContent=PG.mc.T.toFixed(1);
         e=$('poseMcSrc');if(e)e.textContent=PG.mc._srcLabel+' pose';if(PG.mc.searchScore==='vina')PG.vina.evaluate();PG._updateTraj();},
       step(){if(!L)return;PG.mc.nstep++;const A=PG.mc.mutAmp;let prop=PG.mc._perturb(PG.mc._perturb(PG.mc._perturb(PG.mc._work,A),A),A);const opt=PG.mc._bfgs(prop);const dS=opt.score-PG.mc.score;
@@ -960,7 +1002,7 @@
        Affinity:  ΔG = Σe / (1 + w_rot·Nrot).   Defaults = the standard Vina weights (match the server binary). ---- */
     vina:{w:{g1:-0.035579,g2:-0.005156,rep:0.840245,hyd:-0.035069,hb:-0.587439,rot:0.05846},
       _hist:[],inter:0,dg:0,nrot:0,npair:0,
-      opts:{nrot:'auto',typing:'vina'},   // calibration vs the AutoDock Vina binary — driven by the Calibration controls in the card
+      opts:{nrot:'auto',typing:'vina_1_2_7'},   // calibration vs the AutoDock Vina binary — driven by the Calibration controls in the card
       RAD:{C:1.9,N:1.8,O:1.7,S:2.0,P:2.1,F:1.5,Cl:1.8,Br:2.0,I:2.2,H:1.0,B:1.8},   // element → Vina XS van-der-Waals radius (Å)
       _rad(el){return PG.vina.RAD[el]!=null?PG.vina.RAD[el]:1.8;},
       _isHyd(el){return el==='C'||el==='F'||el==='Cl'||el==='Br'||el==='I';},        // hydrophobic XS types
@@ -973,7 +1015,7 @@
       // ── Calibration (reconcile the in-browser score with the Vina binary) ──────
       _readOpts(){var n=$('poseVinaNrotMode'),t=$('poseVinaTypeMode');
         if(n)PG.vina.opts.nrot=n.value;if(t)PG.vina.opts.typing=t.value;},
-      setOpts(){PG.vina._readOpts();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},
+      setOpts(){PG.vina._readOpts();PG.vina.eng.invalidate();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},
       // Effective N_rot used in the denominator: manual → the N_rot box, rigid → 0,
       // auto → the rotatable-bond count. Lets the user match Vina's torsion-tree count.
       // NOTE: kept FRACTIONAL on purpose. Vina's conf_independent.cpp accumulates
@@ -992,7 +1034,14 @@
       // active rotatable bonds. Flexible (SMILES-built) ligands already carry the
       // torsion tree; for an uploaded .pdb we rebuild it from the derived SMILES so
       // the Nrot entropy penalty matches AutoDock Vina. Cached on the ligand.
-      _nrotCount(){if(!L)return 0;if(L._nrotAuto!=null)return L._nrotAuto;var n=0;
+      _nrotCount(){if(!L)return 0;
+        // Vina's num_tors is NOT the torsion count: conf_independent.cpp sums
+        // 0.5*atom_rotors over heavy atoms and skips bonds to terminal groups,
+        // so it is often a half-integer (7.5 for Elion_iag933). Ask the engine
+        // when it is available; fall back to |TORS| otherwise.
+        if(PG.vina.opts.typing==='vina_1_2_7'&&PG.vina.eng.available()){
+          var nt=PG.vina.eng.numTors();if(nt!=null)return nt;}
+        if(L._nrotAuto!=null)return L._nrotAuto;var n=0;
         if(L.TORS&&L.TORS.length)n=L.TORS.length;
         else if(L._smiles){try{var m=PE.buildLigand(L._smiles);if(m&&m.ok&&m.TORS)n=m.TORS.length;}catch(e){}}
         L._nrotAuto=n;return n;},
@@ -1027,18 +1076,350 @@
           for(var t=0;t<het.length;t++){var j=het[t],dx=xi-pa[j].x,dy=yi-pa[j].y,dz=zi-pa[j].z;
             if(dx*dx+dy*dy+dz*dz<C2){p[i]=true;break;}}}
         site._polarC=p;site._polarCKey=key;return p;},
-      enter(){if(!PG.init.cur)PG.init.cur=PG.init.rand();PG.vina._hist=[];PG.vina._reflectW();var pt=$('poseProcTitle');if(pt)pt.textContent='Vina ΔG';PG.vina._draw();PG.vina.evaluate();},
+      /* ═══════════════════════════════════════════════════════════════════════
+       * vina_engine.js bridge — real Vina 1.2.7 scoring + Monte-Carlo/BFGS.
+       * The engine is DOM-free and lives in static/js/vina_engine.js; the search
+       * runs in static/js/vina_worker.js so a full-depth run (globalSteps ~26k
+       * x exhaustiveness 8) does not freeze the tab.
+       * ═══════════════════════════════════════════════════════════════════════ */
+      eng:{
+        _model:null,_key:null,_worker:null,_running:false,
+        _cfg:{exhaustiveness:8,seed:null,numModes:9,energyRange:3,minRmsd:1.0,
+              globalSteps:0,localSteps:0,huntCap:10,temperature:1.2,mutAmp:2.0},
+        available(){return typeof window.VinaEngine!=='undefined';},
+        ready(){return PG.vina.eng.available()&&!!PG.vina.eng._build();},
+        // {els, ref, bonds, tors, root} straight out of PoseEngine's torsion tree
+        _ligSpec(){if(!L||!L.REF)return null;
+          return {els:L.atoms.slice(),ref:L.REF.map(p=>p.slice()),
+                  bonds:(L.BONDS||[]).map(b=>({a:b.a,b:b.b,order:b.order,type:b.type})),
+                  tors:(L.TORS||[]).map(t=>({from:t.from,to:t.to,moves:t.moves.slice()})),
+                  root:(L.ROOT||[]).slice()};},
+        _recAtoms(){const site=PG.init.site();return site?site.atoms:null;},
+        _box(){const s=(Array.isArray(box.size)?box.size:[box.size,box.size,box.size]);
+          return {center:box.center.slice(),size:s.slice()};},
+        // Cache the built model; rebuild when ligand, receptor, box or weights move.
+        _build(){if(!PG.vina.eng.available())return null;
+          const lig=PG.vina.eng._ligSpec(),rec=PG.vina.eng._recAtoms();
+          if(!lig||!rec||!rec.length)return null;
+          const W=PG.vina.w;
+          const key=[L._label||L.smiles||'lig',lig.els.length,lig.tors.length,rec.length,
+                     box.center.map(v=>v.toFixed(3)).join(','),String(box.size),
+                     W.g1,W.g2,W.rep,W.hyd,W.hb,W.rot].join('|');
+          if(PG.vina.eng._model&&PG.vina.eng._key===key)return PG.vina.eng._model;
+          try{
+            const E=window.VinaEngine;
+            const weights={gauss1:W.g1,gauss2:W.g2,repulsion:W.rep,hydrophobic:W.hyd,hbond:W.hb,rot:W.rot};
+            const typed=E.typeReceptor(rec);
+            const m=new E.Model(lig,typed,{weights:weights,box:PG.vina.eng._box()});
+            PG.vina.eng._model=m;PG.vina.eng._key=key;return m;
+          }catch(e){PG._miniLog('vina_engine: could not build model — '+e.message,'#fb7185');return null;}},
+        invalidate(){PG.vina.eng._model=null;PG.vina.eng._key=null;},
+        /* Score a set of ligand world coords using the engine, returning the same
+           shape _scoreWorld's legacy path returns so the card is unchanged. */
+        scoreWorld(ligWorld){
+          const m=PG.vina.eng._build();if(!m)return null;
+          const E=window.VinaEngine,W=PG.vina.w;
+          const a=PG.init.cur;if(!a)return null;
+          const conf=E.confFromUI(m,{off:a.off,quat:a.quat,tors:a.tors},PG.vina.eng._box());
+          const weights={gauss1:W.g1,gauss2:W.g2,repulsion:W.rep,hydrophobic:W.hyd,hbond:W.hb,rot:W.rot};
+          const b=E.scorePose(m,conf,weights);
+          // Honour the Nrot dropdown: rigid -> 0, manual -> the box value.
+          const nrot=PG.vina._nrotEffective();
+          const dg=E.confIndependent(b.inter,nrot,W.rot);
+          return {inter:b.inter,dg:dg,nrot:nrot,np:b.npair,hasSite:true,
+                  cg1:b.cg1,cg2:b.cg2,crp:b.crp,chy:b.chy,chb:b.chb,engine:true};},
+        numTors(){const m=PG.vina.eng._build();return m?m.numTors:null;},
+        _readCfg(){const g=(id,d)=>{const e=$(id);const v=e?parseFloat(e.value):NaN;return isFinite(v)?v:d;};
+          const c=PG.vina.eng._cfg;
+          c.exhaustiveness=Math.max(1,Math.round(g('poseVinaExh',8)));
+          c.numModes=Math.max(1,Math.round(g('poseVinaModes',9)));
+          c.energyRange=Math.max(0,g('poseVinaERange',3));
+          c.minRmsd=Math.max(0,g('poseVinaMinRmsd',1.0));
+          c.globalSteps=Math.max(0,Math.round(g('poseVinaGSteps',0)));
+          c.localSteps=Math.max(0,Math.round(g('poseVinaLSteps',0)));
+          c.huntCap=Math.max(0.01,g('poseVinaHuntCap',10));
+          c.temperature=Math.max(0.01,g('poseVinaTemp',1.2));
+          c.mutAmp=Math.max(0.01,g('poseVinaMutAmp',2.0));
+          const se=$('poseVinaSeed');const sv=se?se.value.trim():'';
+          c.seed=(sv===''?null:(parseInt(sv,10)|0));
+          return c;},
+        /* ── Full Vina search, across a pool of Workers ────────────────────
+         * parallel_mc splits `exhaustiveness` tasks over `num_threads`; the
+         * browser equivalent is one Worker per hardware thread. Each worker
+         * runs a slice of the tasks and returns its RAW minima; the main thread
+         * merges them with the same 2 A RMSD dedup, then hands the merged set
+         * to one worker for the shared refine+rescore pass, so the subtracted
+         * intramolecular energy comes from the GLOBAL best pose exactly as
+         * vina.cpp:958 does.
+         * ───────────────────────────────────────────────────────────────────*/
+        _pool:[],_pending:0,_raw:[],_t0:0,_spec:null,
+        _dir(){const base=(Array.from(document.scripts).map(s=>s.src).find(s=>/pose\.js/.test(s))||'');
+          return base?base.replace(/[^/]*$/,''):'/static/js/';},
+        /* ── running-best readout on the 3D overlay (#poseProcPanel) ──────────────
+           Every worker reports its best-so-far on each progress tick, but the panel
+           only moves when the search actually BREAKS the record. A monotone staircase
+           is readable at a glance; a number that jitters between four workers' local
+           bests is not. _procBest() therefore ignores anything not strictly lower —
+           which also means the cross-worker minimum falls out for free, since a worker
+           reporting a worse best simply loses.
+
+           Honesty note, and the reason the title changes at the end: d.best is the
+           SEARCH energy — evaluated on the cached affinity grid, with hunt_cap 10 and
+           no Nrot division — not the reported affinity. The two differ, sometimes by a
+           lot, so the panel says "best so far" during the run and only calls the number
+           Vina ΔG once _onRefined has the real, exact-pairwise, Nrot-divided value. */
+        _best:Infinity,_dg:null,_bestHist:[],_nImp:0,
+        /* The worker's `best` is the SEARCH energy: cached affinity grid, hunt_cap 10,
+           intra included, no N_rot division. It reads far more negative than the number
+           the run finally reports, which is why the panel used to jump at the end.
+           So the gate still uses it — it is what the search actually minimises, and it
+           is monotone — but what gets DISPLAYED is this: the running-best pose put
+           through the very same scorePose + conf_independent the breakdown card and the
+           mode list use. Same pose, same formula, same N_rot ⇒ the live number and the
+           final number are the same quantity, and the only movement left at the end is
+           the refinement genuinely improving the pose. */
+        _scoreConf(conf){
+          const EG=PG.vina.eng,E=window.VinaEngine;
+          if(!conf||!E)return null;
+          const m=EG._build();if(!m)return null;
+          try{
+            const W=PG.vina.w;
+            const c=E.makeConf(m.tors.length);
+            c.pos=conf.pos.slice();c.q.set(conf.q);c.tors.set(conf.tors);
+            const b=E.scorePose(m,c,{gauss1:W.g1,gauss2:W.g2,repulsion:W.rep,
+                                     hydrophobic:W.hyd,hbond:W.hb,rot:W.rot});
+            const dg=E.confIndependent(b.inter,PG.vina._nrotEffective(),W.rot);
+            return isFinite(dg)?dg:null;
+          }catch(e){return null;}},
+        _procReset(){
+          const EG=PG.vina.eng;
+          EG._best=Infinity;EG._dg=null;EG._bestHist=[];EG._nImp=0;EG._liveAt=0;
+          const p=$('poseProcPanel');if(p)p.style.display='block';
+          const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
+          const v=$('poseProcVal');if(v){v.textContent='—';v.style.color='#64748b';v.style.textShadow='none';}
+          const s=$('poseProcSub');if(s)s.textContent='starting…';
+          PG._spark('poseProcChart',[],'#38bdf8');
+          // the panel may have just appeared — restack the imported-pose readout under it
+          try{var im=$('poseImpScore');if(im&&im.style.display!=='none')PG._impScoreShow(true);}catch(e){}},
+        _procBest(best,frac,conf){
+          const EG=PG.vina.eng;
+          if(best==null||!isFinite(best)||!(best<EG._best-1e-9))return false;     // not a new minimum → leave it alone
+          EG._best=best;EG._nImp++;
+          const dg=EG._scoreConf(conf);                                           // the reportable ΔG
+          if(dg!=null){
+            EG._dg=dg;EG._bestHist.push(dg);
+            if(EG._bestHist.length>240)EG._bestHist.shift();                      // the sparkline is 184 px wide
+            const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
+            const v=$('poseProcVal');
+            if(v){v.textContent=dg.toFixed(2);v.style.color=dg<0?'#34d399':'#fb7185';
+              v.style.transition='none';v.style.textShadow='0 0 11px rgba(52,211,153,.6)';  // flash: a record broke
+              setTimeout(function(){v.style.transition='text-shadow .5s ease';v.style.textShadow='none';},20);}
+            PG._spark('poseProcChart',EG._bestHist,'#38bdf8');}
+          const s=$('poseProcSub');
+          if(s)s.textContent=Math.round((frac||0)*100)+'% · '+EG._nImp+' improvement'+(EG._nImp===1?'':'s');
+          EG._procPose(conf);                                                     // and move the ligand
+          return true;},
+        /* The refined affinity is now the SAME quantity the staircase has been plotting,
+           so it belongs on the chart as its final step: the drop you see there is the
+           refinement pass genuinely improving the pose (exact pairwise instead of the
+           grid, out-of-box slope escalated), not a change of units. */
+        _procFinal(mode,n){
+          const EG=PG.vina.eng;
+          const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG (lower = better)';
+          const v=$('poseProcVal');
+          if(v){v.textContent=mode.affinity.toFixed(2);v.style.color=mode.affinity<0?'#34d399':'#fb7185';
+            v.style.transition='none';v.style.textShadow='0 0 13px rgba(52,211,153,.75)';
+            setTimeout(function(){v.style.transition='text-shadow .7s ease';v.style.textShadow='none';},20);}
+          const s=$('poseProcSub');
+          if(s)s.textContent='mode 1 of '+n+' · refined';
+          EG._dg=mode.affinity;
+          EG._bestHist.push(mode.affinity);
+          if(EG._bestHist.length>240)EG._bestHist.shift();
+          PG._spark('poseProcChart',EG._bestHist,'#34d399');},
+        _procStop(note){
+          const s=$('poseProcSub');if(s)s.textContent=note;
+          const v=$('poseProcVal');if(v)v.style.textShadow='none';},
+        run(){
+          const V=PG.vina,EG=V.eng;
+          if(!EG.available()){PG._miniLog('vina_engine.js is not loaded — add <script src="…/js/vina_engine.js"> before pose.js','#fb7185');return;}
+          if(!L){PG._miniLog('build a ligand first','#fbbf24');return;}
+          if(!protein||!protein.raw){PG._miniLog('load a target protein (.pdb) first','#fbbf24');return;}
+          if(EG._running){EG.cancel();return;}
+          const lig=EG._ligSpec(),rec=EG._recAtoms();
+          if(!lig||!rec||!rec.length){PG._miniLog('no receptor atoms in range of the box','#fbbf24');return;}
+          const cfg=EG._readCfg(),W=PG.vina.w;
+          const spec={lig:lig,
+            recAtoms:rec.map(a=>({el:a.el,x:a.x,y:a.y,z:a.z,name:a.name,resn:a.resn,resseq:a.resseq,chain:a.chain,het:a.het})),
+            box:EG._box(),
+            weights:{gauss1:W.g1,gauss2:W.g2,repulsion:W.rep,hydrophobic:W.hyd,hbond:W.hb,rot:W.rot},
+            exhaustiveness:cfg.exhaustiveness,numModes:cfg.numModes,energyRange:cfg.energyRange,
+            minRmsd:cfg.minRmsd,seed:(cfg.seed===null?((Math.random()*2147483647)|0):cfg.seed),
+            huntCap:cfg.huntCap,temperature:cfg.temperature,mutationAmplitude:cfg.mutAmp,
+            numTors:PG.vina._nrotEffective()};   // the panel's N_rot, not the model's, so
+                                                 // the reported ΔG matches the breakdown card
+          if(cfg.globalSteps>0)spec.globalSteps=cfg.globalSteps;
+          if(cfg.localSteps>0)spec.localSteps=cfg.localSteps;
+          const hw=(navigator.hardwareConcurrency||4);
+          const nw=Math.max(1,Math.min(cfg.exhaustiveness,hw));
+          EG._spec=spec;EG._raw=[];EG._pending=nw;EG._running=true;EG._t0=Date.now();
+          EG._procReset();                                              // overlay tracks the run from here
+          const btn=$('poseVinaRunSearchBtn');if(btn)btn.textContent='⏸ Cancel search';
+          const st=$('poseVinaSearchStatus');if(st)st.textContent=`starting ${nw} worker${nw>1?'s':''}…`;
+          PG._miniLog(`▶ Vina search — exhaustiveness ${spec.exhaustiveness} over ${nw} worker${nw>1?'s':''}, `+
+            `seed ${spec.seed}, ${rec.length} receptor atoms`,'#7dd3fc');
+          const dir=EG._dir();
+          const prog=new Array(nw).fill(0);
+          for(let k=0;k<nw;k++){
+            let w;
+            try{w=new Worker(dir+'vina_worker.js');}
+            catch(e){PG._miniLog('could not start the Vina worker: '+e.message,'#fb7185');EG._finish();return;}
+            EG._pool.push(w);
+            const from=Math.floor(k*cfg.exhaustiveness/nw), to=Math.floor((k+1)*cfg.exhaustiveness/nw);
+            w.onmessage=ev=>{
+              const d=ev.data||{};
+              if(d.type==='progress'){
+                prog[k]=d.frac||0;
+                const avg=prog.reduce((a,b)=>a+b,0)/nw;
+                EG._procBest(d.best,avg,d.conf);                       // only repaints on a new minimum
+                const s2=$('poseVinaSearchStatus');
+                if(s2)s2.textContent=d.phase?(`worker ${k+1}: `+d.phase)
+                  :`${Math.round(avg*100)}% · ${nw} workers · best ${d.best!=null?d.best.toFixed(3):'—'}`;
+                return;}
+              if(d.type==='error'){PG._miniLog('Vina worker error: '+d.message,'#fb7185');EG._procStop('worker error');EG._finish();return;}
+              if(d.type==='raw'){EG._raw=EG._raw.concat(d.minima);
+                if(--EG._pending===0)EG._mergeAndRefine();
+                return;}
+              if(d.type==='refined'){EG._onRefined(d);return;}
+            };
+            w.onerror=e=>{PG._miniLog('Vina worker failed: '+(e.message||'unknown'),'#fb7185');EG._finish();};
+            w.postMessage({cmd:'dock',spec:Object.assign({},spec,
+              {taskFrom:from,taskTo:to,rawOnly:true})});
+          }},
+        /* Merge every worker's minima (2 A dedup, parallel_mc.cpp:57) then run
+           the shared exact-pairwise refinement in one worker. */
+        _mergeAndRefine(){
+          const EG=PG.vina.eng,E=window.VinaEngine,spec=EG._spec;
+          const nH=(EG._build()||{}).nHeavy||0;
+          const raw=EG._raw.slice().sort((a,b)=>a.e-b.e);
+          const merged=[];
+          for(const cand of raw){
+            let dup=false;
+            for(let i=0;i<merged.length;i++){
+              if(E.rmsdLB(Float64Array.from(merged[i].coords),Float64Array.from(cand.coords),nH)<2.0){
+                if(cand.e<merged[i].e)merged[i]=cand; dup=true; break;}}
+            if(!dup)merged.push(cand);
+            if(merged.length>=Math.max(spec.numModes,20))break;
+          }
+          const st=$('poseVinaSearchStatus');
+          if(st)st.textContent=`refining ${merged.length} poses (exact pairwise)…`;
+          const w=EG._pool[0];
+          if(!w){EG._finish();return;}
+          w.postMessage({cmd:'refine',spec:Object.assign({},spec,
+            {minima:merged,useCache:false,numModes:spec.numModes})});},
+        _onRefined(d){
+          const EG=PG.vina.eng;
+          const elapsed=Date.now()-EG._t0, spec=EG._spec;
+          EG._finish();
+          if(!d.modes.length){PG._miniLog('no poses found','#fbbf24');EG._procStop('no poses found');return;}
+          PG._miniLog(`✓ Vina search done in ${(elapsed/1000).toFixed(1)} s — `+
+            `${d.modes.length} modes · exhaustiveness ${spec.exhaustiveness} · `+
+            `Nrot ${d.numTors} · ${d.nReceptorAtoms} receptor atoms · seed ${spec.seed}`,'#34d399');
+          EG._procFinal(d.modes[0],d.modes.length);
+          EG._showModes(d.modes);
+          EG._applyMode(d.modes[0]);
+          const st=$('poseVinaSearchStatus');
+          if(st)st.textContent=`done · best ${d.modes[0].affinity.toFixed(4)} kcal/mol · ${(elapsed/1000).toFixed(1)} s`;},
+        // The workers' dock loops are synchronous, so postMessage cancellation
+        // would sit in their queues until each run finished. Terminate instead.
+        cancel(){const EG=PG.vina.eng;EG._finish();
+          const st=$('poseVinaSearchStatus');if(st)st.textContent='cancelled';
+          EG._procStop('cancelled'+(EG._nImp?(' · '+EG._nImp+' improvement'+(EG._nImp===1?'':'s')):''));
+          PG._miniLog('Vina search cancelled','#fbbf24');},
+        _finish(){const EG=PG.vina.eng;EG._running=false;EG._pending=0;
+          EG._pool.forEach(w=>{try{w.terminate();}catch(e){}});EG._pool=[];
+          const b=$('poseVinaRunSearchBtn');if(b)b.textContent='▶ Run Vina search';},
+        _modes:[],
+        _showModes(modes){
+          PG.vina.eng._modes=modes;
+          const el=$('poseVinaModeList');if(!el)return;
+          let h='<div style="font-family:ui-monospace,monospace;font-size:10.5px;">'+
+                '<div style="display:flex;color:#475569;padding:2px 0;border-bottom:1px solid #1e293b;">'+
+                '<span style="width:34px;">mode</span><span style="width:78px;text-align:right;">affinity</span>'+
+                '<span style="width:62px;text-align:right;">rmsd l.b.</span><span style="flex:1;"></span></div>';
+          modes.forEach((m,i)=>{
+            h+=`<div onclick="PoseGen.vina.eng.pick(${i})" title="click to load this pose" `+
+               `style="display:flex;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);cursor:pointer;color:#cbd5e1;">`+
+               `<span style="width:34px;color:#22d3ee;">${i+1}</span>`+
+               `<span style="width:78px;text-align:right;color:${m.affinity<0?'#34d399':'#fb7185'};">${m.affinity.toFixed(4)}</span>`+
+               `<span style="width:62px;text-align:right;color:#64748b;">${m.rmsdLB.toFixed(3)}</span>`+
+               `<span style="flex:1;"></span></div>`;});
+          el.innerHTML=h+'</div>';},
+        pick(i){const m=PG.vina.eng._modes[i];if(m)PG.vina.eng._applyMode(m);},
+        /* Load an engine pose back into the shared UI pose ①/②/③ all read. */
+        _applyMode(mode,live){
+          const E=window.VinaEngine,m=PG.vina.eng._build();if(!m||!mode)return;
+          const conf=E.makeConf(m.tors.length);
+          conf.pos=mode.conf.pos.slice();conf.q.set(mode.conf.q);conf.tors.set(mode.conf.tors);
+          const ui=E.confToUI(m,conf,PG.vina.eng._box());
+          PG.init.cur={off:ui.off,quat:ui.quat,tors:ui.tors,seed:0};
+          PG._poseSrc='vina';
+          if(!live)PG._bump();          // a live preview is not a DISCRETE pose change: bumping
+          PG.vina._draw();              // _poseVer on every record would make ①/②/③ re-derive
+          PG.vina.evaluate();},         // dozens of times mid-search
+        /* Draw the running best while the search is still going.
+           Rate-limited on top of the worker's 200 ms throttle because the cost here
+           is a Plotly react over the whole scene plus an interaction re-scan, not the
+           scoring. Records also arrive from several workers at once, and only the ones
+           that actually lower the global best get this far.
+           Note the pose you watch is the SEARCH pose — grid-scored, hunt_cap 10, not yet
+           refined — so expect a small settle when _onRefined lands the exact one. */
+        _liveAt:0,_liveMs:350,
+        _procPose(conf){
+          const EG=PG.vina.eng;
+          if(!conf||!EG._running)return false;
+          const now=Date.now();
+          if(now-EG._liveAt<EG._liveMs)return false;
+          EG._liveAt=now;
+          try{EG._applyMode({conf:conf},true);}catch(e){return false;}
+          return true;}
+      },
+      enter(){if(!PG.init.cur)PG.init.cur=PG.init.rand();PG.vina._hist=[];PG.vina._reflectW();var pt=$('poseProcTitle');if(pt)pt.textContent='Vina ΔG';PG.vina._draw();PG.vina.evaluate();PG.vina._reflectEngine();},
+      /* Engine badge + intra-pair count in the Advance Config panel. */
+      _reflectEngine(){
+        var st=$('poseVinaEngineState');
+        if(st){
+          if(!PG.vina.eng.available()){st.textContent='vina_engine.js not loaded';st.style.color='#fb7185';}
+          else{var m=PG.vina.eng._build();
+            if(!m){st.textContent='loaded · needs a ligand + target';st.style.color='#fbbf24';}
+            else{st.textContent=m.nHeavy+' lig heavy · '+m.rec.n+' rec atoms · Nrot '+m.numTors;st.style.color='#34d399';}}}
+        var ip=$('poseVinaIntraPairs');
+        if(ip){var mm=PG.vina.eng.available()?PG.vina.eng._build():null;
+          ip.textContent=mm?String(mm.intraPairs.length/2):'—';}},
       _reflectW(){const set=(id,v)=>{var e=$(id);if(e&&document.activeElement!==e)e.value=v;};
         set('poseVwGauss1',PG.vina.w.g1);set('poseVwGauss2',PG.vina.w.g2);set('poseVwRep',PG.vina.w.rep);set('poseVwHyd',PG.vina.w.hyd);set('poseVwHB',PG.vina.w.hb);set('poseVwRot',PG.vina.w.rot);},
       _readW(){const get=(id,d)=>{var e=$(id);var v=e?parseFloat(e.value):NaN;return isFinite(v)?v:d;};
         PG.vina.w={g1:get('poseVwGauss1',-0.035579),g2:get('poseVwGauss2',-0.005156),rep:get('poseVwRep',0.840245),hyd:get('poseVwHyd',-0.035069),hb:get('poseVwHB',-0.587439),rot:Math.max(0,get('poseVwRot',0.05846))};},
-      setWeights(){PG.vina._readW();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},          // edited weight → recompute breakdown + re-derive the search
-      resetWeights(){PG.vina.w={g1:-0.035579,g2:-0.005156,rep:0.840245,hyd:-0.035069,hb:-0.587439,rot:0.05846};PG.vina._reflectW();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},
+      setWeights(){PG.vina._readW();PG.vina.eng.invalidate();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},          // edited weight → recompute breakdown + re-derive the search
+      resetWeights(){PG.vina.w={g1:-0.035579,g2:-0.005156,rep:0.840245,hyd:-0.035069,hb:-0.587439,rot:0.05846};PG.vina._reflectW();PG.vina.eng.invalidate();PG.vina.evaluate();if(PG._stage==='mc'&&PG.mc.searchScore==='vina')PG.mc.reset();},
       _ligWorld(){const a=PG.init.cur;if(!a)return [];const base=PE.computePose(L,a.quat,[0,0,0],a.tors);const lc=PG._ligCenter(a.off);return base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]);},
       _draw(){const a=PG.init.cur;if(a)PG._drawPose({off:a.off,quat:a.quat,tors:a.tors},{interactions:true});},
       // pure Vina score for a set of ligand world coords (no UI) — used by the
       // Vina tab's evaluate() and, when selected, as the Monte-Carlo search objective.
+      // Five-term Vina score for a set of ligand world coords.
+      //
+      // `typing:'vina_1_2_7'` (the new default) routes through vina_engine.js,
+      // which does REAL XS typing: donor/acceptor resolved from residue+atom
+      // chemistry on the receptor and from the bond graph + implicit-H valence
+      // on the ligand, C_P from the bond graph, metals as Met_D (r=1.2, donor).
+      // The legacy element-only paths are kept so the difference stays visible:
+      // they treat every N and O as simultaneously donor AND acceptor, which
+      // pays out full H-bond reward on acceptor-acceptor pairs Vina scores as
+      // zero -- worth about +2.5 kcal/mol of spurious binding on a polar ligand.
       _scoreWorld(lig){const W=PG.vina.w,V=PG.vina;const site=PG.init.site();const pa=site?site.atoms:[];
+        if(V.opts.typing==='vina_1_2_7'&&V.eng.ready()){
+          const r=V.eng.scoreWorld(lig);
+          if(r)return r;                                 // falls through if the engine cannot build
+        }
         const strict=(PG.vina.opts.typing==='vina'||PG.vina.opts.typing==='vina_exact');
         const lPol=strict?V._ligPolar():null;const pPol=(strict&&site)?V._sitePolar(site):null;
         let sg1=0,sg2=0,srp=0,shy=0,shb=0,np=0;const CUT2=8.0*8.0;
@@ -1066,7 +1447,8 @@
         T('poseVinaG1',sgn(r.cg1));T('poseVinaG2',sgn(r.cg2));T('poseVinaRep',sgn(r.crp));T('poseVinaHyd',sgn(r.chy));T('poseVinaHB',sgn(r.chb));
         T('poseVinaInter',inter.toFixed(3));T('poseVinaPairs',np+' · '+nrot);
         if(r.hasSite){T('poseVinaDg',dg.toFixed(3),dg<0?'#34d399':'#fb7185');T('poseVinaPk',dg<0?(-dg/1.36).toFixed(2):'—','#e2e8f0');}
-        else{T('poseVinaDg','— no target','#64748b');T('poseVinaPk','—','#64748b');}},
+        else{T('poseVinaDg','— no target','#64748b');T('poseVinaPk','—','#64748b');}
+        PG.vina._reflectEngine();},
       // "⚛ Compute & log breakdown" -> POST the posed ligand + receptor + current
       // weights to /pose/vina_breakdown. The server recomputes the five-term score
       // over the full receptor (authoritative), writes the per-atom-pair log into
@@ -1119,7 +1501,7 @@
       },
     },
 
-    init:{ex:8,cur:null,_states:[],_uploads:[],_uploadsLoaded:false,_selRec:null,_selLig:null,_pins:{},_clickTimer:null,
+    init:{ex:8,cur:null,_states:[],_uploads:[],_uploadsLoaded:false,_selRec:null,_selLig:null,_pins:{},_clickTimer:null,_dlBusy:false,
       enter(){if(!PG._ready.random)PG.init.regen();else PG.init.restore();PG.init._renderUploads();},
       restore(){if(!L)return;PG.init.draw(PG.init.cur||PG.init.rand());},
       rand(){return {seed:Math.floor(Math.random()*4294967295),off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],quat:PE.randomQuat(),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
@@ -1135,16 +1517,29 @@
         PG.init.card();PG._updateTraj();},
       draw2D(st){PG._show('2d');const bp=boxParams(L);const pos=st.off.map(v=>v*bp.tmax);
         PG._draw2D(PE.computePose(L,st.quat,pos,st.tors));},
+      // Receptor selection for SCORING (§19 / G70). Vina scores every receptor atom
+      // within the grid box plus the 8 A pair cutoff and drops nothing, so this now
+      // does the same: box half-width + 8 A, HETATM kept (waters, metals and
+      // cofactors are load-bearing on targets like TEAD3), and no atom cap.
+      // The old version used an arbitrary max(8, size/2+1) A residue shell, skipped
+      // every HETATM residue, and silently sliced to 1400 atoms -- a RENDERING cap
+      // that was quietly changing a score. `drawAtoms` keeps that cap for the 3D
+      // view, which is the only thing that ever needed it.
       site(){ if(!protein)return null;
         if(protein._site&&protein._siteCenter&&dist(protein._siteCenter,box.center)<0.05)return protein._site;
-        const R=Math.max(8,box.size*0.5+1);const bc=box.center;
-        const byRes={};protein.atoms.forEach(a=>{const k=a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]=[])).push(a);});
+        const bc=box.center;
+        const half=(Array.isArray(box.size)?Math.max.apply(null,box.size):box.size)*0.5;
+        const R=half+8.0;                              // grid box + Vina's pair cutoff
+        const byRes={};protein.atoms.forEach(a=>{const k=(a.het?'H':'')+a.chain+'|'+a.resseq;(byRes[k]||(byRes[k]=[])).push(a);});
         const dc=a=>Math.hypot(a.x-bc[0],a.y-bc[1],a.z-bc[2]);
-        let sel=[];Object.keys(byRes).forEach(k=>{const g=byRes[k];if(g[0].het)return; if(g.some(a=>dc(a)<R))sel=sel.concat(g);});
-        if(sel.length>1400){sel.sort((a,b)=>dc(a)-dc(b));sel=sel.slice(0,1400);}
-        const bonds=inferBonds(sel);const traces=stickTraces(sel,bonds,false,5,2);const aromatics=protAromatics(sel);
-        const nres=Object.keys(byRes).filter(k=>!byRes[k][0].het&&byRes[k].some(a=>dc(a)<R)).length;
-        protein._site={atoms:sel,bonds,traces,aromatics,nres};protein._siteCenter=box.center.slice();return protein._site;},
+        let sel=[];Object.keys(byRes).forEach(k=>{const g=byRes[k];if(g.some(a=>dc(a)<R))sel=sel.concat(g);});
+        let draw=sel;
+        if(draw.length>1400){draw=sel.slice().sort((a,b)=>dc(a)-dc(b)).slice(0,1400);}
+        const bonds=inferBonds(draw);const traces=stickTraces(draw,bonds,false,5,2);const aromatics=protAromatics(draw);
+        const nres=Object.keys(byRes).filter(k=>byRes[k].some(a=>dc(a)<R)).length;
+        const nhet=sel.filter(a=>a.het).length;
+        protein._site={atoms:sel,drawAtoms:draw,bonds,traces,aromatics,nres,nhet};
+        protein._siteCenter=box.center.slice();return protein._site;},
       render3D(st){PG._show('3d');
         const base=PE.computePose(L,st.quat,[0,0,0],st.tors);const lc=PG.init.ligCenter(st);
         const coords=base.map(p=>[p[0]+lc[0],p[1]+lc[1],p[2]+lc[2]]);
@@ -1182,8 +1577,168 @@
         if(gr)gr.innerHTML=(recs&&recs.length)?recs.map(function(f){return PG.init._uploadCard(f);}).join(''):PG.init._uploadMsg('No receptors — drag a ligand card here, or use ⤓ Upload .pdb');
         if(gl)gl.innerHTML=(ligs&&ligs.length)?ligs.map(function(f){return PG.init._uploadCard(f);}).join(''):PG.init._uploadMsg('No ligands — drag a receptor card here');
         PG.init._counts(recs?recs.length:0,ligs?ligs.length:0);try{PG.init._refreshMarks();}catch(e){}},
-      _counts(nr,nl){var a=$('poseRecCount');if(a)a.textContent=nr+(nr===1?' file':' files');var b=$('poseLigCount');if(b)b.textContent=nl+(nl===1?' file':' files');},
+      _counts(nr,nl){var a=$('poseRecCount');if(a)a.textContent=nr+(nr===1?' file':' files');var b=$('poseLigCount');if(b)b.textContent=nl+(nl===1?' file':' files');PG.init._dlSync();},
       _uploadMsg(txt){return '<div style="grid-column:1/-1;font-size:11px;color:#64748b;background:#0b1120;border:1px dashed #1e293b;border-radius:11px;padding:12px;text-align:center;line-height:1.5;">'+txt+'</div>';},
+      /* ---- ⤓ Download all uploads ---------------------------------------------------
+         Saves every archived file back to the user's machine in the format it was
+         uploaded in: original basename, original extension, the file's own text
+         straight from /pose/uploaded_pdb. No archive container — the browser writes N
+         separate .pdb files.
+         Two things here are browser behaviour, not ours, and both are load-bearing:
+         (1) programmatic downloads fired in a tight loop are silently DROPPED — Chrome
+             keeps roughly the first and discards the rest — so the saves run strictly
+             sequentially with a gap between them; and
+         (2) the first save trips the "Download multiple files?" permission prompt. If
+             the user dismisses it, everything after file 1 is blocked with no error to
+             catch. The button's tooltip and the opening log line both say so, because
+             the failure is otherwise indistinguishable from a broken button.
+         A per-file fetch failure is collected and reported at the end rather than
+         aborting the run — one unreadable file should not cost you the other forty. */
+      _dlGap:220,                                                    // ms between saves — see (1)
+      _saveText(txt,fn){
+        var blob=new Blob([txt],{type:'chemical/x-pdb'});
+        var url=URL.createObjectURL(blob);
+        var a=document.createElement('a');a.href=url;a.download=fn;
+        document.body.appendChild(a);a.click();a.remove();
+        setTimeout(function(){URL.revokeObjectURL(url);},4000);},     // NOT 0 — a same-tick revoke
+                                                                      // can cancel the write itself
+      /* What ⤓ saves depends on the gallery's selection, because that is what the user
+         has just pointed at: with a receptor and/or ligand card selected (the cyan dot)
+         it saves exactly those, and with nothing selected it saves the lot. There is one
+         selection per grid, so the selected set is 0, 1 or 2 files. Clicking the selected
+         card again clears it and the button goes back to "all" — the label and tooltip
+         both track it, so the button always states what it is about to do. */
+      _dlSel(){
+        var out=[],seen={},all=PG.init._uploads||[];
+        [PG.init._selRec,PG.init._selLig].forEach(function(nm){
+          if(!nm||seen[nm])return;seen[nm]=1;
+          var hit=null,i;for(i=0;i<all.length;i++){if(all[i].name===nm){hit=all[i];break;}}
+          out.push(hit||{name:nm});});                                 // stale selection → still try it
+        return out;},
+      _dlLabel(){
+        var s=PG.init._dlSel();
+        if(s.length)return '⤓ Download selected'+(s.length>1?(' ('+s.length+')'):'');
+        var n=(PG.init._uploads||[]).length;
+        return '⤓ Download all'+(n?(' ('+n+')'):'');},
+      _dlTitle(){
+        var s=PG.init._dlSel();
+        if(!s.length)return 'Save every archived upload back to this machine — one file each, same name and format as uploaded. Select a card first to download only that one. Your browser asks once to allow multiple downloads; allow it, or only the first file arrives.';
+        return 'Save '+(s.length>1?'both selected files':'the selected file')+' — '
+             +s.map(function(f){return f.name;}).join(', ')
+             +' — same name and format as uploaded. Click the selected card again to clear it and download everything.';},
+      _dlSync(){var b=$('poseUplDlBtn');if(b&&!PG.init._dlBusy){b.textContent=PG.init._dlLabel();b.title=PG.init._dlTitle();}
+        PG.init._delSync();},                                          // the bin tracks the same selection
+
+      /* ---- Delete selected ----------------------------------------------------------
+         Deliberately narrower than the download button: delete ONLY ever touches the
+         selection, and the button is disabled when nothing is selected. There is no
+         "delete all" — a one-click, no-undo wipe of someone's prepared receptors is not
+         a feature.
+         Two-step arm rather than a confirm() modal: the first click turns the button red
+         and names what it is about to remove, the second does it, and it disarms itself
+         after 4 s or if the selection changes underneath it (an armed button pointing at
+         a file you have since deselected is exactly how you delete the wrong thing).
+         Server-side this is a move into <upload dir>/_trash/, not an unlink, so a
+         mis-click is still recoverable on the box. */
+      _delArm:null,_delTimer:null,_delBusy:false,
+      _delKey(){return PG.init._dlSel().map(function(f){return f.name;}).join(' ');},
+      _delDisarm(){
+        if(PG.init._delTimer){clearTimeout(PG.init._delTimer);PG.init._delTimer=null;}
+        if(PG.init._delArm===null)return;
+        PG.init._delArm=null;PG.init._delSync();},
+      _delSync(){
+        var b=$('poseUplDelBtn');if(!b||PG.init._delBusy)return;
+        var s=PG.init._dlSel(),armed=(PG.init._delArm!==null&&PG.init._delArm===PG.init._delKey());
+        if(PG.init._delArm!==null&&!armed){PG.init._delArm=null;                  // selection moved -> stale arm
+          if(PG.init._delTimer){clearTimeout(PG.init._delTimer);PG.init._delTimer=null;}}
+        b.disabled=!s.length;
+        b.style.opacity=s.length?'1':'.45';
+        b.style.cursor=s.length?'pointer':'not-allowed';
+        if(armed){
+          var nm=s[0].name.replace(/\.(pdb|ent)$/i,'');
+          if(nm.length>17)nm=nm.slice(0,16)+'…';                                  // keep the armed button on one row
+          b.textContent=(s.length>1?('\u{1F5D1} Delete '+s.length+' files?'):('\u{1F5D1} Delete '+nm+'?'));
+          b.style.borderColor='#9f1239';b.style.background='rgba(244,63,94,.14)';b.style.color='#fda4af';
+          b.title='Click again to move '+s.map(function(f){return f.name;}).join(', ')+' to the server’s _trash/ folder. Disarms itself in a moment.';
+        }else{
+          b.textContent='\u{1F5D1} Delete'+(s.length>1?(' ('+s.length+')'):'');
+          b.style.borderColor='#1e293b';b.style.background='#0b1120';b.style.color='#94a3b8';
+          b.title=s.length
+            ? ('Remove '+s.map(function(f){return f.name;}).join(', ')+' — moved to the server’s _trash/ folder, not erased. Asks for a second click first.')
+            : 'Select a receptor or ligand card first — delete only ever removes the selection, never the whole gallery.';}},
+      deleteSelected(){
+        if(PG.init._delBusy)return;
+        var sel=PG.init._dlSel();
+        if(!sel.length){PG._miniLog('select a card first — delete only removes the selection','#fbbf24');return;}
+        var key=PG.init._delKey();
+        if(PG.init._delArm!==key){                                                 // first click -> arm
+          PG.init._delArm=key;PG.init._delSync();
+          if(PG.init._delTimer)clearTimeout(PG.init._delTimer);
+          PG.init._delTimer=setTimeout(function(){PG.init._delTimer=null;PG.init._delArm=null;PG.init._delSync();},4000);
+          return;}
+        if(PG.init._delTimer){clearTimeout(PG.init._delTimer);PG.init._delTimer=null;}
+        PG.init._delArm=null;PG.init._delBusy=true;
+        var b=$('poseUplDelBtn');if(b){b.disabled=true;b.textContent='\u{1F5D1} …';b.style.opacity='.6';b.style.cursor='progress';}
+        var names=sel.map(function(f){return f.name;});
+        var finish=function(){PG.init._delBusy=false;PG.init._delSync();};
+        fetch('/pose/delete_upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({names:names})})
+          .then(function(r){return r.json();})
+          .then(function(res){
+            var gone=(res&&res.deleted)||[];
+            gone.forEach(function(n){                                              // drop the selection + any pin
+              if(PG.init._selRec===n)PG.init._selRec=null;
+              if(PG.init._selLig===n)PG.init._selLig=null;
+              if(PG.init._pins)delete PG.init._pins[n];
+              if(PG._pinLigs)delete PG._pinLigs[n];});
+            if(gone.length)PG._miniLog('\u{1F5D1} '+gone.join(', ')+' → _trash/ ('+gone.length+' removed)','#fb7185');
+            var bad=(res&&res.failed)||[];
+            if(bad.length)PG._miniLog('could not remove '+bad.map(function(f){return f.name+' ('+f.err+')';}).join(', '),'#fbbf24',true);
+            if(!gone.length&&!bad.length)PG._miniLog('delete failed ('+((res&&res.err)||'?')+')','#fb7185');
+            finish();
+            if(gone.length)PG.init._renderUploads(true);                           // refetch: the DB row is gone too
+          })
+          .catch(function(e){PG._miniLog('delete failed ('+e.message+') — is /pose/delete_upload deployed?','#fb7185');finish();});},
+      _dlBtn(label,busy){
+        var b=$('poseUplDlBtn');if(!b)return;
+        b.disabled=!!busy;b.style.opacity=busy?'.6':'1';b.style.cursor=busy?'progress':'pointer';
+        if(label!=null)b.textContent=label;},
+      downloadAll(){
+        if(PG.init._dlBusy)return;                                    // double-click guard
+        PG.init._dlBusy=true;PG.init._dlBtn('⤓ …',true);
+        var done=function(){PG.init._dlBusy=false;PG.init._dlBtn(null,false);PG.init._dlSync();};
+        var go=function(files){
+          if(!files.length){PG._miniLog('nothing to download — no archived uploads','#fbbf24');done();return;}
+          PG._miniLog('⤓ downloading '+files.length+' file'+(files.length===1?'':'s')
+            +(files.length>1?' — allow “download multiple files” if your browser asks':' · '+files[0].name),'#a78bfa');
+          var i=0,okN=0,bad=[];
+          (function next(){
+            if(i>=files.length){
+              done();
+              if(!bad.length)PG._miniLog('✓ '+okN+' file'+(okN===1?'':'s')+' downloaded','#34d399');
+              else PG._miniLog('⤓ '+okN+' downloaded · '+bad.length+' failed: '+bad.slice(0,3).join(', ')+(bad.length>3?' …':''),'#fbbf24',true);
+              return;}
+            var f=files[i++];
+            PG.init._dlBtn('⤓ '+i+'/'+files.length+'…',true);
+            fetch('/pose/uploaded_pdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name})})
+              .then(function(r){return r.json();})
+              .then(function(res){
+                if(res&&res.ok&&res.pdb!=null){PG.init._saveText(res.pdb,res.name||f.name);okN++;}
+                else bad.push(f.name+' ('+((res&&res.err)||'?')+')');})
+              .catch(function(e){bad.push(f.name+' ('+e.message+')');})
+              .then(function(){setTimeout(next,PG.init._dlGap);});})();};
+        var sel=PG.init._dlSel();
+        if(sel.length){go(sel);return;}                                 // a selection beats "all"
+        var have=PG.init._uploads||[];
+        if(have.length){go(have.slice());return;}
+        /* Panel opened straight onto Download and the gallery has not painted yet —
+           pull the list rather than downloading nothing. */
+        fetch('/pose/uploaded_pdbs').then(function(r){return r.json();}).then(function(res){
+          if(!res||!res.ok){PG._miniLog('could not read uploads'+((res&&res.err)?(' — '+res.err):''),'#fb7185');done();return;}
+          var recs=res.receptors||[],ligs=res.ligands||[];
+          recs.forEach(function(f){f.kind='receptor';});ligs.forEach(function(f){f.kind='ligand';});
+          PG.init._uploads=recs.concat(ligs);
+          go(PG.init._uploads.slice());
+        }).catch(function(){PG._miniLog('upload list unavailable (is /pose/uploaded_pdbs deployed?)','#fb7185');done();});},
       _dragStart(name,ev){PG.init._dragName=name;try{ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',name);}catch(e){}},
       _drop(kind,beforeName,ev){
         if(ev&&ev.preventDefault)ev.preventDefault();
@@ -1335,7 +1890,8 @@
           var nm=card.getAttribute('data-upl'),kd=card.getAttribute('data-kind');
           var s=card.querySelector('.pose-sel-dot'),p=card.querySelector('.pose-pin-dot');
           if(s)s.style.display=(sel[kd]===nm)?'block':'none';
-          if(p)p.style.display=pins[nm]?'block':'none';});},
+          if(p)p.style.display=pins[nm]?'block':'none';});
+        PG.init._dlSync();},                                           // the ⤓ button follows the selection
       pickUpload(name){
         PG._miniLog('loading receptor '+name+' from server…','#67e8f9');
         fetch('/pose/uploaded_pdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
@@ -2096,7 +2652,7 @@
   };
 
   /* ---- view-layer state + toggles (buttons live in the #poseBox3DHint bar) ---- */
-  PG._showSurface=false;PG._showSS=false;PG._hideProtein=false;PG._viewMenuOpen=false;PG._cam=null;PG._styling=false;PG._surfOpacity=0.45;PG._surfIdx=-1;
+  PG._showSurface=false;PG._showSS=false;PG._hideProtein=false;PG._hideH=false;PG._viewMenuOpen=false;PG._cam=null;PG._styling=false;PG._surfOpacity=0.45;PG._surfIdx=-1;
   /* ---- camera helpers: keep the user's rotation across every redraw ----
      Plotly mutates its internal camera object, so we only ever keep deep COPIES. _camGet reads the
      freshest camera (the live gl scene if it's there, else the layout), _camBind tracks it on every
@@ -2180,6 +2736,19 @@
   PG.toggleSurface=function(){PG._showSurface=!PG._showSurface;PG._syncViewBtns();PG._redraw3D();};
   PG.toggleSS=function(){PG._showSS=!PG._showSS;PG._syncViewBtns();PG._ssReadout();PG._redraw3D();};
   PG.toggleProtein=function(){PG._hideProtein=!PG._hideProtein;PG._syncViewBtns();PG._redraw3D();};   // show / hide the pocket atom sticks
+  PG.toggleHydrogens=function(){PG._hideH=!PG._hideH;PG._syncViewBtns();PG._redraw3D();};             // show / hide H atoms (ligand, pinned ligands, pocket)
+  /* Pocket sticks are precomputed once per site (site.traces). Build the H-free
+     variant lazily and cache it on the same object, so toggling is a pointer
+     swap rather than a re-stick of up to 1400 atoms. The cache dies with the
+     site object, which PG.init.site() rebuilds whenever the box moves. */
+  PG._siteTraces=function(site){
+    if(!PG._hideH)return site.traces;
+    if(!site._tracesNoH){
+      const f=stripH(site.drawAtoms||site.atoms,site.bonds);
+      site._tracesNoH=stickTraces(f.atoms,f.bonds,false,5,2);
+    }
+    return site._tracesNoH;
+  };
   PG.toggleViewMenu=function(){PG._viewMenuOpen=!PG._viewMenuOpen;var m=$('poseViewMenu');if(m)m.style.display=PG._viewMenuOpen?'block':'none';
     var t=$('poseViewToggle');if(t){t.style.borderColor=PG._viewMenuOpen?'#0e7490':'#1e293b';t.style.color=PG._viewMenuOpen?'#67e8f9':'#94a3b8';}
     if(PG._viewMenuOpen)PG._syncViewBtns();};
@@ -2187,6 +2756,7 @@
     const ON={bd:'#0e7490',bg:'rgba(34,211,238,.16)',fg:'#67e8f9'},OFF={bd:'#1e293b',bg:'rgba(11,17,32,.7)',fg:'#94a3b8'};
     const set=(id,active)=>{const e=$(id);if(e){const a=active?ON:OFF;e.style.borderColor=a.bd;e.style.background=a.bg;e.style.color=a.fg;}};
     set('poseSurfBtn',PG._showSurface);set('poseSSBtn',PG._showSS);set('poseProtBtn',!PG._hideProtein);   // protein item is lit while atoms are shown
+    set('poseHBtn',!PG._hideH);                                                                          // H item is lit while hydrogens are shown
     PG._ensureSurfUI();
     const sn=$('poseSurfNote');if(sn)sn.style.display=PG._showSurface?'block':'none';
     const lg=$('poseSSLegend');if(lg)lg.style.display=PG._showSS?'block':'none';

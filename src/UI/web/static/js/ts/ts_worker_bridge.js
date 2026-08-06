@@ -15,6 +15,14 @@ function _tsQueueRender() {
 let _tsRenderCount = 0;
 function _tsHandleWorkerMsg(msg) {
     switch (msg.type) {
+        // Engine-measured per-iteration timing, from thompson_sampling's own
+        // perf_counters. Stored per job so switching the active reaction shows
+        // that reaction's real speed, not a blend of both.
+        case 'engine_timing': {
+            const idx = msg._jobIdx ?? 0;
+            (_ts._engineTiming ||= {})[idx] = msg.payload;
+            break;
+        }
         case 'reagent_update':
             if ((msg._jobIdx ?? 0) === (_ts._activeJobIdx ?? 0)) {
                 _ts.reagents[msg.id] = { mu: msg.mu, std: msg.std, count: msg.count, best: msg.best, bestPartner: msg.bestPartner };

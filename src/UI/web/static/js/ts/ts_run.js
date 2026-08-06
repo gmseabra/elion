@@ -350,6 +350,7 @@ function _tsFinalise(cancelled = false) {
                 _tsMiniLogStatus(`✓ Run complete — ${winners.length} molecule${winners.length===1?'':'s'}, ` +
                                  `best score ${best !== null ? best.toFixed(4) : '?'}.`, '#34d399');
             }
+            _tsRefreshWarmupBadges();
         }, 650);
     }
     requestAnimationFrame(_drainAndFinish);

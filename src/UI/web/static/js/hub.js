@@ -530,6 +530,13 @@ const _FEATURES = {
         scripts: [
             'ts/ts_core.js', 'ts/ts_chart.js', 'ts/ts_ui.js',
             'ts/ts_warmup.js', 'ts/ts_worker_bridge.js', 'ts/ts_run.js',
+            // ts_rl.js — the 🧪 RL diagnostics tab. MUST stay last: it reads
+            // _TS_PANE / _TS_TAB_ACTIVE / _ts, all of which are top-level
+            // `const` in ts_core.js. Top-level const does NOT become a window
+            // property, so ts_rl.js reaches them as bare identifiers — which
+            // only resolves if ts_core.js has already executed. _loadSerial is
+            // serial, so array order IS execution order. Do not reorder.
+            'ts/ts_rl.js',
         ],
         loaded: false,
         onload: () => {

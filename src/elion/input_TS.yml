@@ -18,10 +18,54 @@ generator:
     ts_mode: "maximize"
     eval_batch_size: 256
     log_level: INFO
+
+    # ── Building-block library root ─────────────────────────────────────────
+    # THE one place the reagent library path is written down. Both sides read
+    # this same key, so they cannot drift apart:
+    #   generators/TS.py       joins relative reagent_file_list entries onto it
+    #   uiapp/routes/ts_routes.py  (_resolve_bb_base) uses it as _BB_BASE
+    #
+    # Precedence, engine side:  $ELION_TS_BB_BASE > generator.TS.bb_base > ""
+    # Precedence, UI side:      $UI_TS_BB_BASE    > generator.TS.bb_base
+    #                                             > ELION_CWD-derived default
+    #
+    # Blank → relative entries resolve against the process CWD (the historical
+    # behaviour). Read at startup, so restart Flask after editing.
+    #
+    # NOTE this is NOT visualizer.bb_scan_dir further down. That one only
+    # pre-fills the "⛁ Import database" box and is normally a SUPERSET of this:
+    #   bb_base      → the directory a RUN actually draws reagents from
+    #   bb_scan_dir  → the directory the Import browser starts scanning in
+    bb_base: "/home/huangzihang/repos/user_data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified"
+
+    # Entries may be BARE FILENAMES (resolved against bb_base above) or absolute
+    # paths (used unchanged, ignoring bb_base). Prefer bare filenames: switching
+    # library then means editing one line, not one line per reaction component.
+    # A missing file now raises FileNotFoundError naming every path that failed,
+    # at generator construction — not silently, three layers later.
     reagent_file_list:
-      - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_1.csv"
-      - "/home/huangzihang/repos/elion/src/elion/generators/TS/data/Building_Blocks/BBandSMARTS-eXplore_1xx-5xx_unified/rxn110_2.csv"
-    results_filename: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test1.csv"
+      - "rxn110_1.csv"
+      - "rxn110_2.csv"
+
+    # ── Results root ────────────────────────────────────────────────────────
+    # Same contract as bb_base, for OUTPUT. Both sides read this one key:
+    #   generators/TS.py           joins a relative results_filename onto it
+    #   uiapp/routes/ts_routes.py  (_resolve_results_base) for the OUTPUT DIR box
+    #
+    # Precedence, engine side:  $ELION_TS_RESULTS_BASE > generator.TS.results_base
+    # Precedence, UI side:      $UI_TS_RESULTS_BASE    > generator.TS.results_base
+    #
+    # One deliberate difference from bb_base: a missing results directory is
+    # CREATED, not raised on. Inputs must exist; outputs get made. A run that
+    # searched for hours must not die on the last line for want of a mkdir.
+    #
+    # Moved out of elion/src: results are user data with their own lifetime, not
+    # part of the source checkout. Nothing under repos/elion/src is written to
+    # by a run any more.
+    results_base: "/home/huangzihang/repos/user_data/RL_active_learning_loop"
+
+    # Relative → joined onto results_base. Absolute → used unchanged.
+    results_filename: "results_TS/Elion_suzuki_TS_test1.csv"
 
 evaluator_class_name: "ElionEstimatorEvaluator"
 
@@ -58,7 +102,7 @@ reward_function:
     threshold: -7.0
     threshold_limit: -9.5
     threshold_step: -0.1
-    model_file: /home/huangzihang/repos/elion/src/visualizer/chembert/Finetuned_model_7.pt
+    model_file: /home/huangzihang/repos/user_data/chembert/Finetuned_model_7.pt
     # reward_hook: 0.3 means threshold tightens when >30% of batch scores below -7.0
     # increase (e.g. 0.5) to require more molecules before tightening
     # decrease (e.g. 0.2) to tighten more aggressively
@@ -110,16 +154,25 @@ visualizer:
   # Where a RUN writes its result CSVs. This is NOT `output_dir` above:
   #   output_dir          → the UI's own state (TS_Session / Warmup_TS / debug)
   #   default_output_dir  → what the OUTPUT DIR field is pre-filled with
-  # Leave it unset and the UI derives the value from the directory part of
-  # `generator.TS.results_filename`, which is already where this engine writes.
   # Typing over the field in the browser always wins for that run.
-  default_output_dir: "/home/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS"
+  #
+  # DELIBERATELY BLANK. Blank means the UI derives it from
+  # generator.TS.results_base + results_filename, so the results path is written
+  # down in exactly ONE place. Set it to a path here only if you want the box to
+  # point somewhere OTHER than where the engine writes.
+  #
+  # (It used to read "/home/huangzihang/repos/user_data/results_TS", which was a
+  # third, different directory: the box overrode results_filename entirely, so
+  # UI-launched runs and CLI runs wrote to different places and neither file
+  # said so.)
+  default_output_dir: ""
 
   # ── Default directory for the ⛁ Import database box ───────────────────────
   # Pre-fills the path the building-block scan reads. Leave it unset and the UI
-  # falls back to the engine's own reagent-library root (TS_BB_BASE, derived
-  # from ELION_CWD). Kept separate from that root because the directory you
-  # SCAN is usually a superset of the one a run actually draws reagents from.
+  # falls back to the engine's own reagent-library root — which is now
+  # generator.TS.bb_base (see above), not the ELION_CWD-derived guess it used
+  # before. Kept separate from that root because the directory you SCAN is
+  # usually a superset of the one a run actually draws reagents from.
   # Typing over the box in the browser always wins for that scan.
   bb_scan_dir: "/home/huangzihang/repos/user_data/Building_Blocks"
 
@@ -133,13 +186,28 @@ visualizer:
 # ============================================================
 #  Elion TS Pipeline Configuration
 #  Used by: run_ts_pipeline.py
+#
+#  ⚠ TWO WARNINGS ABOUT EVERY SECTION BELOW THIS LINE.
+#
+#  1. input_reader.py reads ONLY `control`, `generator` and `reward_function`.
+#     These four sections never reach elion.py's config object at all — they are
+#     read exclusively by the standalone run_ts_pipeline.py. Editing them has no
+#     effect on `Run TS` in the browser.
+#
+#  2. The `/blue/lic/...` prefix is HiPerGator. This machine is `/home/...`.
+#     Every remaining /blue/lic path below is therefore dead here. The two that
+#     referenced RL_active_learning_loop are repointed at results_base; the
+#     `vina/...` ones are left as-is deliberately — I do not know where that
+#     tree lives on this box, and a wrong guess is worse than a visible stale
+#     path. Fix them when you next run the pipeline.
 # ============================================================
 
 # ── Step 1: SMILES → PDB ────────────────────────────────────
 smiles_to_pdb:
   enabled: true
-  script: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/get_pdbs_from_TS_smiles_ProcessPool.py"
-  input_csv: "/blue/lic/huangzihang/repos/elion/src/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test2.csv"
+  # repointed: was /blue/lic/.../elion/src/RL_active_learning_loop/...
+  script: "/home/huangzihang/repos/user_data/RL_active_learning_loop/get_pdbs_from_TS_smiles_ProcessPool.py"
+  input_csv: "/home/huangzihang/repos/user_data/RL_active_learning_loop/results_TS/Elion_suzuki_TS_test2.csv"
   output_dir: "/blue/lic/huangzihang/repos/elion/src/vina/docking_score/Elion_suzuki_config2/1/pdb"
   num_workers: null  # null = all available CPU cores
 

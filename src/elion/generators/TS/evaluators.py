@@ -1,12 +1,69 @@
+import importlib
 import os
 import warnings
 from abc import ABC, abstractmethod
+
+# Genuinely module-level: every evaluator needs these.
 import numpy as np
-from rdkit import Chem
+from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 
-import joblib
-import useful_rdkit_utils as uru
+# ── Per-class OPTIONAL dependencies ─────────────────────────────────────────
+# Every import below is used by exactly ONE evaluator class. Importing them at
+# module level made a package that your configured evaluator never calls fatal
+# to `import generators.TS` -> Generator.__init__ -> the whole elion.py run,
+# before a single line of TS code executed. And they failed ONE AT A TIME, so
+# each install exposed the next: useful_rdkit_utils, then sqlitedict, then...
+#
+# openeye already had this treatment (it is commercial, so it was obviously
+# optional). The others are optional for the same reason and just weren't
+# recognised as such.
+#
+# Missing packages are collected and reported in ONE warning at import, then
+# raised individually — with the pip line — only if you actually select the
+# class that needs one.
+_MISSING: "dict[str, str]" = {}
+
+
+def _optional(module: str, pypi: str, used_by: str):
+    """Import `module`, or record it as missing and return None."""
+    try:
+        return importlib.import_module(module)
+    except ImportError:                                   # pragma: no cover
+        _MISSING[module] = f"{pypi:<28} (needed by {used_by})"
+        return None
+
+
+# NOTE useful_rdkit_utils has a name mismatch: PyPI hyphenates, import underscores.
+uru        = _optional("useful_rdkit_utils", "useful-rdkit-utils>=0.2.7",
+                       "MWEvaluator, MLClassifierEvaluator")
+joblib     = _optional("joblib", "joblib", "MLClassifierEvaluator")
+pd         = _optional("pandas", "pandas>=2.0", "LookupEvaluator")
+_sqlitedic = _optional("sqlitedict", "sqlitedict", "DBEvaluator")
+SqliteDict = getattr(_sqlitedic, "SqliteDict", None)
+
+if _MISSING:
+    warnings.warn(
+        "TS evaluators: %d optional package(s) not installed in this "
+        "environment. The evaluators that need them are disabled; every other "
+        "evaluator — including ElionEstimatorEvaluator, which is what "
+        "input_TS.yml selects — is unaffected.\n%s\n"
+        "Install all of them at once with:\n    pip install %s"
+        % (len(_MISSING),
+           "\n".join("    " + v for v in _MISSING.values()),
+           " ".join(f'"{v.split("(")[0].strip()}"' for v in _MISSING.values()))
+    )
+
+
+def _require(obj, module: str, pypi: str, cls_name: str) -> None:
+    """Fail at USE time with an actionable message, not at import time."""
+    if obj is None:
+        raise ImportError(
+            f"{cls_name} requires the optional package {module!r}, which is not "
+            f"installed in this environment. Install it with:\n"
+            f'    pip install "{pypi}"'
+        )
+
 
 try:
     from openeye import oechem
@@ -17,9 +74,6 @@ except ImportError:
     # Since openeye is a commercial software package, just pass with a warning if not available
     warnings.warn(f"Openeye packages not available in this environment; do not attempt to use ROCSEvaluator or "
                   f"FredEvaluator")
-from rdkit import Chem, DataStructs
-import pandas as pd
-from sqlitedict import SqliteDict
 
 class Evaluator(ABC):
     @abstractmethod
@@ -44,6 +98,7 @@ class MWEvaluator(Evaluator):
         return self.num_evaluations
 
     def evaluate(self, mol):
+        _require(uru, 'useful_rdkit_utils', 'useful-rdkit-utils>=0.2.7', 'MWEvaluator')
         self.num_evaluations += 1
         return uru.MolWt(mol)
 
@@ -139,6 +194,7 @@ class LookupEvaluator(Evaluator):
         self.num_evaluations = 0
         ref_filename = input_dictionary['ref_filename']
         ref_colname = input_dictionary['ref_colname']
+        _require(pd, 'pandas', 'pandas>=2.0', 'LookupEvaluator')   # both branches below need it
         if ref_filename.endswith(".csv"):
             ref_df = pd.read_csv(ref_filename)
         elif ref_filename.endswith(".parquet"):
@@ -170,6 +226,7 @@ class DBEvaluator(Evaluator):
         self.num_evaluations = 0
         self.db_prefix = input_dictionary['db_prefix']
         db_filename = input_dictionary['db_filename']
+        _require(SqliteDict, 'sqlitedict', 'sqlitedict', 'DBEvaluator')
         self.ref_dict = SqliteDict(db_filename)
 
     def __repr__(self):
@@ -306,6 +363,7 @@ class MLClassifierEvaluator(Evaluator):
     """
 
     def __init__(self, input_dict):
+        _require(joblib, 'joblib', 'joblib', 'MLClassifierEvaluator')
         self.cls = joblib.load(input_dict["model_filename"])
         self.num_evaluations = 0
 
@@ -314,6 +372,7 @@ class MLClassifierEvaluator(Evaluator):
         return self.num_evaluations
 
     def evaluate(self, mol):
+        _require(uru, 'useful_rdkit_utils', 'useful-rdkit-utils>=0.2.7', 'MLClassifierEvaluator')
         self.num_evaluations += 1
         fp = uru.mol2morgan_fp(mol)
         return self.cls.predict_proba([fp])[:,1][0]
@@ -352,11 +411,84 @@ class ElionEstimatorEvaluator(Evaluator):
         """
         :param mol: RDKit ROMol
         :return: total reward as a float, or np.nan on failure
+
+        Single-molecule path. Kept for the Evaluator interface, but the TS
+        search should never take it — see evaluate_batch() below.
         """
         predictions = self.estimator.estimate_properties([mol])
         rewards = self.estimator.estimate_rewards(predictions)
         self.num_evaluations += 1
         return float(rewards["TOTAL"][0])
+
+    def evaluate_batch(self, mols) -> list:
+        """Score a whole batch in ONE estimator call. Order-preserving.
+
+        WHY THIS EXISTS
+        ---------------
+        `thompson_sampling.evaluate_batch()` already does:
+
+            if hasattr(self.evaluator, 'evaluate_batch'):
+                scores = self.evaluator.evaluate_batch(valid_mols)
+            else:
+                scores = [self.evaluator.evaluate(m) for m in valid_mols]
+
+        and its comment names *this class* as the intended fast path — but the
+        method was never written, so `hasattr` was always False and every run
+        took the per-molecule fallback. With `CHEMBERT_BE` at rew_coeff 0.95
+        that means `CHEMBERT_BE.predict()` builds a `SMILES_Dataset` and spins
+        up a **DataLoader per molecule**, then runs a one-row forward pass.
+        The symptom is the status line reading
+
+            properties.Estimators: _cls: <...QED_Score...> | n=1 predictions
+
+        once per molecule, and ~5 s/it at eval_batch_size 256.
+
+        `Estimators` was always batch-ready: `estimate_properties` takes a list
+        and stashes `__n_mols__` in the returned dict precisely so batch calls
+        of differing size cannot race on instance state. Only this method was
+        missing.
+
+        :param mols: sequence of RDKit ROMol
+        :return: list of total rewards, one per input, same order
+        """
+        _mols = list(mols)
+        if not _mols:
+            return []
+
+        try:
+            predictions = self.estimator.estimate_properties(_mols)
+            rewards     = self.estimator.estimate_rewards(predictions)
+            totals      = list(rewards["TOTAL"])
+            # Estimators.estimate_rewards already hard-fails on a short property
+            # list, but the TOTAL length is what the caller zips against
+            # valid_indices — a silent mismatch would misattribute scores to the
+            # wrong reagents, which is far worse than an exception.
+            if len(totals) != len(_mols):
+                raise ValueError(
+                    f"estimator returned {len(totals)} TOTAL scores for "
+                    f"{len(_mols)} molecules")
+            self.num_evaluations += len(_mols)
+            return [float(t) for t in totals]
+
+        except Exception as exc:
+            # Rescue the run rather than lose it — but say so LOUDLY and once.
+            # A silent fallback here reads exactly like the bug this method was
+            # written to fix: correct results, ~50x slower, no explanation.
+            if not getattr(self, "_batch_fallback_warned", False):
+                self._batch_fallback_warned = True
+                warnings.warn(
+                    f"ElionEstimatorEvaluator.evaluate_batch failed on a batch of "
+                    f"{len(_mols)} ({type(exc).__name__}: {exc}). Falling back to "
+                    f"per-molecule scoring for the REST OF THIS RUN — expect a "
+                    f"large slowdown. If this is a GPU OOM, lower "
+                    f"generator.TS.eval_batch_size in input_TS.yml.")
+            out = []
+            for m in _mols:
+                try:
+                    out.append(self.evaluate(m))
+                except Exception:
+                    out.append(float(np.nan))
+            return out
 
     def calculate_properties(config):
         """Given a SMILES file, calculate the properties of the molecules.	"""	

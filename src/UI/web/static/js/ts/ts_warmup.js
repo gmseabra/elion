@@ -44,6 +44,26 @@ function _tsTsStep() {
     if (bar && ev.iter !== undefined) bar.textContent = `Iteration ${ev.iter} · score ${(ev.score || 0).toFixed(4)}`;
 }
 
+// ── Warmup badge refresh ──────────────────────────────────────────────────
+// `warmup_cached` is computed server-side inside /ts_config, and ts_run.js
+// fetches that exactly once — when the modal opens. So a checkpoint written
+// DURING a run never lit its badge: the run that created
+// `suzuki_<ts>_warmup.json` still showed "no cache", and only a page reload
+// fixed it. Re-fetch after every completed run.
+//
+// _tsBuildReactionPicker already has an "picker exists -> just repaint the
+// badges and return" branch, so calling it again is cheap and non-destructive:
+// it does not rebuild the dropdown or disturb the user's checkbox selection.
+function _tsRefreshWarmupBadges() {
+    fetch('/vina_visualization/ts_config')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => {
+            if (!d || !d.reactions) return;
+            _tsBuildReactionPicker(d.reactions, d.smarts, d.warmup_cached || {});
+        })
+        .catch(() => {});     // a stale badge is not worth surfacing an error for
+}
+
 // ── Warmup clear ──────────────────────────────────────────────────────────
 function _tsWarmupClear(rxnKey) {
     fetch('/vina_visualization/ts_warmup_clear', {

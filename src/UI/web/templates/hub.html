@@ -78,6 +78,34 @@
 
         .side-panel { scrollbar-width: thin; scrollbar-color: #22d3ee #1e293b; }
 
+        /* ── pose sidebar scrollbar ───────────────────────────────────────────
+           The right-hand pose sidebar is `overflow-y-auto` but had no scrollbar
+           styling, so it fell back to the browser default — a light grey bar on
+           a #020617 panel. It was easy to miss while the sidebar barely
+           scrolled; the Vina panel (§19) roughly tripled its content height, so
+           it now scrolls on every stage and the default bar is impossible to
+           miss. Follows the convention already used elsewhere in this file
+           (`.side-panel`, and the inline `scrollbar-width:thin` panels): thin,
+           dark thumb, transparent track, lifting on hover.
+
+           Both syntaxes are needed. `scrollbar-color` is the standard property
+           (Firefox, and Chrome 121+); `::-webkit-scrollbar` covers Safari and
+           older Chrome/Edge. A browser that supports `scrollbar-color` ignores
+           the webkit pseudo-elements, so they cannot fight. */
+        .pose-scroll { scrollbar-width: thin; scrollbar-color: #1e293b transparent; }
+        .pose-scroll:hover { scrollbar-color: #334155 transparent; }
+        .pose-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+        .pose-scroll::-webkit-scrollbar-track { background: transparent; }
+        .pose-scroll::-webkit-scrollbar-corner { background: transparent; }
+        .pose-scroll::-webkit-scrollbar-thumb {
+            background: #1e293b; border-radius: 5px;
+            border: 2px solid transparent; background-clip: content-box;
+        }
+        .pose-scroll::-webkit-scrollbar-thumb:hover {
+            background: #334155; border: 2px solid transparent; background-clip: content-box;
+        }
+
+
         .compare-vs {
             writing-mode: vertical-rl; text-orientation: mixed;
             font-weight: 700; font-size: 11px; color: #475569; letter-spacing: .1em;
@@ -1629,6 +1657,7 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 
 <script src="{{ url_for('static', filename='js/pdb_converter.js') }}"></script>
 
+<script src="{{ url_for('static', filename='js/vina_engine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pose.js') }}"></script>
 
 <!-- ══ Pose Generation Modal ═══════════════════════════════════════════════════ -->
@@ -1698,7 +1727,7 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
               <div id="poseProcSub" style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;margin-top:2px;">—</div>
             </div>
             <button id="poseFsBtn" onclick="PoseGen.toggleFullscreen()" title="Fullscreen" style="position:absolute;top:8px;right:10px;z-index:6;pointer-events:auto;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-size:13px;line-height:1;cursor:pointer;">&#9974;</button>
-            <div id="poseBox3DHint" style="display:none;position:absolute;bottom:8px;left:10px;font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;pointer-events:none;"><div id="poseViewMenu" style="display:none;pointer-events:auto;margin-bottom:6px;min-width:174px;background:rgba(8,12,20,.94);border:1px solid #1e293b;border-radius:10px;padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.5);"><button id="poseSurfBtn" onclick="PoseGen.toggleSurface()" title="Solvent-excluded molecular surface: a 1.4 &#197; water probe rolled over the pocket atoms&#39; van der Waals spheres. Shows the SHAPE of the binding cavity, not the fold." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9677; Surface</button><button id="poseSSBtn" onclick="PoseGen.toggleSS()" title="Secondary structure via DSSP-style backbone H-bond assignment: &#945;-helix (i&#8594;i+4), &#946;-sheet (parallel / antiparallel bridges), loop. Red helix &#183; cyan sheet &#183; grey loop." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#12336; Secondary structure</button><button id="poseProtBtn" onclick="PoseGen.toggleProtein()" title="Show or hide the protein pocket atoms (sticks). The surface and secondary-structure overlays are independent of this." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #0e7490;background:rgba(34,211,238,.16);color:#67e8f9;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#11041; Protein atoms</button><div id="poseSSLegend" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;"><span style="color:#ef4444;">&#9644;</span> helix <b id="poseSSa" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#22d3ee;">&#9644;</span> sheet <b id="poseSSb" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#8ca0b3;">&#9644;</span> loop <b id="poseSSl" style="color:#e2e8f0;">0</b></div><div id="poseSurfNote" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;">SES &#183; 1.4 &#197; water probe</div></div><button id="poseViewToggle" onclick="PoseGen.toggleViewMenu()" title="View layers" style="pointer-events:auto;padding:4px 11px;border-radius:8px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9776; View</button></div>
+            <div id="poseBox3DHint" style="display:none;position:absolute;bottom:8px;left:10px;font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;pointer-events:none;"><div id="poseViewMenu" style="display:none;pointer-events:auto;margin-bottom:6px;min-width:174px;background:rgba(8,12,20,.94);border:1px solid #1e293b;border-radius:10px;padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.5);"><button id="poseSurfBtn" onclick="PoseGen.toggleSurface()" title="Solvent-excluded molecular surface: a 1.4 &#197; water probe rolled over the pocket atoms&#39; van der Waals spheres. Shows the SHAPE of the binding cavity, not the fold." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9677; Surface</button><button id="poseSSBtn" onclick="PoseGen.toggleSS()" title="Secondary structure via DSSP-style backbone H-bond assignment: &#945;-helix (i&#8594;i+4), &#946;-sheet (parallel / antiparallel bridges), loop. Red helix &#183; cyan sheet &#183; grey loop." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #1e293b;background:rgba(11,17,32,.7);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#12336; Secondary structure</button><button id="poseProtBtn" onclick="PoseGen.toggleProtein()" title="Show or hide the protein pocket atoms (sticks). The surface and secondary-structure overlays are independent of this." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #0e7490;background:rgba(34,211,238,.16);color:#67e8f9;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#11041; Protein atoms</button><button id="poseHBtn" onclick="PoseGen.toggleHydrogens()" title="Show or hide hydrogen atoms on the ligand, any pinned ligands, and the pocket sticks. Purely visual &#8212; scoring, the surface and interaction detection already ignore hydrogens." style="display:block;width:100%;box-sizing:border-box;text-align:left;pointer-events:auto;padding:5px 9px;margin-bottom:3px;border-radius:7px;border:1px solid #0e7490;background:rgba(34,211,238,.16);color:#67e8f9;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">H Hydrogens</button><div id="poseSSLegend" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;"><span style="color:#ef4444;">&#9644;</span> helix <b id="poseSSa" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#22d3ee;">&#9644;</span> sheet <b id="poseSSb" style="color:#e2e8f0;">0</b>&nbsp;&nbsp;<span style="color:#8ca0b3;">&#9644;</span> loop <b id="poseSSl" style="color:#e2e8f0;">0</b></div><div id="poseSurfNote" style="display:none;margin-top:4px;padding:4px 8px;font-size:9px;color:#94a3b8;background:rgba(11,17,32,.7);border:1px solid #1e293b;border-radius:7px;">SES &#183; 1.4 &#197; water probe</div></div><button id="poseViewToggle" onclick="PoseGen.toggleViewMenu()" title="View layers" style="pointer-events:auto;padding:4px 11px;border-radius:8px;border:1px solid #1e293b;background:rgba(11,17,32,.85);color:#94a3b8;font-family:ui-monospace,monospace;font-size:10px;font-weight:600;cursor:pointer;">&#9776; View</button></div>
           </div>
           <!-- Random controls -->
           <div id="poseCtrlRandom" class="px-5 py-2.5 border-t border-slate-800 flex-shrink-0 items-center gap-2.5 flex-wrap" style="display:flex;">
@@ -1742,7 +1771,7 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
           </div>
           <!-- Vina controls moved into the Monte-Carlo tab's Vina-search note -->
         </div>
-        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 overflow-y-auto" style="width:336px;">
+        <div class="flex-shrink-0 border-l border-slate-700 bg-slate-950 overflow-y-auto pose-scroll" style="width:336px;">
           <!-- Random sidebar -->
           <div id="poseSideRandom" class="px-4 py-4" style="display:flex;flex-direction:column;gap:14px;">
             <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Stochastic initialization</p>
@@ -1760,7 +1789,7 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
             <div id="poseRecGrid" ondragover="event.preventDefault();this.style.outline='1px dashed #22d3ee';this.style.background='rgba(34,211,238,.04)';" ondragleave="this.style.outline='';this.style.background='';" ondrop="this.style.outline='';this.style.background='';PoseGen.init._drop('receptor',null,event)" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;min-height:56px;border-radius:11px;transition:background .1s,outline .1s;"></div>
             <div style="display:flex;align-items:center;gap:7px;margin-top:8px;"><p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider" style="margin:0;">Uploaded ligands</p><span id="poseLigCount" class="text-[9px] px-2 py-0.5 rounded-full" style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.35);color:#a78bfa;">—</span></div>
             <div id="poseLigGrid" ondragover="event.preventDefault();this.style.outline='1px dashed #a78bfa';this.style.background='rgba(167,139,250,.04)';" ondragleave="this.style.outline='';this.style.background='';" ondrop="this.style.outline='';this.style.background='';PoseGen.init._drop('ligand',null,event)" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;min-height:56px;border-radius:11px;transition:background .1s,outline .1s;"></div>
-            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">Files uploaded via <b style="color:#a78bfa;">⤓ Upload .pdb</b> (archived to <b style="color:#94a3b8;">pose.default_upload_path</b>, tracked in a DB). <b style="color:#94a3b8;">Drag</b> a card between sections to reclassify it — the split is saved. Click a <b style="color:#22d3ee;">receptor</b> to load it (box recenters); click a <b style="color:#a78bfa;">ligand</b> to center the box on it.</p>
+            <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;"><span style="display:block;margin-bottom:8px;"><button id="poseUplDlBtn" onclick="PoseGen.init.downloadAll()" title="Save every archived upload back to this machine — one file each, same name and format as uploaded. Select a card first to download only that one. Your browser asks once to allow multiple downloads; allow it, or only the first file arrives." style="padding:5px 11px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',system-ui,sans-serif;">⤓ Download all</button></span>Files uploaded via <b style="color:#a78bfa;">⤓ Upload .pdb</b> (archived to <b style="color:#94a3b8;">pose.default_upload_path</b>, tracked in a DB). <b style="color:#94a3b8;">Drag</b> a card between sections to reclassify it — the split is saved. Click a <b style="color:#22d3ee;">receptor</b> to load it (box recenters); click a <b style="color:#a78bfa;">ligand</b> to center the box on it. <b style="color:#94a3b8;">⤓ Download</b> saves the <b style="color:#22d3ee;">selected</b> card(s) if any are selected, otherwise every archived file — one .pdb each, no archive, same names, same format.</p>
           </div>
           <!-- Minimization sidebar -->
           <div id="poseSideMin" class="px-4 py-4" style="display:none;flex-direction:column;gap:14px;">
@@ -1818,128 +1847,221 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
             </div>
             <div id="poseVinaSearchNote" style="display:none;flex-direction:column;gap:14px;">
               <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#f59e0b;margin:0;">Vina objective <span style="color:#64748b;">· drives the search</span></p>
-              <p style="font-size:11px;color:#94a3b8;font-family:ui-monospace,monospace;line-height:1.55;margin:0;">The search minimizes the full <b style="color:#fbbf24;">Vina ΔG</b> below — five distance-dependent terms over every ligand↔pocket heavy-atom pair, divided by the N<sub>rot</sub> penalty. Every weight is <b class="text-amber-400">editable</b> and re-derives the search; the breakdown tracks the current pose. Lower ΔG = better.</p>
+              <p style="font-size:11px;color:#94a3b8;font-family:ui-monospace,monospace;line-height:1.55;margin:0;">The search minimizes the full <b style="color:#fbbf24;">Vina ΔG</b> below — five distance-dependent terms over every ligand↔receptor heavy-atom pair within 8 Å, divided by the N<sub>rot</sub> penalty. Every weight is <b class="text-amber-400">editable</b> and re-derives the search; the breakdown tracks the current pose. Lower ΔG = better.</p>
+
+              <!-- ── engine badge ─────────────────────────────────────────────────────── -->
+              <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:9px 11px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:9.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#34d399;">engine</span>
+                <span id="poseVinaEngineBadge" style="font-family:ui-monospace,monospace;font-size:10.5px;color:#cbd5e1;">vina_engine.js · AutoDock Vina 1.2.7 semantics</span>
+                <span id="poseVinaEngineState" style="margin-left:auto;font-family:ui-monospace,monospace;font-size:10px;color:#64748b;">checking…</span>
+              </div>
+
+              <!-- ── weights ──────────────────────────────────────────────────────────── -->
               <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
                 <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 10px;">Vina weights <span style="color:#f59e0b;">· editable</span></p>
                 <div style="font-family:ui-monospace,monospace;font-size:11.5px;color:#cbd5e1;display:flex;flex-direction:column;gap:7px;">
                   <div style="color:#64748b;">c = Σ<sub>pairs</sub> [</div>
                   <div style="display:flex;align-items:center;gap:6px;padding-left:12px;">
-                    <input id="poseVwGauss1" type="number" step="0.001" value="-0.035579" onchange="PoseGen.vina.setWeights()" title="gauss₁ weight (default −0.035579)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwGauss1" type="number" step="0.001" value="-0.035579" onchange="PoseGen.vina.setWeights()" title="gauss₁ weight — vina.h:123 (default −0.035579)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>· e<sup>−(s/0.5)²</sup></span><span style="color:#475569;margin-left:auto;">gauss₁</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:6px;padding-left:12px;">
-                    <input id="poseVwGauss2" type="number" step="0.001" value="-0.005156" onchange="PoseGen.vina.setWeights()" title="gauss₂ weight (default −0.005156)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwGauss2" type="number" step="0.001" value="-0.005156" onchange="PoseGen.vina.setWeights()" title="gauss₂ weight — vina.h:123 (default −0.005156)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>· e<sup>−((s−3)/2)²</sup></span><span style="color:#475569;margin-left:auto;">gauss₂</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:6px;padding-left:12px;">
-                    <input id="poseVwRep" type="number" step="0.01" value="0.840245" onchange="PoseGen.vina.setWeights()" title="repulsion weight (default 0.840245)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwRep" type="number" step="0.01" value="0.840245" onchange="PoseGen.vina.setWeights()" title="repulsion weight — vina.h:124 (default 0.840245)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>· s²·[s&lt;0]</span><span style="color:#475569;margin-left:auto;">repulsion</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:6px;padding-left:12px;">
-                    <input id="poseVwHyd" type="number" step="0.001" value="-0.035069" onchange="PoseGen.vina.setWeights()" title="hydrophobic weight (default −0.035069)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwHyd" type="number" step="0.001" value="-0.035069" onchange="PoseGen.vina.setWeights()" title="hydrophobic weight — vina.h:124 (default −0.035069). Applies only to C_H/F/Cl/Br/I pairs." style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>· hydrophobic(s)</span><span style="color:#475569;margin-left:auto;">hphob</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:6px;padding-left:12px;">
-                    <input id="poseVwHB" type="number" step="0.001" value="-0.587439" onchange="PoseGen.vina.setWeights()" title="H-bond weight (default −0.587439)" style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwHB" type="number" step="0.001" value="-0.587439" onchange="PoseGen.vina.setWeights()" title="H-bond weight — vina.h:125 (default −0.587439). Applies only to donor↔acceptor pairs (xs_h_bond_possible)." style="width:80px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>· Hbond(s)</span><span style="color:#475569;margin-left:auto;">H-bond</span>
                   </div>
                   <div style="color:#64748b;">]</div>
                   <div style="border-top:1px solid #1e293b;margin-top:2px;padding-top:9px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     <span style="color:#64748b;">ΔG = c ∕ (1 +</span>
-                    <input id="poseVwRot" type="number" step="0.001" min="0" value="0.05846" onchange="PoseGen.vina.setWeights()" title="Nrot penalty weight — conf_independent (default 0.05846)" style="width:72px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVwRot" type="number" step="0.001" min="0" value="0.05846" onchange="PoseGen.vina.setWeights()" title="Nrot penalty weight — conf_independent num_tors_div (default 0.05846). Vina stores this as the raw 1.923 and unpacks it as 0.1*(1.923+1)/5 = 0.05846." style="width:72px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>·</span>
-                    <input id="poseVinaNrotVal" type="number" step="0.5" min="0" onchange="PoseGen.vina.setNrot()" title="active rotatable bonds (Nrot). Auto-filled by the dropdown below; type a value to override — fractional allowed. Vina's conf_independent.cpp sums 0.5 x atom_rotors per heavy atom, so its effective count is often a half-integer (e.g. 7.5) and need not equal the .pdbqt TORSDOF." style="width:48px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
+                    <input id="poseVinaNrotVal" type="number" step="0.5" min="0" onchange="PoseGen.vina.setNrot()" title="active rotatable bonds (Nrot). Auto-filled from the engine; type a value to override — fractional allowed. conf_independent.cpp sums 0.5 x atom_rotors per heavy atom and skips bonds to terminal groups, so the true count is often a half-integer (7.5 for Elion_iag933) and need not equal the .pdbqt TORSDOF." style="width:48px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:1px 5px;color:#f59e0b;outline:none;text-align:center;">
                     <span>N<sub>rot</sub>)</span>
                   </div>
                 </div>
-                <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:10px 0 0;">s = r − Rᵢ − Rⱼ (surface gap) · hydrophobic &amp; H-bond are linear ramps over hydrophobic–hydrophobic and donor–acceptor pairs · N<sub>rot</sub> = active rotatable bonds. Edit any weight to retune the search. Lower ΔG = stronger binding.</p>
+                <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:10px 0 0;">s = r − R<sub>i</sub> − R<sub>j</sub> (surface gap, XS radii) · hydrophobic ramps 1→0 over s = 0.5…1.5 Å on hydrophobic–hydrophobic pairs · H-bond ramps 1→0 over s = −0.7…0 Å on donor–acceptor pairs · 8 Å cutoff. Edit any weight to retune the search. Lower ΔG = stronger binding.</p>
+
+                <!-- ── Advance Config ──────────────────────────────────────────────────── -->
                 <div style="border-top:1px solid #1e293b;margin-top:11px;padding-top:11px;">
-                  <button id="poseAdvToggle" onclick="PoseGen.vina.toggleAdv()" title="local search (Monte-Carlo + BFGS), intramolecular energy, and Vina calibration" style="width:100%;display:flex;align-items:center;justify-content:space-between;background:#0b1120;border:1px solid #28344a;border-radius:9px;padding:8px 11px;color:#a78bfa;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.03em;">
-                    <span>⚙ Advance Config <span style="color:#5b4b8a;font-weight:400;">· local search · intramolecular · calibration</span></span>
+                  <button id="poseAdvToggle" onclick="PoseGen.vina.toggleAdv()" title="global search, local optimization, intramolecular energy, and calibration" style="width:100%;display:flex;align-items:center;justify-content:space-between;background:#0b1120;border:1px solid #28344a;border-radius:9px;padding:8px 11px;color:#a78bfa;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.03em;">
+                    <span>⚙ Advance Config <span style="color:#5b4b8a;font-weight:400;">· global search · local search · intramolecular · calibration</span></span>
                     <span id="poseAdvChevron" style="color:#64748b;">▸</span>
                   </button>
                   <div id="poseAdvConfig" style="display:none;flex-direction:column;gap:11px;margin-top:11px;">
 
+                    <!-- global search (NEW) -->
+                    <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
+                      <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Global search <span style="color:#22d3ee;">· parallel Monte-Carlo tasks</span></p>
+                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">Vina runs <code>exhaustiveness</code> independent trajectories (<code>parallel_mc.cpp</code>), keeps up to <code>num_modes</code> minima per task, then merges them with a 2 Å RMSD dedup and rescores.</p>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">exhaustiveness</span>
+                        <input id="poseVinaExh" type="number" step="1" min="1" value="8" title="number of independent Monte-Carlo tasks — vina.cpp:904 (parallelmc.num_tasks)" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">num_tasks</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">num_modes</span>
+                        <input id="poseVinaModes" type="number" step="1" min="1" value="9" title="how many binding modes to keep and report" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">num_saved_mins</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">energy_range</span>
+                        <input id="poseVinaERange" type="number" step="0.5" min="0" value="3" title="modes within this many kcal/mol of the best are reported" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">kcal/mol</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">min_rmsd</span>
+                        <input id="poseVinaMinRmsd" type="number" step="0.1" min="0" value="1.0" title="poses closer than this (heavy-atom RMSD) are treated as the same mode" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">Å</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">seed</span>
+                        <input id="poseVinaSeed" type="text" spellcheck="false" placeholder="random" title="mt19937 seed. Vina seeds boost::mt19937; Math.random() cannot be seeded, so the engine ships its own mt19937 to make --seed reproducibility possible. Blank = a fresh random seed each run." style="width:100px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">reproducible runs</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">global_steps</span>
+                        <input id="poseVinaGSteps" type="number" step="500" min="0" value="0" title="Monte-Carlo steps per task. 0 = Vina's heuristic, 70*3*(50 + heavy_atoms + 10*dof)/2 (vina.cpp:898) — about 26,000 for a 41-atom ligand." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">0 = heuristic</span>
+                      </div>
+                    </div>
+
+                    <!-- local optimization -->
                     <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
                       <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Local optimization <span style="color:#22d3ee;">· Monte-Carlo + BFGS</span></p>
-                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">Each step (<code>monte_carlo.cpp</code>): <b style="color:#64748b;">perturb</b> the pose → <b style="color:#64748b;">BFGS</b> local-minimise → <b style="color:#64748b;">Metropolis</b> accept.</p>
+                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">Each step (<code>monte_carlo.cpp</code>): <b style="color:#64748b;">mutate_conf</b> one of (2 + n<sub>torsions</sub>) entities → <b style="color:#64748b;">BFGS</b> local-minimise → <b style="color:#64748b;">Metropolis</b> accept.</p>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">MC steps</span>
-                        <input id="poseAdvSteps" type="number" step="10" min="1" value="150" onchange="PoseGen.mc.setAdv()" title="global_steps — number of Monte-Carlo iterations" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
-                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">global_steps</span>
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">local_steps</span>
+                        <input id="poseVinaLSteps" type="number" step="1" min="0" value="0" title="BFGS iterations per Monte-Carlo step. 0 = Vina's heuristic (25 + heavy_atoms)/3 (vina.cpp:899)." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">0 = heuristic</span>
                       </div>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">mutation amp</span>
-                        <input id="poseAdvMut" type="number" step="0.05" min="0.01" value="0.3" onchange="PoseGen.mc.setAdv()" title="perturbation amplitude per step (Å for translation / rad for torsions)" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
-                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">mutation_amplitude</span>
+                        <input id="poseVinaMutAmp" type="number" step="0.1" min="0.01" value="2.0" title="mutation_amplitude — monte_carlo.h:39. Translation moves by amplitude x random_inside_sphere (Å, isotropic); orientation by amplitude/gyration_radius; a torsion is RANDOMIZED to uniform(−π, π), not nudged." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">Å · isotropic</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">temperature</span>
+                        <input id="poseVinaTemp" type="number" step="0.1" min="0.01" value="1.2" title="Metropolis temperature. Vina uses RT at 600 K = 1.2 (monte_carlo.h:38-39)." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">RT, 600 K</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">hunt_cap</span>
+                        <input id="poseVinaHuntCap" type="number" step="1" min="0.01" value="10" title="curl cap v during the search (vina.cpp:903 vec(10,10,10)). Per ligand atom, e is replaced by e·v/(v+e) when e>0, so one bad clash cannot dominate a trajectory. Final scoring uses authentic_v = 1000." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">curl v (search)</span>
+                      </div>
+                      <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:4px 0 0;">accept if E<sub>new</sub> &lt; E<sub>old</sub>, else exp((E<sub>old</sub> − E<sub>new</sub>) ∕ T)</p>
+                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">BFGS is real: analytic Cartesian forces are projected onto the torsion tree (force sum → translation, torque about the rotation centre → orientation, per-torsion torque along its own axis), with an inverse-Hessian update and an Armijo backtracking line search (<code>bfgs.h</code>, fixed): c₀=1e-4 · backtrack ×0.5 · ≤10 trials · converge ‖∇E‖&lt;1e-5.</p>
+                    </div>
+
+                    <!-- intramolecular -->
+                    <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
+                      <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Intramolecular energy <span style="color:#22d3ee;">· ligand internal</span></p>
+                      <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:0;">e<sub>intra</sub> = Σ<sub>intra pairs</sub> curl( V<sub>Vina</sub>(s), v ) &nbsp;·&nbsp; curl(e,v) = e·v ∕ (v+e) for e&gt;0</p>
+                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">The engine now builds Vina's real pair set (<code>model.cpp:535-560</code>): pairs whose distance can actually change (<code>mobility == DISTANCE_VARIABLE</code>) and that are <b style="color:#64748b;">more than 3 bonds apart</b> — 1-2, 1-3 and 1-4 all excluded, same rigid fragment excluded — scored with all five terms, not repulsion alone. It is <b style="color:#64748b;">subtracted</b> as Vina does (<code>inter + intra − intra_energy(best pose)</code>, <code>vina.cpp:727</code>), so it shapes the minimised pose and cancels in the reported ΔG. No weight knob: it is part of the objective, not an add-on.</p>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">intra pairs</span>
+                        <span id="poseVinaIntraPairs" style="font-family:ui-monospace,monospace;font-size:11px;color:#22d3ee;">—</span>
+                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">built from the torsion tree</span>
+                      </div>
+                    </div>
+
+
+                    <!-- legacy quick-preview search (PG.mc) — unchanged semantics -->
+                    <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
+                      <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Quick preview search <span style="color:#7c6bae;">· stage ③, not the Vina search</span></p>
+                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">The original in-panel sampler: a short random-restart walk used for instant feedback while you drag a pose. It is <b style="color:#64748b;">not</b> AutoDock Vina's search — use <b style="color:#22d3ee;">▶ Run Vina search</b> below for that. Kept so stage ③ behaves exactly as before.</p>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">MC steps</span>
+                        <input id="poseAdvSteps" type="number" step="10" min="1" value="150" onchange="PoseGen.mc.setAdv()" title="preview-search iterations" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#a78bfa;outline:none;text-align:center;">
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">mutation amp</span>
+                        <input id="poseAdvMut" type="number" step="0.05" min="0.01" value="0.3" onchange="PoseGen.mc.setAdv()" title="preview perturbation amplitude — box-normalised for translation, radians for torsions" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#a78bfa;outline:none;text-align:center;">
                       </div>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">local-min steps</span>
-                        <input id="poseAdvLocal" type="number" step="1" min="0" value="8" onchange="PoseGen.mc.setAdv()" title="local_steps — BFGS iterations per Monte-Carlo step" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
-                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">local_steps</span>
+                        <input id="poseAdvLocal" type="number" step="1" min="0" value="8" onchange="PoseGen.mc.setAdv()" title="preview local-search iterations (random perturb-and-keep-better, not BFGS)" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#a78bfa;outline:none;text-align:center;">
                       </div>
-                      <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:4px 0 0;">accept if E<sub>new</sub> &lt; E<sub>old</sub>, else exp((E<sub>old</sub> − E<sub>new</sub>) ∕ T) &nbsp;<span style="color:#5b4b8a;">· T set by the temperature toggles below the chart</span></p>
-                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;">Vina BFGS line search (<code>bfgs.h</code>, fixed): Armijo c₀=1e-4 · backtrack ×0.5 · ≤10 trials · converge ‖∇E‖&lt;1e-5.</p>
-                    </div>
-
-                    <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
-                      <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Intramolecular energy <span style="color:#22d3ee;">· ligand internal</span></p>
-                      <p style="font-size:10px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;margin:0;">e<sub>intra</sub> = Σ<sub>intra pairs</sub> curl( V<sub>Vina</sub>(s), v₀ ) &nbsp;·&nbsp; curl(e,v) = e·v ∕ (v+e) for e&gt;0</p>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">strain weight</span>
-                        <input id="poseAdvIntraW" type="number" step="0.1" min="0" value="0" onchange="PoseGen.mc.setAdv()" title="weight of the intra-ligand strain term in the search objective (0 = off)" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
-                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">w<sub>intra</sub> (0 = off)</span>
+                        <input id="poseAdvIntraW" type="number" step="0.1" min="0" value="0" onchange="PoseGen.mc.setAdv()" title="weight of the preview's repulsion-only strain term (0 = off). The full Vina search uses the real intramolecular energy instead and ignores this." style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#a78bfa;outline:none;text-align:center;">
                       </div>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:104px;">curl cap</span>
-                        <input id="poseAdvIntraCap" type="number" step="1" min="1" value="1000" onchange="PoseGen.mc.setAdv()" title="curl energy cap v₀ — larger = less capping" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#f59e0b;outline:none;text-align:center;">
-                        <span style="color:#475569;font-family:ui-monospace,monospace;font-size:10px;">v₀</span>
+                        <input id="poseAdvIntraCap" type="number" step="1" min="1" value="1000" onchange="PoseGen.mc.setAdv()" title="curl cap v for the preview strain term" style="width:70px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:2px 5px;color:#a78bfa;outline:none;text-align:center;">
                       </div>
-                      <p style="font-size:9.5px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:0;"><code>model::eval_intramolecular</code>: the ligand's own non-bonded pairs, same five terms, capped by <code>curl</code>. It shapes the minimised pose but <b style="color:#64748b;">cancels in the reported ΔG</b> (Vina: e<sub>in</sub> = inter + intra − intra_energy). Raise <b style="color:#64748b;">w<sub>intra</sub></b> to penalise self-clashing conformers — affects flexible ligands; rigid ligands have no internal freedom.</p>
                     </div>
 
+                    <!-- calibration -->
                     <div style="background:#0b1120;border:1px solid #1e293b;border-radius:11px;padding:12px;display:flex;flex-direction:column;gap:7px;">
                       <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0;">Calibration <span style="color:#22d3ee;">· reconcile with the Vina binary</span></p>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:76px;">N<sub>rot</sub></span>
                         <select id="poseVinaNrotMode" onchange="PoseGen.vina.setOpts()" title="how the (1 + w·Nrot) entropy penalty is computed" style="flex:1;min-width:158px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:3px 6px;color:#f59e0b;outline:none;cursor:pointer;">
-                          <option value="auto" selected>auto · count rotatable bonds (Vina)</option>
+                          <option value="auto" selected>auto · conf_independent count (0.5 × atom_rotors)</option>
                           <option value="rigid">0 · rigid body (raw c)</option>
                           <option value="manual">manual · use the N_rot box above</option>
                         </select>
                       </div>
-                      <p style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.5;margin:0 0 0 84px;">Vina divides c by (1 + 0.05846·N<sub>rot</sub>), the entropy cost of freezing rotatable bonds. <b style="color:#64748b;">auto</b> derives N<sub>rot</sub> from the ligand (faithful). <b style="color:#64748b;">rigid</b> keeps N<sub>rot</sub>=0 (bare interaction sum). <b style="color:#64748b;">manual</b> uses whatever you type in the N<sub>rot</sub> box above — set it to Vina's count (from the .pdbqt torsion tree) for an exact match.</p>
+                      <p style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.5;margin:0 0 0 84px;">Vina divides c by (1 + 0.05846·N<sub>rot</sub>). <b style="color:#64748b;">auto</b> now reproduces <code>conf_independent.cpp:86-109</code> exactly — 0.5 per rotatable bond per heavy endpoint, terminal groups (CH₃ etc.) skipped — so it lands on the same half-integer the binary logs. <b style="color:#64748b;">rigid</b> keeps N<sub>rot</sub>=0. <b style="color:#64748b;">manual</b> uses the box above.</p>
                       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:76px;">hydrophobic</span>
-                        <select id="poseVinaTypeMode" onchange="PoseGen.vina.setOpts()" title="which carbons earn the hydrophobic term" style="flex:1;min-width:158px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:3px 6px;color:#f59e0b;outline:none;cursor:pointer;">
-                          <option value="vina" selected>Vina XS · C_H only (skip polar C)</option>
-                          <option value="vina_exact">Vina exact · skip C bonded to any heteroatom</option>
-                          <option value="element">element · every carbon (loose)</option>
+                        <span style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;min-width:76px;">atom typing</span>
+                        <select id="poseVinaTypeMode" onchange="PoseGen.vina.setOpts()" title="how atoms are assigned XS types" style="flex:1;min-width:158px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:5px;padding:3px 6px;color:#f59e0b;outline:none;cursor:pointer;">
+                          <option value="vina_1_2_7" selected>Vina 1.2.7 · full XS typing (engine)</option>
+                          <option value="vina_exact">legacy · C_P by any heteroatom, N/O H-bond</option>
+                          <option value="vina">legacy · C_P by N/O only, N/O H-bond</option>
+                          <option value="element">legacy · every carbon hydrophobic (loose)</option>
                         </select>
                       </div>
-                      <p style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.5;margin:0 0 0 84px;"><b style="color:#64748b;">Vina XS</b> skips carbons bonded to N/O (carbonyls, Cα, polar sidechain C). <b style="color:#64748b;">Vina exact</b> also skips carbons bonded to <b style="color:#64748b;">any</b> heteroatom — F, Cl, Br, I, S, P — which is what <code>model.cpp bonded_to_heteroatom()</code> actually does; use this to reproduce the binary on halogenated ligands (C–F / C–Cl carbons are C_P to Vina, worth ~0.5 kcal/mol here). <b style="color:#64748b;">element</b> counts every carbon, over-rewarding by ~1–2 kcal/mol. Applies to the client preview and the ⚛ server breakdown.</p>
+                      <p style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.5;margin:0 0 0 84px;"><b style="color:#34d399;">Vina 1.2.7</b> is the faithful path: donor/acceptor resolved from residue+atom chemistry on the receptor and from the bond graph plus implicit-H valence on the ligand (so <code>xs_h_bond_possible</code> really needs a donor <i>and</i> an acceptor), C_P from the bond graph, halogens hydrophobic, metals as <code>Met_D</code> (r = 1.2 Å, donor). The <b style="color:#64748b;">legacy</b> modes treat every N and O as simultaneously donor <i>and</i> acceptor, which pays full H-bond reward on acceptor–acceptor pairs Vina scores as zero — worth roughly <b style="color:#fb7185;">+2.5 kcal/mol</b> of spurious binding on a polar ligand. They are kept only so the difference stays visible.</p>
                     </div>
-
                   </div>
                 </div>
               </div>
+
+              <!-- ── score breakdown ──────────────────────────────────────────────────── -->
               <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
                 <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Score breakdown <span style="color:#64748b;">· weighted, kcal/mol</span></p>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">gauss₁</span><span id="poseVinaG1" style="color:#e2e8f0;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">gauss₂</span><span id="poseVinaG2" style="color:#e2e8f0;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">repulsion</span><span id="poseVinaRep" style="color:#fb7185;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">hydrophobic</span><span id="poseVinaHyd" style="color:#e2e8f0;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">H-bond</span><span id="poseVinaHB" style="color:#34d399;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:5px 0 3px;border-bottom:1px solid rgba(30,41,59,.6);margin-top:3px;"><span style="color:#94a3b8;font-weight:600;">Σ c (inter)</span><span id="poseVinaInter" style="color:#e2e8f0;font-weight:600;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">pairs · N<sub>rot</sub></span><span id="poseVinaPairs" style="color:#22d3ee;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:12px;padding:5px 0 3px;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#f59e0b;font-weight:700;">ΔG (kcal/mol)</span><span id="poseVinaDg" style="color:#f59e0b;font-weight:700;">—</span></div>
-                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">pK = −ΔG/1.36</span><span id="poseVinaPk" style="color:#e2e8f0;">—</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">gauss₁</span><span id="poseVinaG1" style="color:#e2e8f0;">+0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">gauss₂</span><span id="poseVinaG2" style="color:#e2e8f0;">+0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">repulsion</span><span id="poseVinaRep" style="color:#fb7185;">+0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">hydrophobic</span><span id="poseVinaHyd" style="color:#e2e8f0;">+0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">H-bond</span><span id="poseVinaHB" style="color:#34d399;">+0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:5px 0 3px;border-bottom:1px solid rgba(30,41,59,.6);margin-top:3px;"><span style="color:#94a3b8;font-weight:600;">Σ c (inter)</span><span id="poseVinaInter" style="color:#e2e8f0;font-weight:600;">0.000</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#64748b;">pairs · N<sub>rot</sub></span><span id="poseVinaPairs" style="color:#22d3ee;">0 · 0</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:12px;padding:5px 0 3px;border-bottom:1px solid rgba(30,41,59,.6);"><span style="color:#f59e0b;font-weight:700;">ΔG (kcal/mol)</span><span id="poseVinaDg" style="color:#64748b;font-weight:700;">— no target</span></div>
+                <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;"><span style="color:#64748b;">pK = −ΔG/1.36</span><span id="poseVinaPk" style="color:#64748b;">—</span></div>
               </div>
+
+              <!-- ── run the real search (NEW) ────────────────────────────────────────── -->
+              <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
+                <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Vina search <span style="color:#22d3ee;">· Monte-Carlo + BFGS, in a Worker</span></p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <button id="poseVinaRunSearchBtn" onclick="PoseGen.vina.eng.run()" title="Run the full AutoDock Vina 1.2.7 search: exhaustiveness independent Monte-Carlo trajectories with analytic-gradient BFGS local optimization, merged and rescored. Runs in a Web Worker so the tab stays responsive." style="padding:8px 13px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">▶ Run Vina search</button>
+                  <span id="poseVinaSearchStatus" style="font-family:ui-monospace,monospace;font-size:10.5px;color:#64748b;">idle</span>
+                </div>
+                <div id="poseVinaModeList" class="pose-scroll" style="margin-top:10px;max-height:230px;overflow-y:auto;"></div>
+                <p style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.5;margin:8px 0 0;">Click any mode to load that pose into the shared pose ①/②/③ all read from. Modes are merged across tasks with a 2 Å RMSD dedup (<code>parallel_mc.cpp:57</code>) and reported within <code>energy_range</code> of the best.</p>
+              </div>
+
+              <!-- ── actions ──────────────────────────────────────────────────────────── -->
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button id="poseVinaRunBtn" onclick="PoseGen.vina.logBreakdown()" style="padding:8px 13px;border-radius:10px;border:1px solid transparent;background:linear-gradient(135deg,#b45309,#7c3aed);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Compute &amp; log breakdown</button>
                 <button onclick="PoseGen.vina.resetWeights()" style="padding:8px 13px;border-radius:10px;border:1px solid #1e293b;background:transparent;color:#e2e8f0;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">↺ Reset weights</button>
               </div>
-              <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">The breakdown is a fast client-side preview (element XS radii + typing) over the ligand and 5 Å pocket — it also drives the search. <b style="color:#94a3b8;">⚛ Compute &amp; log breakdown</b> recomputes the same five terms on the server over the full receptor and writes an auditable per-atom-pair log to <b style="color:#94a3b8;">pose.vina_breakdown_dir</b> (input_TS.yml). Production docking runs the AutoDock-Vina-GPU binary with these same weights.</p>
+
+              <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">The breakdown is computed in-browser by <b style="color:#94a3b8;">vina_engine.js</b> over every receptor heavy atom within the docking box + 8 Å — HETATM (waters, metals, cofactors) included, no atom cap. <b style="color:#94a3b8;">⚛ Compute &amp; log breakdown</b> additionally recomputes the five terms on the server over the full receptor and writes an auditable per-atom-pair log to <b style="color:#94a3b8;">pose.vina_breakdown_dir</b> (input_TS.yml); note that route still uses the legacy element-only typing, so its H-bond term will read more favourable than the engine's. Production docking (the <b style="color:#94a3b8;">Vina Dock</b> button) runs <code>engines/vina/vina</code> — the CPU 1.2.7 build — with these same weights.</p>
             </div>
             <div style="background:#0b1120;border:1px solid #1e293b;border-radius:13px;padding:13px;">
               <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin:0 0 8px;">Search trace</p>

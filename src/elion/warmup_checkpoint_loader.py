@@ -25,10 +25,11 @@ else:
         # thompson_sampling.py lives in generators/TS/, which isn't on sys.path
         # yet (the loader runs before elion.py sets up its path). Add it.
         if 'thompson_sampling' not in sys.modules:
-            _ts_dir_cands = [
+            _ts_dir_cands = [c for c in (
                 '/home/huangzihang/repos/elion/src/elion/generators/TS',
+                os.environ.get('TS_ENGINE_DIR', ''),
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generators', 'TS'),
-            ]
+            ) if c]
             for _d in _ts_dir_cands:
                 if os.path.isfile(os.path.join(_d, 'thompson_sampling.py')):
                     if _d not in sys.path:

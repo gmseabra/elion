@@ -498,7 +498,34 @@ class ThompsonSampler:
                     f"debug_on={self.logger.isEnabledFor(logging.DEBUG)} "
                     f"reagent_sizes={[len(r) for r in self.reagent_lists]}")
 
+        # ── Instrumentation: account for the WHOLE iteration ─────────────────
+        # select/score/flush were the only timed phases, so anything happening
+        # between them was invisible. tqdm reports ~4.7 s/it while a CHEMBERT
+        # forward pass measures 113 ms, so ~98% of each iteration was being
+        # spent somewhere nothing was watching. `other_ms` below is exactly that
+        # gap: iteration wall time minus the three timed phases. If it is large,
+        # the cost is NOT in the model and NOT in the Thompson draw.
+        _t_iter = 0.0
+        _t_write = 0.0       # time blocked writing/flushing stdout (back-pressure)
+        _iter_t0 = _time_probe.perf_counter()
+
+        # Count every record this logger emits, so `logs=` reports stdout volume
+        # per iteration without instrumenting each call site. The UI patches
+        # log_level to DEBUG (see ts_routes `log_level=DEBUG`), and DEBUG emits
+        # per-reagent add_score/post-update lines — so this number can be far
+        # larger than anyone expects. 700 stdout lines for 13 evaluations was
+        # what the last run reported.
+        class _LogCounter(logging.Filter):
+            n = 0
+            def filter(self, record):
+                _LogCounter.n += 1
+                return True
+        _log_counter = _LogCounter()
+        self.logger.addFilter(_log_counter)
+        _log_n0 = _LogCounter.n
+
         for i in tqdm(range(0, num_cycles), desc="Cycle", disable=self.hide_progress):
+            _iter_t0 = _time_probe.perf_counter()
             _sel_t0 = _time_probe.perf_counter()
             selected_reagents = [DisallowTracker.Empty] * len(self.reagent_lists)
 
@@ -581,17 +608,64 @@ class ThompsonSampler:
                 self.logger.info('Iteration: %d | max score: %.6f | smiles: %s | name: %s',
                                  i, top_score, top_smiles, top_name)
 
-            # ── PROBE2 timing to the debug file (every 25 iters) ──────────────
-            # If the volume fix worked, these it/s stay flat past iter 4000.
-            if i > 0 and i % 25 == 0:
+            # Whole-iteration wall time, and a direct measurement of how long
+            # writing to stdout blocks. If the Flask parent cannot drain the
+            # pipe as fast as we fill it, the OS buffer (~64 KB) fills and
+            # write() sleeps — the engine then runs at the *reader's* speed and
+            # no phase timer shows it, because the block happens inside logging.
+            _w_t0 = _time_probe.perf_counter()
+            try:
+                _sys_probe.stdout.flush()
+            except Exception:
+                pass
+            _t_write += _time_probe.perf_counter() - _w_t0
+            _t_iter += _time_probe.perf_counter() - _iter_t0
+
+            # ── PROBE2 timing (early, then every 25 iters) ────────────────────
+            # Report on a Fibonacci-ish early schedule as well as every 25: the
+            # last run died at iteration 13 and produced NO timing at all, which
+            # is how this went unmeasured for so long.
+            if i > 0 and (i % 25 == 0 or i in (1, 2, 3, 5, 8, 13, 21)):
                 _dt = _time_probe.perf_counter() - _t_win
                 _n = i - _probe_last_i
                 _itps = _n / _dt if _dt > 0 else 0
+                _sel_ms, _sc_ms, _fl_ms = (_t_select / _n * 1000,
+                                           _t_score / _n * 1000,
+                                           _t_flush / _n * 1000)
                 _probe2_log(
                     f"[PROBE2] iter={i} | {_itps:.1f} it/s | per-iter ms: "
-                    f"select={_t_select/_n*1000:.2f} "
-                    f"score={_t_score/_n*1000:.2f} "
-                    f"flush={_t_flush/_n*1000:.2f}")
+                    f"select={_sel_ms:.2f} score={_sc_ms:.2f} flush={_fl_ms:.2f}")
+
+                # Same numbers, on STDOUT, in a machine-parseable form.
+                #
+                # _probe2_log writes to a debug FILE, so this timing — the only
+                # ground truth about how fast the search actually runs — has
+                # never been visible to the UI. The dashboard's "Speed" readout
+                # instead samples how many iterations the BROWSER has drawn
+                # (ts_ui.js `_tsSpeedTick` -> `_jobSparkHistory.length`), which
+                # is capped by the Viz-speed slider and by SSE delivery. When
+                # the engine is faster than the animation you are reading the
+                # slider; when it is slower you are reading a mixture. Neither
+                # tells you where the time went.
+                #
+                # One short line per 25 iterations is ~0.7 KB per 5000-iteration
+                # run — nothing next to the [evaluate] stream — so the volume
+                # concern that put PROBE2 in a file does not apply here.
+                # other_ms is THE number. iteration wall time minus the three
+                # timed phases = everything nobody was measuring. write_ms is
+                # how much of that is stdout back-pressure specifically.
+                _iter_ms  = _t_iter / _n * 1000
+                _wr_ms    = _t_write / _n * 1000
+                _other_ms = _iter_ms - _sel_ms - _sc_ms - _fl_ms
+                self.logger.info(
+                    "[TS:timing] iter=%d itps=%.3f iter_ms=%.1f select_ms=%.2f "
+                    "score_ms=%.2f flush_ms=%.2f write_ms=%.2f other_ms=%.1f "
+                    "logs=%d debug_on=%d",
+                    i, _itps, _iter_ms, _sel_ms, _sc_ms, _fl_ms, _wr_ms,
+                    _other_ms, _LogCounter.n - _log_n0,
+                    int(self.logger.isEnabledFor(logging.DEBUG)))
+                _t_iter = _t_write = 0.0
+                _log_n0 = _LogCounter.n
                 _t_select = _t_score = _t_flush = 0.0
                 _t_win = _time_probe.perf_counter()
                 _probe_last_i = i

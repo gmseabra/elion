@@ -248,6 +248,30 @@ function parseLine(rawLine) {
     // post-reload chart are guaranteed identical. This replaces the worker's own
     // score guessing (which could fall back to Thompson samples or posterior means
     // when its [evaluate] regex missed, producing wrong live numbers).
+    // ── Engine-measured timing ────────────────────────────────────────────────
+    // thompson_sampling.search() emits this every 25 iterations from its own
+    // perf_counter accumulators. It is GROUND TRUTH: it is what the engine did,
+    // measured inside the engine, unaffected by the Viz-speed slider, SSE
+    // latency or browser render time — all of which the display-derived speed
+    // sampler in ts_ui.js is subject to.
+    //
+    // Forwarded as-is; ts_ui.js's _tsSpeedTick prefers it when present and falls
+    // back to the sampled display rate when it is absent (older engine, or a
+    // run that has not reached iteration 25 yet).
+    const timeM = line.match(
+        /^\[TS:timing\]\s+iter=(\d+)\s+itps=([\d.eE+\-]+)\s+select_ms=([\d.eE+\-]+)\s+score_ms=([\d.eE+\-]+)\s+flush_ms=([\d.eE+\-]+)/);
+    if (timeM) {
+        self.postMessage({ type: 'engine_timing', payload: {
+            iter:      parseInt(timeM[1], 10),
+            itps:      parseFloat(timeM[2]),
+            select_ms: parseFloat(timeM[3]),
+            score_ms:  parseFloat(timeM[4]),
+            flush_ms:  parseFloat(timeM[5]),
+            t:         Date.now(),
+        }});
+        return;
+    }
+
     const statsM = line.match(/^\[TS:stats\]\s+iter=(\d+)\s+mean=([\d.eE+\-]+)\s+std=([\d.eE+\-]+)\s+score=([\d.eE+\-]+)/);
     if (statsM) {
         const iter  = parseInt(statsM[1], 10);

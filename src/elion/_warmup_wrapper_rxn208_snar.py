@@ -8,8 +8,8 @@ logging.basicConfig(
     force=True,
     format='%(levelname)s %(name)s: %(message)s'
 )
-sys.argv = ['elion.py', '-i', '/home/huangzihang/raytmp/elion_ts_k3tr2v1a/input_TS_rxn208_snar.yml']
-os.environ['TS_WARMUP_CHECKPOINT'] = '/home/huangzihang/repos/user_data/Warmup_TS/snar_20260709_152242_warmup.json'
+sys.argv = ['elion.py', '-i', '/home/huangzihang/repos/elion/src/UI/.raytmp/elion_ts_38ny6rho/input_TS_rxn208_snar.yml']
+os.environ['TS_WARMUP_CHECKPOINT'] = '/home/huangzihang/repos/user_data/Warmup_TS/snar_20260804_205925_warmup.json'
 
 # Import and patch BEFORE any elion modules load
 print('[WRAPPER] sys.path before loader: ' + str(sys.path[:6]), flush=True)

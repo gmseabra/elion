@@ -524,6 +524,31 @@ function _tsCurrentIterCount() {
 
 function _tsSpeedTick() {
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+
+    // ── Prefer the ENGINE's own measurement ──────────────────────────────────
+    // Everything below this block samples how many iterations the BROWSER has
+    // drawn. That is capped by the Viz-speed slider (_tsTsInterval: 1400…180 ms)
+    // and by SSE delivery, so when the engine runs faster than the animation you
+    // are reading the slider, not the search — and when it runs slower you are
+    // reading a blend of the two. Either way it cannot say WHERE the time went.
+    //
+    // thompson_sampling emits '[TS:timing]' every 25 iterations straight from
+    // its perf_counters. Use it when present; fall back to the sampler for the
+    // first 25 iterations and for engines that do not emit it.
+    const idx = (_ts && _ts._activeJobIdx != null) ? _ts._activeJobIdx : 0;
+    const et  = _ts && _ts._engineTiming ? _ts._engineTiming[idx] : null;
+    if (et && (Date.now() - et.t) < 60000) {
+        const sec = et.itps > 0 ? 1 / et.itps : 0;
+        set('tsTsSpeed', et.itps >= 1 ? `${et.itps.toFixed(1)} it/s`
+                                      : `${sec.toFixed(2)} s/it (${et.itps.toFixed(2)} it/s)`);
+        // The breakdown is the point: score_ms is CHEMBERT, select_ms is the
+        // Thompson draw over the reagent lists, flush_ms is the posterior update.
+        const br = document.getElementById('tsTsSpeedBreak');
+        if (br) br.textContent =
+            `score ${et.score_ms.toFixed(0)} · select ${et.select_ms.toFixed(0)} · flush ${et.flush_ms.toFixed(0)} ms`;
+        return;
+    }
+
     const iter = _tsCurrentIterCount();
     const now  = Date.now();
     if (iter == null) { return; }
@@ -1257,10 +1282,11 @@ function _tsFetchProduct(rxnKey, rid, partner) {
         .then(r => r.ok ? r.json() : { smiles: '' })
         .then(d => {
             _tsProductCache[key] = d.smiles || '';
-            const el = document.getElementById('tsTsBars');
-            if (!el) return;
-            const cell = el.querySelector(`[data-prod-for="${CSS.escape(key)}"]`);
-            if (cell) {
+            // Document-wide, not scoped to #tsTsBars: since the swap the
+            // data-prod-for cell lives in the hover card (a child of <body>),
+            // and the RL tab renders one too. Scoping here would leave both
+            // showing '…' forever.
+            document.querySelectorAll(`[data-prod-for="${CSS.escape(key)}"]`).forEach(cell => {
                 if (_tsProductCache[key]) {
                     cell.textContent = _tsProductCache[key];
                     cell.title = `Product: ${rid} ⊕ ${partner}`;
@@ -1270,7 +1296,7 @@ function _tsFetchProduct(rxnKey, rid, partner) {
                     cell.title = `${rid} ⊕ ${partner} — no clean product under this reaction`;
                     cell.style.color = '#475569';
                 }
-            }
+            });
         })
         .catch(() => { _tsProductCache[key] = ''; });
 }
@@ -1293,7 +1319,8 @@ function _tsHoverCardEnsure() {
     c.style.cssText = [
         'position:fixed', 'z-index:100000', 'display:none', 'pointer-events:none',
         'background:#0a0f1e', 'border:1px solid rgba(71,85,105,0.6)', 'border-radius:10px',
-        'box-shadow:0 12px 40px rgba(0,0,0,0.7)', 'padding:12px 14px', 'max-width:600px',
+        'box-shadow:0 12px 40px rgba(0,0,0,0.7)', 'padding:12px 14px',
+        'width:440px', 'max-width:600px',
     ].join(';');
     document.body.appendChild(c);
     _tsHoverCardEl = c;
@@ -1308,14 +1335,18 @@ function _tsHoverCardEnsure() {
     return c;
 }
 
-// Fetch + fill a reagent's source CSV path into the given span.
-function _tsCsvLabel(rxnKey, id, spanId) {
+// Fetch + fill a reagent's source CSV path into every span that asked for it.
+// Keyed by a data attribute rather than an element id: the reaction block is
+// now rendered INLINE, once per row, so a fixed id (_tsHovCsvA) would appear
+// five times over and getElementById would fill only the first.
+function _tsCsvLabel(rxnKey, id) {
     const key   = rxnKey + '/' + id;
     const patch = (info) => {
-        const el = document.getElementById(spanId);
-        if (!el || !info) return;
-        el.textContent = info.csv_path || info.csv_file || '—';
-        if (info.slot >= 0) el.textContent += `  (slot ${info.slot})`;
+        if (!info) return;
+        let txt = info.csv_path || info.csv_file || '—';
+        if (info.slot >= 0) txt += `  (slot ${info.slot})`;
+        document.querySelectorAll(`[data-csv-for="${CSS.escape(key)}"]`)
+                .forEach(el => { el.textContent = txt; });
     };
     if (_tsCsvCache[key]) { patch(_tsCsvCache[key]); return; }
     fetch(`/vina_visualization/ts_mol_smiles/${encodeURIComponent(rxnKey)}/${encodeURIComponent(id)}`)
@@ -1324,60 +1355,132 @@ function _tsCsvLabel(rxnKey, id, spanId) {
         .catch(() => {});
 }
 
-// Build the card's content. `pinned` => interactive: selectable text + ✕ button.
-function _tsHoverBuild(c, rxnKey, rid, partner, score, pinned) {
+// ── The reaction block: BB ⊕ BB → product, with each reactant's id and source
+//    CSV path and the product's Elion score.
+//
+// THIS IS NOW THE INLINE ROW. It used to be the hover card, and the numbers
+// (product SMILES, n, μ, σ) used to be the row — the two have been swapped, so
+// what a reagent IS is on screen and what the bandit THINKS about it is one
+// hover away. Same markup either way; `sel` makes the text selectable, which
+// only matters when it is inline or pinned.
+function _tsRxnBlock(rxnKey, rid, partner, best, opts) {
+    const o          = opts || {};
     const hasPartner = partner && partner !== '—';
-    const scoreTxt   = (score != null && !isNaN(score)) ? Number(score).toFixed(4) : '—';
-    // Transparent images matching the inline tiles — RDKit renders light-on-dark,
-    // so a white background washes the structures out; let the dark card show through.
-    const imgStyle = 'display:block;margin:0 auto;pointer-events:none';
-    const sel      = pinned ? 'user-select:all;-webkit-user-select:all;cursor:text' : '';
+    const scoreTxt   = (best != null && !isNaN(best)) ? Number(best).toFixed(4) : '—';
+    const imgStyle   = 'display:block;margin:0 auto;pointer-events:none';
+    const sel        = o.selectable ? 'user-select:all;-webkit-user-select:all;cursor:text' : '';
+    const w = o.w || 120, h = o.h || 72, pw = o.pw || 180, ph = o.ph || 96;
 
-    const molImg = (id, w, h) =>
+    const molImg = (id) =>
         `<object type="image/svg+xml" data="/vina_visualization/ts_mol_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(id)}?w=${w}&h=${h}"
-                 width="${w}" height="${h}" style="${imgStyle}"></object>`;
+                 width="${w}" height="${h}" style="${imgStyle}" aria-label="structure of ${id}"></object>`;
     const prodImg = hasPartner
-        ? `<object type="image/svg+xml" data="/vina_visualization/ts_product_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(rid)}/${encodeURIComponent(partner)}?w=180&h=96"
-                   width="180" height="96" style="${imgStyle}"></object>`
-        : `<div style="width:180px;height:96px;display:flex;align-items:center;justify-content:center;color:#475569;font-size:11px">no partner yet</div>`;
+        ? `<object type="image/svg+xml" data="/vina_visualization/ts_product_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(rid)}/${encodeURIComponent(partner)}?w=${pw}&h=${ph}"
+                   width="${pw}" height="${ph}" style="${imgStyle}" aria-label="product of ${rid} and ${partner}"></object>`
+        : `<div style="width:${pw}px;height:${ph}px;display:flex;align-items:center;justify-content:center;color:#475569;font-size:11px">no partner yet</div>`;
 
-    const idLine   = (id)     => `<div style="font-family:monospace;font-size:11px;color:#e2e8f0;font-weight:600;${sel}">BB ${id}</div>`;
-    const pathLine = (spanId) => `<div id="${spanId}" style="font-family:monospace;font-size:9px;color:#64748b;max-width:150px;word-break:break-all;text-align:center;line-height:1.3;${sel}">…</div>`;
-    const op       = (ch)     => `<div style="font-size:22px;color:#475569;align-self:center;padding:0 2px">${ch}</div>`;
-    const reactant = (id, spanId) =>
-        `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">${molImg(id,120,72)}${idLine(id)}${pathLine(spanId)}</div>`;
+    const idLine   = (id) => `<div style="font-family:monospace;font-size:11px;color:#e2e8f0;font-weight:600;${sel}">BB ${id}</div>`;
+    const pathLine = (id) => `<div data-csv-for="${rxnKey}/${id}" style="font-family:monospace;font-size:9px;color:#64748b;max-width:${w + 30}px;word-break:break-all;text-align:center;line-height:1.3;${sel}">…</div>`;
+    const op       = (ch) => `<div style="font-size:22px;color:#475569;align-self:center;padding:0 2px">${ch}</div>`;
+    const reactant = (id) =>
+        `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">${molImg(id)}${idLine(id)}${pathLine(id)}</div>`;
 
     const partnerCol = hasPartner
-        ? reactant(partner, '_tsHovCsvB')
+        ? reactant(partner)
         : `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-             <div style="width:120px;height:72px;display:flex;align-items:center;justify-content:center;color:#475569;font-size:11px;border:0.5px dashed #334155;border-radius:4px">—</div>
+             <div style="width:${w}px;height:${h}px;display:flex;align-items:center;justify-content:center;color:#475569;font-size:11px;border:0.5px dashed #334155;border-radius:4px">—</div>
              <div style="font-family:monospace;font-size:11px;color:#475569">no partner</div></div>`;
 
-    const closeBtn = pinned
-        ? `<button onclick="_tsHoverUnpin()" title="Close"
-                   style="position:absolute;top:6px;right:8px;background:none;border:none;color:#64748b;font-size:14px;cursor:pointer;pointer-events:auto;padding:2px 4px">✕</button>`
-        : '';
-    const header = pinned
-        ? `Reaction · ${rxnKey} <span style="color:#22d3ee">· 📌 pinned — select to copy</span>`
-        : `Reaction · ${rxnKey}`;
-
-    c.innerHTML = `
-      ${closeBtn}
-      <div style="font-size:10px;color:#94a3b8;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em">${header}</div>
-      <div style="display:flex;align-items:flex-start;gap:6px">
-        ${reactant(rid, '_tsHovCsvA')}
+    const html = `
+      <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap">
+        ${reactant(rid)}
         ${op('+')}
         ${partnerCol}
         ${op('→')}
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
           ${prodImg}
           <div style="font-size:10px;color:#94a3b8;font-weight:600">Products</div>
-          <div style="font-size:13px;color:#f59e0b;font-weight:700;${sel}">Elion score: ${scoreTxt}</div>
+          <div data-el="bestVal" title="Best single molecule score"
+               style="font-size:13px;color:#f59e0b;font-weight:700;${sel}">Elion score: ${scoreTxt}</div>
         </div>
       </div>`;
 
-    _tsCsvLabel(rxnKey, rid, '_tsHovCsvA');
-    if (hasPartner) _tsCsvLabel(rxnKey, partner, '_tsHovCsvB');
+    // Kick the CSV lookups. Safe to call repeatedly — cached after the first.
+    _tsCsvLabel(rxnKey, rid);
+    if (hasPartner) _tsCsvLabel(rxnKey, partner);
+    return html;
+}
+
+// Look a reagent's live posterior up by id. _ts._activeBars is the 5 rows the
+// panel shows; _ts._activeTopRaw is the full ranking, which the RL tab's
+// top-N cards can reach past position 5.
+function _tsReagentStats(rid) {
+    const inBars = (_ts._activeBars || []).find(b => String(b.name) === String(rid));
+    if (inBars) return { mu: inBars.mu, std: inBars.std, sc: inBars.sc, best: inBars.best };
+    const raw = (_ts._activeTopRaw || []).find(t => String(t.name) === String(rid));
+    return raw ? { mu: raw.mu, std: raw.std, sc: raw.sc, best: raw.best } : null;
+}
+
+// Build the card's content. `pinned` => interactive: selectable text + ✕ button.
+//
+// SWAPPED. This used to be the reaction (BB ⊕ BB → product); that is now the
+// inline row, built by _tsRxnBlock. What the card carries instead is the
+// bandit's numbers for this reagent — the product SMILES, the posterior
+// (n / μ / σ), the partner it scored with, and the best molecule score.
+function _tsHoverBuild(c, rxnKey, rid, partner, score, pinned) {
+    const hasPartner = partner && partner !== '—';
+    const sel        = pinned ? 'user-select:all;-webkit-user-select:all;cursor:text' : '';
+    const st         = _tsReagentStats(rid) || {};
+    const sc         = st.sc  || 0;
+    const std        = st.std || 0;
+    const mu         = st.mu  || 0;
+    const best       = (st.best != null) ? st.best : score;
+    const stdNorm    = Math.min(std / (mu || 1), 1);
+    const stdColor   = stdNorm < 0.15 ? '#34d399' : stdNorm < 0.4 ? '#fbbf24' : '#94a3b8';
+
+    // The product SMILES, from the same cache the panel used to render inline.
+    const prodKey  = _tsProdKey(rid, partner);
+    if (hasPartner) _tsFetchProduct(rxnKey, rid, partner);
+    const prodSmi  = _tsProductCache[prodKey];
+    const smiText  = !hasPartner ? '—'
+                   : (prodSmi === undefined ? '…' : (prodSmi || 'no product'));
+    const smiColor = (prodSmi && prodSmi.length) ? '#67e8f9' : '#475569';
+
+    const partnerBlock = hasPartner
+        ? `<span style="display:inline-flex;flex-direction:column;align-items:center;gap:1px;vertical-align:middle">
+             <object type="image/svg+xml" data="/vina_visualization/ts_mol_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(partner)}?w=80&h=40"
+                     width="80" height="40" style="pointer-events:none;display:block" aria-label="structure of ${partner}"></object>
+             <span style="font-family:monospace;font-size:9px;color:#0f766e;${sel}">${partner}</span>
+           </span>`
+        : `<span style="font-family:monospace;font-size:9px;color:#1e3a5f">—</span>`;
+
+    const closeBtn = pinned
+        ? `<button onclick="_tsHoverUnpin()" title="Close"
+                   style="position:absolute;top:6px;right:8px;background:none;border:none;color:#64748b;font-size:14px;cursor:pointer;pointer-events:auto;padding:2px 4px">✕</button>`
+        : '';
+    const header = pinned
+        ? `${rid} · the numbers <span style="color:#22d3ee">· 📌 pinned — select to copy</span>`
+        : `${rid} · the numbers <span style="color:#475569">— click to pin &amp; copy</span>`;
+
+    c.innerHTML = `
+      ${closeBtn}
+      <div style="font-size:10px;color:#94a3b8;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em">${header}</div>
+      <div style="display:flex;flex-direction:column;gap:5px;min-width:0">
+        <code data-prod-for="${prodKey}" title="Product: ${rid} ⊕ ${partner}"
+              style="font-family:monospace;font-size:11px;color:${smiColor};background:rgba(8,145,178,0.08);
+                     border:0.5px solid rgba(8,145,178,0.18);border-radius:4px;padding:3px 7px;
+                     word-break:break-all;line-height:1.4;${sel}">${smiText}</code>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span data-el="nVal" style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(8,145,178,0.15);color:#67e8f9">n=${sc}</span>
+          <span style="font-size:9px;color:#94a3b8">μ=${mu.toFixed(4)}</span>
+          <span data-el="sVal" style="font-size:9px;color:${(sc >= 2) ? stdColor : '#1e3a5f'}">${sc >= 2 ? 'σ=' + std.toFixed(4) : 'σ=—'}</span>
+          <span style="font-size:9px;color:#64748b" title="reacts with">⊕ reacts with</span>
+          ${partnerBlock}
+          <span title="Best single molecule score"
+                style="margin-left:auto;font-size:11px;font-weight:600;color:#f59e0b;white-space:nowrap;${sel}">${
+            (best != null && !isNaN(best)) ? Number(best).toFixed(4) : '—'}</span>
+        </div>
+      </div>`;
 }
 
 function _tsHoverPosition(c, targetEl) {
@@ -1450,11 +1553,18 @@ function _tsFetchPoolCounts(rxnKey, ji) {
 }
 
 // ── Top-5 polling from the session JSON (via /ts_top5) ──────────────────────
-// The reagent bars are driven by polling the backend's persisted top-5 every
-// 5 seconds rather than computing them live in the worker. The backend maintains
-// top5 ranked by best molecule score (authoritative, from [evaluate]), so this
-// guarantees the UI matches the JSON exactly and never shows Thompson-sample
-// inflated rankings. One poll covers all jobs; we pick the active job's top5.
+// The reagent bars are driven by polling the backend's persisted top-5 rather
+// than computing them live in the worker. The backend maintains top5 ranked by
+// best molecule score (authoritative, from [evaluate]), so this guarantees the
+// UI matches the JSON exactly and never shows Thompson-sample inflated
+// rankings. One poll covers all jobs; we pick the active job's top5.
+//
+// PERIOD. 3s, not the original 5s. The panel is the only live view of what the
+// bandit currently believes, and at 5s a short run could finish before the
+// second poll landed — which is what "#tsTsBars only shows up at the end"
+// looked like from the outside. /ts_top5 is a small in-memory read (no points
+// or scores arrays), so the extra rate costs the server nothing measurable.
+const _TS_TOP5_MS = 3000;
 let _tsTop5Timer = null;
 let _tsTop5ByJob = {};   // launch_idx -> top5 array from last poll
 // Previous rank position of each reagent per job, to show movement arrows:
@@ -1514,12 +1624,39 @@ function _tsPollTop5() {
             // per job per poll), storing the resulting bars per job.
             jobs.forEach(j => {
                 const ji = j.launch_idx ?? 0;
-                _tsTop5ByJob[ji] = j.top5 || [];
-                _ts._jobBars[ji] = _tsTop5ToBars(j.top5 || [], ji);
+                // The server's ranking now carries _TOP_N (20) entries so the RL
+                // tab's "top N" picker has something to pick from. #tsTsBars is
+                // sliced back to 5 here, before _tsTop5ToBars — normalising μ and
+                // updating _tsPrevRank over the same 5 rows it always did, so the
+                // bars and their movement arrows are byte-identical to before.
+                _tsTop5ByJob[ji] = j.top5 || [];                       // full ranking
+                _ts._jobBars[ji] = _tsTop5ToBars((j.top5 || []).slice(0, 5), ji);
             });
             // Render the currently-active job's bars
             const idx = _ts._activeJobIdx ?? 0;
             _ts._activeBars = _ts._jobBars[idx] || [];
+            // SINGLE-JOB INDEX RESCUE. _activeJobIdx is seeded to 0 locally and
+            // only corrected once /ts_jobs answers; a job whose launch_idx is
+            // not 0 (a relaunch, or a session recovered from disk) therefore
+            // renders an empty panel even though the server just handed us its
+            // ranking. With exactly one job in flight there is no ambiguity
+            // about whose bars these are, so use them. Deliberately scoped to
+            // the one-job case: with several jobs, guessing would show the
+            // wrong reagents under the right job's header.
+            let rawIdx = idx;
+            if (!_ts._activeBars.length) {
+                const keys = Object.keys(_ts._jobBars);
+                if (keys.length === 1 && (_ts._jobBars[keys[0]] || []).length) {
+                    rawIdx = keys[0];
+                    _ts._activeBars = _ts._jobBars[rawIdx];
+                    _tsDebugSend('top5_idx_rescue', { wanted: idx, used: rawIdx });
+                }
+            }
+            // The UNSLICED ranking for the active job. The RL tab's top-N panel
+            // reads this; #tsTsBars keeps using _ts._activeBars. Resolved through
+            // the same rescue so the two panels can never disagree about which
+            // job they are showing.
+            _ts._activeTopRaw = _tsTop5ByJob[rawIdx] || [];
             _tsDebugSend('poll_top5', {
                 jobs: jobs.length,
                 perJob: jobs.map(j => ({ idx: j.launch_idx, st: j.status, n: (j.top5 || []).length })),
@@ -1555,7 +1692,7 @@ window._tsDebugSend = _tsDebugSend;
 function _tsStartTop5Polling() {
     if (_tsTop5Timer) return;          // already polling
     _tsPollTop5();                     // immediate first fetch
-    _tsTop5Timer = setInterval(_tsPollTop5, 5000);   // then every 5s
+    _tsTop5Timer = setInterval(_tsPollTop5, _TS_TOP5_MS);
 }
 
 function _tsStopTop5Polling() {
@@ -1618,22 +1755,22 @@ function _tsRenderTsBars() {
         bars.forEach((b, i) => {
             const row = el.children[i];
             if (!row) return;
-            const set = (sel, txt) => { const e = row.querySelector(sel); if (e) e.textContent = txt; };
-            set('[data-el="nVal"]',  'n=' + (b.sc || 0));
-            const sEl = row.querySelector('[data-el="sVal"]');
-            if (sEl) sEl.textContent = (b.sc >= 2) ? 'σ=' + (b.std || 0).toFixed(4) : 'σ=—';
-            // Right-side best score with movement arrow
+            // The score is the only number left inline — n / μ / σ moved into the
+            // hover card, which rebuilds from live state on every hover and so
+            // needs no patching here.
             const bestEl = row.querySelector('[data-el="bestVal"]');
-            if (bestEl) {
-                const arrow = b.move === 'up'   ? '<span style="color:#34d399" title="moved up">⬆</span>'
-                            : b.move === 'down' ? '<span style="color:#f87171" title="moved down">⬇</span>'
-                            : '';
-                const bestText = (b.best != null) ? b.best.toFixed(4) : '—';
-                bestEl.innerHTML = arrow + bestText;
-            }
-            // Ensure the reaction product is fetched (no-op if cached). The
-            // data-prod-for cell already exists in this row; _tsFetchProduct
-            // patches it when the result arrives.
+            if (bestEl) bestEl.textContent =
+                'Elion score: ' + ((b.best != null) ? b.best.toFixed(4) : '—');
+            // The movement arrow sits on the rank line, not glued to the score —
+            // "⬆Elion score: 9.5000" reads as one string and it is two facts.
+            const mvEl = row.querySelector('[data-el="mv"]');
+            if (mvEl) mvEl.innerHTML =
+                  b.move === 'up'   ? '<span style="color:#34d399" title="moved up">⬆</span>'
+                : b.move === 'down' ? '<span style="color:#f87171" title="moved down">⬇</span>' : '';
+            const rkEl = row.querySelector('[data-el="rank"]');
+            if (rkEl) rkEl.textContent = '#' + (i + 1);
+            // Ensure the reaction product is fetched (no-op if cached) so the
+            // hover card can show it the instant it is opened.
             const partner = b.bestPartner || '—';
             if (partner && partner !== '—') _tsFetchProduct(rxnKey, b.name, partner);
         });
@@ -1641,77 +1778,47 @@ function _tsRenderTsBars() {
     }
     el._tsIdSig = idSig;
 
-    el.innerHTML = bars.map(b => {
-        const sc      = b.sc || 0;
-        const std     = b.std || 0;
-        const stdNorm = Math.min(std / (b.mu || 1), 1);
-        const stdColor = stdNorm < 0.15 ? '#34d399' : stdNorm < 0.4 ? '#fbbf24' : '#94a3b8';
+    // ── The SWAP ──────────────────────────────────────────────────────────
+    // The row is now the REACTION — rid ⊕ partner → product, three RDKit
+    // structures, with each reactant's building-block id and source CSV path
+    // and the product's Elion score. Hovering it brings up the numbers
+    // (product SMILES, n / μ / σ, best) that used to live here; clicking pins
+    // that card so the SMILES can be selected and copied.
+    //
+    // Rationale for the direction: what a reagent IS should not require a
+    // hover. The posterior is the derived quantity, and it is the thing that
+    // changes every poll — so it belongs in the transient view, not the one
+    // that has to stay stable while you read five rows of chemistry.
+    el.innerHTML = bars.map((b, i) => {
         const partner = b.bestPartner || '—';
         const rid     = b.name;
-        // Show the reaction PRODUCT (rid ⊕ partner under the reaction SMARTS) in
-        // place of rid's own building-block SMILES. Fetched async; shows '…'
-        // until it arrives, then patched to the product or 'no product'.
-        const prodKey  = _tsProdKey(rid, partner);
-        const prodSmi  = _tsProductCache[prodKey];
-        if (partner && partner !== '—') _tsFetchProduct(rxnKey, rid, partner);
-        const smilesText = (partner === '—')
-            ? '—'
-            : (prodSmi === undefined ? '…'
-               : (prodSmi ? prodSmi : 'no product'));
-        const smilesColor = (prodSmi && prodSmi.length) ? '#67e8f9' : '#475569';
+        const bestNum = (b.best != null) ? b.best : null;
+        const args    = `'${rxnKey}','${rid}','${partner}',${bestNum != null ? bestNum : 'null'}`;
 
-        // Right-side value: BEST molecule score, prefixed with a movement arrow
-        // showing how this building block's rank changed since the last 5s refresh.
+        // Prefetch the product so the hover card has it the moment it opens.
+        if (partner && partner !== '—') _tsFetchProduct(rxnKey, rid, partner);
+
         const arrow = b.move === 'up'   ? '<span style="color:#34d399" title="moved up">⬆</span>'
                     : b.move === 'down' ? '<span style="color:#f87171" title="moved down">⬇</span>'
                     : '';   // unchanged position → no arrow
-        const bestText = (b.best != null) ? b.best.toFixed(4) : '—';
 
-        // RDKit 2D structure for this building block (id column), with the id
-        // shown underneath. The <object> loads the rendered SVG; if the id has
-        // no SMILES (204) the inner fallback text shows instead.
-        const molUrl = rxnKey ? `/vina_visualization/ts_mol_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(rid)}?w=96&h=48` : '';
-        const molBlock = molUrl
-            ? `<object type="image/svg+xml" data="${molUrl}" width="96" height="48"
-                       style="pointer-events:none;display:block;margin:0 auto" aria-label="structure of ${rid}"></object>`
-            : '';
-
-        // Partner building block — the reagent that reacts with this one. Show its
-        // own small structure above its id so the pairing is visible.
-        const partnerUrl = (rxnKey && partner && partner !== '—')
-            ? `/vina_visualization/ts_mol_svg/${encodeURIComponent(rxnKey)}/${encodeURIComponent(partner)}?w=80&h=40` : '';
-        const partnerBlock = (partner && partner !== '—')
-            ? `<span style="display:inline-flex;flex-direction:column;align-items:center;gap:1px;vertical-align:middle">
-                 ${partnerUrl ? `<object type="image/svg+xml" data="${partnerUrl}" width="80" height="40" style="pointer-events:none;display:block" aria-label="structure of ${partner}"></object>` : ''}
-                 <span style="font-family:monospace;font-size:9px;color:#0f766e">${partner}</span>
-               </span>`
-            : `<span style="font-family:monospace;font-size:9px;color:#1e3a5f">—</span>`;
-
-        return `<div style="padding:6px 0;border-bottom:0.5px solid rgba(148,163,184,0.07)">
-          <div style="display:grid;grid-template-columns:104px 1fr auto;align-items:start;gap:10px">
-            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:help"
-                 onmouseenter="_tsHoverCard(event,'${rxnKey}','${rid}','${partner}',${b.best != null ? b.best : 'null'})"
-                 onmouseleave="_tsHoverCardHide()"
-                 onclick="_tsHoverPin(event,'${rxnKey}','${rid}','${partner}',${b.best != null ? b.best : 'null'})">
-              ${molBlock}
-              <span data-el="ridLabel" style="font-family:monospace;font-size:10px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px">${rid}</span>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
-              <code data-prod-for="${prodKey}" title="Product: ${rid} ⊕ ${partner}"
-                    style="font-family:monospace;font-size:11px;color:${smilesColor};background:rgba(8,145,178,0.08);
-                           border:0.5px solid rgba(8,145,178,0.18);border-radius:4px;padding:3px 7px;
-                           word-break:break-all;line-height:1.4;user-select:all;cursor:text">${smilesText}</code>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <span data-el="nVal" style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(8,145,178,0.15);color:#67e8f9">n=${sc}</span>
-                <span style="font-size:9px;color:#94a3b8">μ=${b.mu.toFixed(4)}</span>
-                <span data-el="sVal" style="font-size:9px;color:${(sc>=2)?stdColor:'#1e3a5f'}">${sc >= 2 ? 'σ='+std.toFixed(4) : 'σ=—'}</span>
-                <span style="font-size:9px;color:#64748b" title="reacts with">⊕ reacts with</span>
-                ${partnerBlock}
-              </div>
-            </div>
-            <span data-el="bestVal" title="Best single molecule score"
-                  style="font-size:11px;font-weight:600;color:#f59e0b;white-space:nowrap;display:inline-flex;align-items:center;gap:2px">${arrow}${bestText}</span>
+        // data-el="ridLabel" is load-bearing beyond looks: _tsRenderTsBars uses
+        // it to tell "no rows yet" from "rows are present", so every row must
+        // carry one.
+        return `<div style="padding:8px 2px;border-bottom:0.5px solid rgba(148,163,184,0.07);cursor:help"
+             onmouseenter="_tsHoverCard(event,${args})"
+             onmouseleave="_tsHoverCardHide()"
+             onclick="_tsHoverPin(event,${args})"
+             title="hover for the posterior · click to pin and copy">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span data-el="rank" style="font-family:monospace;font-size:9.5px;font-weight:700;color:#22d3ee;
+                  background:rgba(34,211,238,0.12);border:0.5px solid rgba(34,211,238,0.35);
+                  border-radius:4px;padding:1px 6px">#${i + 1}</span>
+            <span data-el="ridLabel" style="font-family:monospace;font-size:10px;color:#94a3b8;
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${rid} ⊕ ${partner}</span>
+            <span data-el="mv" style="margin-left:auto;font-size:10px;font-family:monospace">${arrow}</span>
           </div>
+          ${_tsRxnBlock(rxnKey, rid, partner, bestNum, { selectable: true })}
         </div>`;
     }).join('');
 }

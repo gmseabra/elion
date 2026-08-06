@@ -75,7 +75,88 @@ _REACTION_CATALOGUE = {
         "reagent_files": ["rxn208_1.csv", "rxn208_2.csv"],
     },
 }
-_BB_BASE    = _tscfg.TS_BB_BASE
+
+# ── Building-block library root ──────────────────────────────────────────────
+# Where a RUN draws its reagent CSVs from. Relative entries in
+# generator.TS.reagent_file_list are joined onto this; absolute entries ignore
+# it. NOT the same as visualizer.bb_scan_dir, which only pre-fills the Import
+# box and is usually a superset of this.
+#
+# Precedence:  $UI_TS_BB_BASE  >  generator.TS.bb_base  >  ELION_CWD-derived
+#
+# The middle level is the important one: generators/TS.py reads that SAME yml
+# key, so the engine and this dashboard resolve reagents to the same directory
+# by construction. Before it existed, the UI derived its base from ELION_CWD
+# while the yml handed elion.py absolute paths into a different tree, and the
+# two silently disagreed.
+#
+# Read once at import (restart Flask after editing the yml). Every failure —
+# missing file, missing key, malformed YAML, non-string value — is swallowed
+# and the ELION_CWD-derived default is used, so a config mistake can never
+# break module import. Same contract as _resolve_output_dir/_resolve_debug_dir.
+def _resolve_bb_base() -> str:
+    env = os.environ.get("UI_TS_BB_BASE", "").strip()
+    if env:
+        return os.path.expanduser(env)
+    try:
+        import yaml as _yaml
+        with open(os.path.join(_ELION_CWD, _ELION_YML)) as _f:
+            _gen = ((_yaml.safe_load(_f) or {}).get("generator") or {})
+        _ts_sec = _gen.get("TS") or {}
+        _b = _ts_sec.get("bb_base")
+        if isinstance(_b, str) and _b.strip():
+            return os.path.expanduser(_b.strip())
+    except Exception as _e:
+        logger.warning("[ts_routes] generator.TS.bb_base unreadable (%s) — "
+                       "falling back to %s", _e, _tscfg.TS_BB_BASE)
+    return _tscfg.TS_BB_BASE
+
+_BB_BASE    = _resolve_bb_base()
+
+
+# ── Results root ─────────────────────────────────────────────────────────────
+# Where a RUN writes its result CSVs. A relative generator.TS.results_filename
+# is joined onto this; an absolute one ignores it. Read by generators/TS.py from
+# the SAME yml key, so engine and dashboard agree by construction.
+#
+# Precedence:  $UI_TS_RESULTS_BASE  >  generator.TS.results_base  >  ""
+#
+# Empty is a legitimate answer here (unlike _BB_BASE, which has an
+# ELION_CWD-derived fallback): with no base, an absolute results_filename still
+# works exactly as it always did, and a relative one resolves against the elion
+# process CWD. Failures are swallowed, same contract as the resolvers above.
+def _resolve_results_base() -> str:
+    env = os.environ.get("UI_TS_RESULTS_BASE", "").strip()
+    if env:
+        return os.path.expanduser(env)
+    try:
+        import yaml as _yaml
+        with open(os.path.join(_ELION_CWD, _ELION_YML)) as _f:
+            _gen = ((_yaml.safe_load(_f) or {}).get("generator") or {})
+        _b = (_gen.get("TS") or {}).get("results_base")
+        if isinstance(_b, str) and _b.strip():
+            return os.path.expanduser(_b.strip())
+    except Exception as _e:
+        logger.warning("[ts_routes] generator.TS.results_base unreadable (%s) — "
+                       "results_filename will be used as-is", _e)
+    return ""
+
+_RESULTS_BASE = _resolve_results_base()
+
+
+def _abs_results_path(results_filename) -> str:
+    """Absolutise a yml results_filename against _RESULTS_BASE.
+
+    Needed because results_filename may now be relative ("results_TS/x.csv").
+    Taking os.path.dirname() of that directly yields the bare fragment
+    "results_TS", which is what would land in the UI's OUTPUT DIR box.
+    """
+    if not isinstance(results_filename, str) or not results_filename.strip():
+        return ""
+    p = os.path.expanduser(results_filename.strip())
+    if not os.path.isabs(p) and _RESULTS_BASE:
+        p = os.path.join(_RESULTS_BASE, p)
+    return os.path.abspath(p)
 
 # ── Output directory for dashboard JSON artifacts ──────────────────────────
 # The TS backend writes two kinds of JSON under a single base "output" folder:
@@ -497,10 +578,11 @@ else:
         # thompson_sampling.py lives in generators/TS/, which isn't on sys.path
         # yet (the loader runs before elion.py sets up its path). Add it.
         if 'thompson_sampling' not in sys.modules:
-            _ts_dir_cands = [
-                _tscfg.TS_ENGINE_DIR,
+            _ts_dir_cands = [c for c in (
+                __TS_ENGINE_DIR__,
+                os.environ.get('TS_ENGINE_DIR', ''),
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generators', 'TS'),
-            ]
+            ) if c]
             for _d in _ts_dir_cands:
                 if os.path.isfile(os.path.join(_d, 'thompson_sampling.py')):
                     if _d not in sys.path:
@@ -564,6 +646,27 @@ else:
         print(f'[LOADER] FATAL ERROR loading checkpoint: {_e}', flush=True)
         traceback.print_exc()
 """
+    # `loader_code` is a RAW, NON-f string — deliberately, because the loader
+    # body is full of its own f-strings ('{_ckpt_path!r}', '{len(...)}') that an
+    # f-template would try to evaluate here. The consequence is that anything
+    # meant to come from THIS module has to be substituted explicitly.
+    #
+    # This bit me: a previous edit replaced a hardcoded engine path with a bare
+    # `_tscfg.TS_ENGINE_DIR` inside the literal. `_tscfg` is defined in
+    # ts_routes.py, not in the generated file, so the token was written out
+    # verbatim and every run died with
+    #     warmup_checkpoint_loader.py line 29: NameError: name '_tscfg' is not defined
+    # which killed checkpoint loading — so warmup re-ran from scratch every time.
+    #
+    # repr() rather than a bare substitution: it quotes and escapes the path, so
+    # a directory containing a quote or backslash cannot produce broken source.
+    loader_code = loader_code.replace("__TS_ENGINE_DIR__", repr(_tscfg.TS_ENGINE_DIR))
+    if "__TS_ENGINE_DIR__" in loader_code or "_tscfg" in loader_code:
+        # Fail loudly here rather than writing a file that NameErrors at runtime.
+        logger.error("[TS] loader template still references this module's names "
+                     "after substitution — refusing to write %s", loader_path)
+        return
+
     try:
         with open(loader_path, 'w') as f:
             f.write(loader_code.strip() + '\n')
@@ -664,6 +767,51 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
     env.update(extra_env)
     env["PYTHONPATH"] = _ELION_CWD + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONUNBUFFERED"] = "1"
+
+    # ── WHICH interpreter is about to run the engine, and can it see the GPU ──
+    # This single line would have saved several rounds of guessing.
+    #
+    # ELION_VENV defaults to `sys.executable` — the interpreter running FLASK.
+    # That is the UI's environment, not necessarily the compute environment. On
+    # this box they differ: Flask runs in `elion-ui` (py3.10, torch built for
+    # CUDA 13, which the 525 driver cannot initialise -> CPU), while the engine
+    # is meant to run in `elion_backend` (py3.11, working CUDA). Same code, same
+    # config, ~90x apart — and NOTHING in any log said which one was used. The
+    # only trace was a filesystem path buried inside an unrelated UserWarning.
+    #
+    # `input_TS.yml` already points the GIGN scorer at `elion_backend`
+    # (pose.gign_conda_env); TS had no equivalent, so it silently inherited
+    # Flask's.
+    #
+    # Probe runs with a hard timeout and never raises: a diagnostic must not be
+    # able to stop a run.
+    try:
+        _probe = subprocess.run(
+            [python, "-c",
+             "import sys,warnings;warnings.filterwarnings('ignore');"
+             "v='%d.%d'%sys.version_info[:2]\n"
+             "try:\n"
+             " import torch;t=torch.__version__;c=torch.cuda.is_available();"
+             "d=torch.cuda.get_device_name(0) if c else 'CPU'\n"
+             "except Exception as e:\n t,c,d='(no torch)',False,str(e)[:40]\n"
+             "print(f'{sys.executable}|{v}|{t}|{c}|{d}')"],
+            capture_output=True, text=True, timeout=60, env=env)
+        _info = (_probe.stdout or "").strip().split("|")
+        if len(_info) == 5:
+            _exe, _pyv, _tv, _cuda, _dev = _info
+            _ok = (_cuda == "True")
+            push(f"[DEBUG:env] interpreter={_exe}")
+            push(f"[DEBUG:env] python={_pyv} torch={_tv} cuda_available={_cuda} device={_dev}")
+            if not _ok:
+                push("⚠ [DEBUG:env] engine will score on CPU. If another env on this "
+                     "box has working CUDA, point the engine at it:")
+                push("⚠ [DEBUG:env]     export ELION_VENV=/path/to/that/env/bin/python")
+                push(f"⚠ [DEBUG:env] (ELION_VENV is currently "
+                     f"{'set' if os.environ.get('ELION_VENV') else 'UNSET, so it defaulted to Flask''s own interpreter'})")
+        else:
+            push(f"[DEBUG:env] interpreter={python} (probe returned nothing usable)")
+    except Exception as _e:
+        push(f"[DEBUG:env] interpreter={python} (probe failed: {type(_e).__name__})")
 
     rxn_key_val = extra_env.get("TS_RXN_KEY", "")
     ckpt_path   = _warmup_cache_path(rxn_key_val) if rxn_key_val else None
@@ -962,6 +1110,13 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
         _TOP5_EVERY    = 32     # recompute the ranking at most every N updates
         # …but not before the panel has anything in it. See _update_reagent.
         _TOP5_WARM_N   = 64     # while the reagent dict is this small, every update
+        # How many reagents the ranking carries. The KEY stays "top5" and
+        # #tsTsBars still shows 5 (the frontend slices) — this is headroom for
+        # the RL tab's user-settable "top N" picker, which would otherwise be
+        # capped at whatever this list happens to be. nlargest(20) costs the
+        # same single O(n) pass as nlargest(5); only the payload grows, by ~15
+        # small dicts per poll.
+        _TOP_N         = 20
 
         # ── Parse-match trace (see _dbg) ──────────────────────────────────
         # `#tsTsBars` is fed from _history["top5"], which is fed from these
@@ -1027,19 +1182,41 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
                          f"first={(_history.get('top5') or [{}])[0].get('name')}")
 
         def _recompute_top5():
-            """Maintain _history['top5']: the 5 reagents with the highest 'best'
-            molecule score (monotonic ranking, stable across restarts).
+            """Timed wrapper — see the [DEBUG:loop] top5_ms/call counter.
+
+            This walks _history['reagents'] in FULL on every call, and a warmup
+            checkpoint restore seeds that dict with tens of thousands of
+            entries. Whether that matters is a measurement, not an assumption:
+            top5_ms/call x top5_calls per iteration is the answer.
+            """
+            import time as _t_mod          # local: _time_ws is imported further down
+            _t0 = _t_mod.perf_counter()
+            try:
+                return _recompute_top5_inner()
+            finally:
+                _history["_dbg_top5_s"] = (_history.get("_dbg_top5_s", 0.0)
+                                           + _t_mod.perf_counter() - _t0)
+                _history["_dbg_top5_calls"] = _history.get("_dbg_top5_calls", 0) + 1
+
+        def _recompute_top5_inner():
+            """Maintain _history['top5']: the _TOP_N reagents with the highest
+            'best' molecule score (monotonic ranking, stable across restarts).
             Reagents with no best score yet are ranked below scored ones by μ.
-            Uses heapq.nlargest (O(n) single pass) rather than a full sort."""
+            Uses heapq.nlargest (O(n) single pass) rather than a full sort.
+
+            The key is still called "top5" for wire compatibility — every reader
+            (/ts_top5, _tsTop5ToBars, the session files on disk) keys off that
+            name, and the list has always been "the ranking", not "exactly five".
+            #tsTsBars slices to 5 client-side so its appearance is unchanged."""
             import heapq
             items = _history["reagents"].items()
             # Partition without building two full intermediate lists where avoidable.
             scored   = [(r["best"], n, r) for n, r in items if r.get("best") is not None]
-            top_scored = heapq.nlargest(5, scored, key=lambda t: t[0])
+            top_scored = heapq.nlargest(_TOP_N, scored, key=lambda t: t[0])
             top = [(n, r) for _b, n, r in top_scored]
-            if len(top) < 5:
+            if len(top) < _TOP_N:
                 # Backfill with the highest-μ unscored reagents.
-                need = 5 - len(top)
+                need = _TOP_N - len(top)
                 unscored = ((n, r) for n, r in items if r.get("best") is None)
                 top_uns = heapq.nlargest(need, unscored, key=lambda kv: kv[1].get("mu", 0))
                 top.extend(top_uns)
@@ -1243,13 +1420,39 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
                         _history["_dbg_first_stdout"].append(line[:120])
                         push(f"[DEBUG:stdout#{len(_history['_dbg_first_stdout'])}] {line!r}")
                     if _history["_dbg_lines_seen"] % 50 == 0:
+                        # ── Reader-side cost accounting ──────────────────────
+                        # If the engine reports a large write_ms, it is blocked
+                        # on the pipe, which means THIS loop is the bottleneck.
+                        # These numbers say which part of it:
+                        #   parse_ms  — total time in _history_parse per line
+                        #   top5_ms   — time inside _recompute_top5 alone
+                        #   nreag     — size of _history['reagents'], which
+                        #               _recompute_top5 walks in FULL on every
+                        #               call. A checkpoint restore seeds this
+                        #               with tens of thousands of entries, so
+                        #               this is O(nreag) per parsed line and
+                        #               grows as more reagents get scored —
+                        #               which would show up as an iteration
+                        #               time that climbs, exactly as tqdm
+                        #               reported (3.16 -> 4.74 s/it).
+                        _pt = _history.get("_dbg_parse_s", 0.0)
+                        _tt = _history.get("_dbg_top5_s", 0.0)
+                        _tc = _history.get("_dbg_top5_calls", 0) or 1
+                        _ln = _history["_dbg_lines_seen"] or 1
                         push(f"[DEBUG:loop] {_history['_dbg_lines_seen']} stdout lines | "
                              f"evaluate_seen={_history['_dbg_evaluate_seen']} | "
                              f"gate={_history['_dbg_gate_opened']} | "
                              f"scores={_history['_dbg_score_added']} | "
                              f"qlen={_stdout_queue.qsize()} | "
+                             f"parse_ms/line={_pt / _ln * 1000:.3f} | "
+                             f"top5_ms/call={_tt / _tc * 1000:.3f} | "
+                             f"top5_calls={_history.get('_dbg_top5_calls', 0)} | "
+                             f"nreag={len(_history.get('reagents', {}))} | "
                              f"last_line={line[:60]!r}")
+                    _p_t0 = _time_ws.perf_counter()
                     _history_parse(line)
+                    _history["_dbg_parse_s"] = (_history.get("_dbg_parse_s", 0.0)
+                                                + _time_ws.perf_counter() - _p_t0)
                     # Persist the session on a TIME throttle, not per-N-lines.
                     # _write_session json-dumps the full history (points+scores,
                     # which grow one-per-molecule). Doing that every 10 lines makes
@@ -2497,9 +2700,11 @@ def vina_ts_config():
         if isinstance(_explicit, str) and _explicit.strip():
             _default_out = os.path.expanduser(_explicit.strip())
         else:
-            _rf = ts.get('results_filename')
-            _default_out = (os.path.dirname(os.path.expanduser(_rf.strip()))
-                            if isinstance(_rf, str) and _rf.strip() else '')
+            # _abs_results_path folds in generator.TS.results_base first — a
+            # relative results_filename would otherwise leave the bare fragment
+            # ("results_TS") in the box instead of a usable directory.
+            _abs = _abs_results_path(ts.get('results_filename'))
+            _default_out = os.path.dirname(_abs) if _abs else ''
 
         return jsonify({
             'status':      'ok',
