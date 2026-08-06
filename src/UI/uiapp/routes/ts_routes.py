@@ -1,7 +1,9 @@
 # =============================================================================
 # routes/ts_routes.py
 # Thompson Sampling generator endpoints:
-#   ts_run    — POST: launch one elion.py per reaction in parallel (CPU-pinned)
+#   ts_run    — POST: launch one elion.py per reaction (CPU-pinned; GPU-pinned/
+#               serialized via _TS_GPU_POOL so parallel reactions can't collide
+#               on one card — see the pool note below)
 #   ts_status — GET SSE: stream stdout line-by-line until __DONE__
 #   ts_kill   — POST: SIGTERM the elion.py subprocess(es)
 #   ts_cpu    — GET SSE: stream per-core CPU% every second via psutil
@@ -39,6 +41,88 @@ _ts_lock = threading.Lock()
 _ELION_CWD  = _tscfg.ELION_CWD
 _ELION_YML  = _tscfg.ELION_YML
 _ELION_VENV = _tscfg.ELION_VENV
+
+# ── GPU slot pool ───────────────────────────────────────────────────────────
+# ts_run launches one elion.py per checked reaction *in parallel*. Every engine
+# process loads ChemBERT onto a hardcoded cuda:0, but nothing here ever split the
+# GPU the way it splits CPU cores. On a box with fewer usable GPUs than reactions
+# the extra processes hit
+#     RuntimeError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
+# at torch.load — the classic single-context / Exclusive_Process signature: the
+# first reaction to reach CUDA grabs the card for its whole run, the next one is
+# refused and dies (rc=1, no results CSV). It is NOT out-of-memory and NOT the
+# CPU-fallback problem the probe in _run_ts_job warns about.
+#
+# This pool is the missing GPU partition: at most one engine per physical device
+# runs at once, each pinned to its own GPU via CUDA_VISIBLE_DEVICES, and any
+# further jobs BLOCK until a device frees up (so 2 reactions on a 1-GPU box run
+# back-to-back instead of one crashing).
+#
+#   ELION_TS_GPU_IDS       comma list of device ids to use   (default: auto-detect)
+#   ELION_TS_MAX_GPU_JOBS  cap on concurrent GPU jobs         (default: #devices)
+#
+# No GPU detected (and none configured) → gating is disabled and runs parallelise
+# freely, since CPU-only engines don't contend for a card.
+
+def _detect_gpu_ids() -> list:
+    """Driver-level GPU inventory via `nvidia-smi -L`.
+
+    Deliberately driver-level, not torch-level: Flask's own torch may be built
+    for a CUDA the installed driver can't initialise (see the probe note in
+    _run_ts_job_inner), so torch.cuda.device_count() here can read 0 on a box
+    that has perfectly good GPUs for the engine's interpreter.
+    """
+    env_ids = os.environ.get("ELION_TS_GPU_IDS", "").strip()
+    if env_ids:
+        return [x.strip() for x in env_ids.split(",") if x.strip() != ""]
+    try:
+        out = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                             text=True, timeout=10).stdout or ""
+        return [str(i) for i, ln in enumerate(out.splitlines())
+                if ln.strip().startswith("GPU ")]
+    except Exception:
+        return []
+
+_TS_GPU_IDS = _detect_gpu_ids()
+try:
+    _TS_MAX_GPU_JOBS = int(os.environ.get("ELION_TS_MAX_GPU_JOBS", "").strip()
+                           or len(_TS_GPU_IDS))
+except ValueError:
+    _TS_MAX_GPU_JOBS = len(_TS_GPU_IDS)
+
+# Bounded pool of device tokens: acquiring removes one, releasing returns it.
+# A job that can't get a token blocks on .get() until a running job releases.
+_TS_GPU_POOL: "queue.Queue" = queue.Queue()
+if _TS_GPU_IDS:
+    _slots = (_TS_GPU_IDS if _TS_MAX_GPU_JOBS >= len(_TS_GPU_IDS)
+              else _TS_GPU_IDS[:max(1, _TS_MAX_GPU_JOBS)])
+    for _gid in _slots:
+        _TS_GPU_POOL.put(_gid)
+_TS_GPU_SLOT_COUNT = _TS_GPU_POOL.qsize()   # actual concurrent-run capacity
+logger.info("[TS] GPU slot pool: devices=%s concurrent_slots=%s (env ELION_TS_GPU_IDS/"
+            "ELION_TS_MAX_GPU_JOBS override)", _TS_GPU_IDS, _TS_GPU_SLOT_COUNT)
+
+
+def _ts_gpu_acquire(push=None, job_id: str = ""):
+    """Block until a GPU device token is free; return its device id (str).
+
+    Returns None when no GPUs are configured/detected → caller runs immediately
+    without pinning (CPU engines don't need a slot).
+    """
+    if not _TS_GPU_IDS:
+        return None
+    try:
+        return _TS_GPU_POOL.get_nowait()
+    except queue.Empty:
+        if push:
+            push(f"[DEBUG:gpu] all {_TS_GPU_SLOT_COUNT} GPU slot(s) busy — "
+                 f"job {job_id[:8]} queued, waiting for a free GPU…")
+        return _TS_GPU_POOL.get()   # blocks until a running job releases
+
+
+def _ts_gpu_release(gpu_id) -> None:
+    if gpu_id is not None:
+        _TS_GPU_POOL.put(gpu_id)
 
 # ── Reaction catalogue ─────────────────────────────────────────────────────
 # Add new reactions here — key → smarts + reagent csv filenames.
@@ -748,7 +832,40 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
                 cpu_cores: list = None,
                 results_path: str = None) -> None:
     """
-    Worker thread: runs  python elion.py -i <yml>  in _ELION_CWD.
+    Thread target. Acquires one GPU slot (blocking if every device is busy),
+    runs the engine pinned to that device, and ALWAYS releases the slot.
+
+    This is the guard that stops parallel reactions colliding on one card
+    (see the _TS_GPU_POOL note above): the slot is held for the whole engine
+    subprocess lifetime and released in a finally, whether the run succeeds,
+    errors, or is killed. The heavy lifting stays in _run_ts_job_inner.
+    """
+    try:
+        _q = _ts_jobs[job_id]["queue"]
+        def _push(line): _q.put(line)
+    except Exception:
+        _push = None
+
+    gpu_id = _ts_gpu_acquire(_push, job_id)
+    if gpu_id is not None and _push:
+        _push(f"[DEBUG:gpu] job {job_id[:8]} acquired GPU {gpu_id} "
+              f"(pool: {_TS_MAX_GPU_JOBS} slot(s) over devices {_TS_GPU_IDS})")
+    try:
+        _run_ts_job_inner(job_id, yml_path, extra_env, cpu_cores,
+                          results_path, gpu_id=gpu_id)
+    finally:
+        _ts_gpu_release(gpu_id)
+        if gpu_id is not None and _push:
+            _push(f"[DEBUG:gpu] job {job_id[:8]} released GPU {gpu_id}")
+
+
+def _run_ts_job_inner(job_id: str, yml_path: str, extra_env: dict,
+                cpu_cores: list = None,
+                results_path: str = None,
+                gpu_id=None) -> None:
+    """
+    Worker body: runs  python elion.py -i <yml>  in _ELION_CWD, pinned to the
+    GPU named by gpu_id (via CUDA_VISIBLE_DEVICES) when one was assigned.
     If results_path is given, renames the output CSV after successful
     completion to include mean and std of the score column:
       <short_name>_<timestamp>_mean<X.XX>_std<X.XX>.csv
@@ -765,6 +882,16 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
     cmd = [python, "elion.py", "-i", yml_path]
     env = os.environ.copy()
     env.update(extra_env)
+    # Pin this job to its assigned physical GPU. One engine per device is what
+    # prevents the concurrent-"cuda:0" collision (CUDA error: device(s) busy or
+    # unavailable) when more reactions are launched than there are GPUs. Set here
+    # — before the CUDA probe below — so the probe reports the same device the
+    # engine will actually use. gpu_id is None only when no GPU was detected, in
+    # which case we leave CUDA_VISIBLE_DEVICES untouched (engine runs on CPU).
+    if gpu_id is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        push(f"[DEBUG:gpu] CUDA_VISIBLE_DEVICES={gpu_id} for this job "
+             f"(engine sees it as cuda:0)")
     env["PYTHONPATH"] = _ELION_CWD + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONUNBUFFERED"] = "1"
 
