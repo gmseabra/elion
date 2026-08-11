@@ -1568,6 +1568,19 @@ def _pdbqt_probe(p):
 # anything. File bodies are still fetched one at a time via POST /pose/read_pdbqt
 # as the stepper visits them.
 # =============================================================================
+# Suffixes the folder import understands.
+#
+# This used to be '.pdbqt' alone, which made the tool unable to re-open its own
+# output: "⬇ Download filtered batch" converts every match to .pdb and zips it,
+# so the moment a user unzipped that batch and pointed the importer at it, the
+# scan reported "no .pdbqt files found" — the one folder guaranteed to be full of
+# real, scored, best-pose structures was the one folder it could not read.
+# _pdbqt_scores already parses the REMARK line those .pdb files carry, and
+# _pdbqt_probe already tolerates a file with no MODEL wrapper, so the only thing
+# standing in the way was the extension test.
+_POSE_IMPORT_SUFFIXES = ('.pdbqt', '.pdb', '.ent')
+
+
 @app.route('/pose/scan_pdbqt', methods=['POST'])
 def pose_scan_pdbqt():
     from pathlib import Path
@@ -1585,7 +1598,7 @@ def pose_scan_pdbqt():
     paths, truncated = [], False
     try:
         for p in root.rglob('*'):
-            if p.is_file() and p.suffix.lower() == '.pdbqt':
+            if p.is_file() and p.suffix.lower() in _POSE_IMPORT_SUFFIXES:
                 paths.append(p)
                 if len(paths) >= _POSE_SCAN_MAX_FILES:
                     truncated = True
@@ -1595,7 +1608,8 @@ def pose_scan_pdbqt():
         return jsonify({'ok': False, 'err': str(e)}), 200
 
     if not paths:
-        return jsonify({'ok': False, 'err': 'no .pdbqt files found under %s' % str(root)}), 200
+        return jsonify({'ok': False, 'err': 'no %s files found under %s'
+                        % ('/'.join(_POSE_IMPORT_SUFFIXES), str(root))}), 200
 
     paths.sort()
     files, n_lig, n_rec, n_scored = [], 0, 0, 0
@@ -1889,7 +1903,7 @@ def _pdb_block_with_conect(block):
         return block
 
 
-def _pdbqt_models_to_pdb(text):
+def _pdbqt_models_to_pdb(text, already_pdb=False):
     """Convert every pose in a .pdbqt to PDB blocks.
 
     Converts all of them so callers can choose: the download route keeps only
@@ -1898,6 +1912,12 @@ def _pdbqt_models_to_pdb(text):
     prefixed with a REMARK carrying that pose's Vina affinity. PDBQT-only records
     (ROOT/BRANCH/TORSDOF) are dropped — they have no meaning in PDB. had_models
     is False for files with no MODEL wrapper, i.e. prepared receptors.
+
+    already_pdb=True is for the .pdb/.ent inputs the importer now accepts
+    (including this tool's own downloaded batches). Those lines already carry a
+    real element symbol in columns 76-77, so rewriting them through
+    _pdbqt_atom_line — which infers the element from the last token past column
+    54 — would be guessing at data that is already correct.
     """
     scores, models = [], []
     cur, cur_score, had_models = [], None, False
@@ -1920,7 +1940,7 @@ def _pdbqt_models_to_pdb(text):
                 pass
             continue
         if head in ('ATOM', 'HETATM'):
-            cur.append(_pdbqt_atom_line(ln))
+            cur.append(ln.rstrip('\n') if already_pdb else _pdbqt_atom_line(ln))
     if cur:
         models.append(cur), scores.append(cur_score)
 
@@ -1977,6 +1997,41 @@ def _pdbqt_to_pdb(text):
     return '\n'.join(lines) + '\n'
 
 
+def _pdb_first_model(text):
+    """Keep MODEL 1 of an already-standard .pdb, verbatim.
+
+    Deliberately NOT _pdbqt_to_pdb. That function rebuilds every atom line and
+    derives the element from the last whitespace token past column 54 — correct
+    for PDBQT, where the AutoDock type sits there, but wrong in principle for a
+    real PDB, which already carries the element in columns 76-77 where the
+    client's ln.slice(76,78) reads it. Passing ATOM/HETATM through untouched
+    keeps two-character elements (Br, Cl, Fe) and occupancy/B-factor columns
+    exactly as written.
+
+    _best_poses.pdb from the download button holds one MODEL per ligand, so the
+    same first-MODEL rule the PDBQT path uses applies here: show pose 1, and let
+    the caller report how many there were.
+    """
+    lines, seen_model = [], False
+    for ln in text.splitlines():
+        head = ln[:6].rstrip()
+        if head == 'MODEL':
+            if seen_model:
+                break                                  # 2nd MODEL onwards → stop
+            seen_model = True
+            continue
+        if head == 'ENDMDL':
+            if seen_model:
+                break
+            continue
+        if head in ('ATOM', 'HETATM'):
+            lines.append(ln.rstrip('\n'))
+    if not lines:
+        return text
+    return '\n'.join(lines) + '\n'
+
+
+
 def _pdbqt_scores(text):
     """Vina affinities (kcal/mol) from a docked *_out.pdbqt*, best pose first.
 
@@ -2002,8 +2057,10 @@ def pose_read_pdbqt():
     raw = (data.get('path') or '').strip()
     if not raw:
         return jsonify({'ok': False, 'err': 'no file path given'}), 200
-    if Path(raw).suffix.lower() != '.pdbqt':
-        return jsonify({'ok': False, 'err': 'not a .pdbqt file: %s' % raw}), 200
+    suffix = Path(raw).suffix.lower()
+    if suffix not in _POSE_IMPORT_SUFFIXES:
+        return jsonify({'ok': False, 'err': 'not a %s file: %s'
+                        % ('/'.join(_POSE_IMPORT_SUFFIXES), raw)}), 200
     try:
         fp = Path(raw).expanduser()
         if not fp.is_file():
@@ -2011,7 +2068,9 @@ def pose_read_pdbqt():
         raw_text = fp.read_text(errors='ignore')
         # Count MODELs before conversion (conversion keeps only the first)
         n_models = sum(1 for ln in raw_text.splitlines() if ln[:6].rstrip() == 'MODEL')
-        pdb = _pdbqt_to_pdb(raw_text)
+        # .pdbqt needs its AutoDock atom types mapped back to elements; .pdb/.ent
+        # is already in the format parsePDB reads, so it passes through untouched.
+        pdb = _pdbqt_to_pdb(raw_text) if suffix == '.pdbqt' else _pdb_first_model(raw_text)
         resp = {'ok': True, 'name': fp.name, 'path': str(fp), 'pdb': pdb}
         if n_models > 1:
             resp['n_models'] = n_models
@@ -2062,10 +2121,11 @@ def pose_download_pdbqt():
             fp = Path(str(p)).expanduser()
         except Exception:
             continue
-        if fp.is_file() and fp.suffix.lower() == '.pdbqt':
+        if fp.is_file() and fp.suffix.lower() in _POSE_IMPORT_SUFFIXES:
             files.append(fp)
     if not files:
-        return jsonify({'ok': False, 'err': 'none of those paths are readable .pdbqt files'}), 200
+        return jsonify({'ok': False, 'err': 'none of those paths are readable %s files'
+                        % '/'.join(_POSE_IMPORT_SUFFIXES)}), 200
 
     # Keep subfolder structure so same-named files in sibling batches don't collide
     try:
@@ -2103,7 +2163,8 @@ def pose_download_pdbqt():
                     skipped += 1
                     continue
 
-                scores, models, had_models = _pdbqt_models_to_pdb(raw)
+                scores, models, had_models = _pdbqt_models_to_pdb(
+                    raw, already_pdb=(fp.suffix.lower() != '.pdbqt'))
                 if not models:                 # nothing convertible in this file
                     skipped += 1
                     continue
@@ -2119,7 +2180,10 @@ def pose_download_pdbqt():
                         arc = str(fp.relative_to(base))
                     except ValueError:
                         arc = fp.name
-                arc = re.sub(r'\.pdbqt$', '', arc, flags=re.I) + '.pdb'
+                # Strip whichever accepted suffix the source had before appending
+                # .pdb. This was '\.pdbqt$' only, which turned a re-downloaded
+                # batch's "foo.pdb" into "foo.pdb.pdb".
+                arc = re.sub(r'\.(pdbqt|pdb|ent)$', '', arc, flags=re.I) + '.pdb'
                 if arc in used:                # last-ditch de-dupe
                     stem, ext = os.path.splitext(arc)
                     n = 2

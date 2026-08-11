@@ -147,7 +147,7 @@ visualizer:
   #
   # host: "0.0.0.0" listens on every interface (reachable from other machines);
   # "127.0.0.1" restricts it to this machine.
-  port: 5002
+  port: 5000
   host: "0.0.0.0"
 
   # ── Default value of the UI's OUTPUT DIR box ──────────────────────────────

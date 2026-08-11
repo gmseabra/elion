@@ -157,7 +157,7 @@ pose:
 
   # Receptor + upload gallery roots (repo-relative; created on first write).
   default_receptor_pdb: "data/pose/receptor/receptor.pdb"
-  default_upload_path:  "data/pose/uploads"
+  default_upload_path:  "/home/huangzihang/repos/user_data/uploaded_pdb"
   default_dir:          "data/pose"
 
   # DeepAtom scorer — the consolidated single-pose driver in the elion tree.
