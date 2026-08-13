@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -60,6 +61,7 @@ VINA_LOG: str = os.path.join(VINA_BASE, "vina_non_cache.log")
 # ── Runtime data ─────────────────────────────────────────────────────────────
 DATA_DIR: Path = REPO_ROOT / "data"
 CONVERTED_ROOT: str = str(_env_path("UI_CONVERTED_PDBQT", DATA_DIR / "converted_pdbqt"))
+
 
 # ── Action knowledge base ────────────────────────────────────────────────────
 #   Main KB (human-authored, read to build the FAISS index) ships in the package.
@@ -198,6 +200,155 @@ def resolve_bind(yml_path: str = "") -> tuple[str, int, str]:
 
 
 UI_HOST, UI_PORT, UI_BIND_SOURCE = resolve_bind()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dev source map (web/static/js/devmap.js, uiapp/routes/devmap_routes.py)
+# -----------------------------------------------------------------------------
+# The hover overlay that names the file and line behind every button. It is a
+# development aid, so it ships OFF: on a shared or demo instance a tooltip
+# quoting `uiapp/routes/pose_routes.py:1064` over every control is noise at
+# best, and reads as a debug build that shipped by accident at worst.
+#
+# Configured beside `port` / `host` in the engine's `input_TS.yml`, because that
+# is already the one file that configures a run:
+#
+#     visualizer:
+#       devmap:
+#         enabled:  false
+#         hotkey:   "alt+ctrl+shift+d"
+#         pin_modifier: "alt"
+#         show_badge:   true
+#         hover_delay_ms: 260
+#
+# Precedence, per key:  $UI_DEVMAP_*  >  visualizer.devmap.*  >  the defaults
+# below. Every failure mode — file absent, malformed YAML, unparseable hotkey,
+# wrong type — falls through to the next level rather than raising. A typo in a
+# developer convenience must never stop the server from starting, which is the
+# same rule `resolve_bind()` follows one section up.
+# ─────────────────────────────────────────────────────────────────────────────
+DEVMAP_DEFAULTS: dict = {
+    "enabled": False,
+    "hotkey": "alt+ctrl+shift+d",
+    "pin_modifier": "alt",
+    "show_badge": True,
+    "hover_delay_ms": 260,
+}
+
+# `ctrl` deliberately means "Ctrl **or** ⌘" — the Ctrl/⌘ convention the rest of
+# the UI already uses, and what devmap.js matched before this was configurable.
+# `meta` is the strict form for anyone who wants ⌘ and only ⌘.
+_MOD_ALIASES = {
+    "ctrl": "ctrl", "control": "ctrl", "ctl": "ctrl", "mod": "ctrl",
+    "alt": "alt", "opt": "alt", "option": "alt",
+    "shift": "shift",
+    "meta": "meta", "cmd": "meta", "command": "meta", "super": "meta", "win": "meta",
+}
+_MOD_LABELS = {"ctrl": "Ctrl/⌘", "alt": "Alt", "shift": "Shift", "meta": "⌘"}
+
+
+def _key_code(key: str) -> str:
+    """The KeyboardEvent.code for a single-key token, or "".
+
+    devmap.js matches on `code` first because `key` is layout- and
+    modifier-dependent: on macOS, Option+D reports `key === "∂"`, so a binding
+    that included Alt could never fire if it only compared `key`.
+    """
+    if len(key) == 1 and key.isalpha():
+        return "Key" + key.upper()
+    if len(key) == 1 and key.isdigit():
+        return "Digit" + key
+    if re.fullmatch(r"f([1-9]|1[0-2])", key):
+        return key.upper()
+    return {"escape": "Escape", "esc": "Escape", "space": "Space",
+            "enter": "Enter", "tab": "Tab", "backquote": "Backquote",
+            "`": "Backquote", "/": "Slash", "\\": "Backslash",
+            ".": "Period", ",": "Comma", "-": "Minus", "=": "Equal"}.get(key, "")
+
+
+def parse_hotkey(spec: str):
+    """``"alt+ctrl+shift+d"`` → a match spec devmap.js can evaluate, or ``None``.
+
+    Returns ``None`` for anything unusable — no key, only modifiers, an empty
+    string — so the caller can fall back rather than install a binding that can
+    never fire. Modifier order in *spec* is preserved in ``label`` so the
+    tooltip footer reads back exactly what was configured.
+    """
+    if not isinstance(spec, str) or not spec.strip():
+        return None
+    tokens = [t.strip().lower() for t in re.split(r"[+\-\s]+", spec.strip()) if t.strip()]
+    if not tokens:
+        return None
+    mods, key, order = set(), "", []
+    for tok in tokens:
+        canon = _MOD_ALIASES.get(tok)
+        if canon:
+            if canon not in mods:
+                mods.add(canon)
+                order.append(canon)
+        elif key:                       # a second non-modifier token: ambiguous
+            return None
+        else:
+            key = tok
+    if not key:
+        return None
+    label = "+".join([_MOD_LABELS[m] for m in order] +
+                     [key.upper() if len(key) == 1 else key.capitalize()])
+    return {
+        "ctrl": "ctrl" in mods, "alt": "alt" in mods,
+        "shift": "shift" in mods, "meta": "meta" in mods,
+        "key": key, "code": _key_code(key), "label": label,
+        "spec": "+".join(order + [key]),
+    }
+
+
+def _env_flag(name: str):
+    """Tri-state: True / False / None when the variable is unset or nonsense."""
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def devmap_settings(yml_path: str = "") -> dict:
+    """Resolved devmap config, always complete and always valid."""
+    out = dict(DEVMAP_DEFAULTS)
+    raw = visualizer_section(yml_path).get("devmap")
+    src = "default"
+    if isinstance(raw, dict):
+        src = "visualizer.devmap"
+        for key in ("enabled", "show_badge"):
+            if isinstance(raw.get(key), bool):
+                out[key] = raw[key]
+        for key in ("hotkey", "pin_modifier"):
+            if isinstance(raw.get(key), str) and raw[key].strip():
+                out[key] = raw[key].strip()
+        delay = raw.get("hover_delay_ms")
+        if isinstance(delay, (int, float)) and 0 <= delay <= 5000:
+            out["hover_delay_ms"] = int(delay)
+
+    for key, env in (("enabled", "UI_DEVMAP_ENABLED"), ("show_badge", "UI_DEVMAP_BADGE")):
+        flag = _env_flag(env)
+        if flag is not None:
+            out[key], src = flag, f"${env}"
+    if os.environ.get("UI_DEVMAP_HOTKEY", "").strip():
+        out["hotkey"], src = os.environ["UI_DEVMAP_HOTKEY"].strip(), "$UI_DEVMAP_HOTKEY"
+
+    combo = parse_hotkey(out["hotkey"])
+    if combo is None:                                  # unparseable → say so, keep working
+        combo = parse_hotkey(DEVMAP_DEFAULTS["hotkey"])
+        out["hotkey_error"] = f"could not parse hotkey {out['hotkey']!r}; using the default"
+        out["hotkey"] = DEVMAP_DEFAULTS["hotkey"]
+    out["combo"] = combo
+    out["hotkey"] = combo["spec"]
+
+    pin = _MOD_ALIASES.get(str(out["pin_modifier"]).strip().lower(), "")
+    out["pin_modifier"] = pin                          # "" disables pin-on-hover
+    out["source"] = src
+    return out
+
 
 # ── DeepAtom (external project; must be configured to use those routes) ───────
 DEEPATOM_SCRIPT: str = os.environ.get("DEEPATOM_SCRIPT", "")

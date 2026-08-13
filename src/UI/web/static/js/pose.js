@@ -910,7 +910,7 @@
         var od=$('poseDaOutDir');var outDir=od?od.value.trim():'';
         fetch('/pose/deepatom_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:PG.mc._ts(),smiles:(L.smiles||''),out_dir:outDir})})
           .then(r=>r.ok?r.json():null).then(res=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';
-            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);
+            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);if(res&&res.conda_env)PG._miniLog('🅒 conda env:  '+res.conda_env,'#7dd3fc',true);
             if(res&&res.cwd)PG._miniLog('📂 cwd:  '+res.cwd,'#7dd3fc',true);
             if(res&&res.log)PG._miniLog('📝 debug log → '+res.log,'#a78bfa',true);
             if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
@@ -927,7 +927,7 @@
         var od=$('poseGignOutDir')||$('poseDaOutDir');var outDir=od?od.value.trim():'';
         fetch('/pose/gign_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:PG.mc._ts(),smiles:(L.smiles||''),out_dir:outDir})})
           .then(r=>r.ok?r.json():null).then(res=>{PG.mc._gignBusy=false;var b=$('poseGignScoreBtn');if(b)b.textContent='⚛ Score (GIGN)';
-            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);
+            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);if(res&&res.conda_env)PG._miniLog('🅒 conda env:  '+res.conda_env,'#7dd3fc',true);
             if(res&&res.cwd)PG._miniLog('📂 cwd:  '+res.cwd,'#7dd3fc',true);
             if(res&&res.log)PG._miniLog('📝 debug log → '+res.log,'#a78bfa',true);
             if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
@@ -1193,7 +1193,7 @@
           }catch(e){return null;}},
         _procReset(){
           const EG=PG.vina.eng;
-          EG._best=Infinity;EG._dg=null;EG._bestHist=[];EG._nImp=0;EG._liveAt=0;
+          EG._best=Infinity;EG._dg=null;EG._bestDg=null;EG._bestHist=[];EG._nImp=0;EG._liveAt=0;
           const p=$('poseProcPanel');if(p)p.style.display='block';
           const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
           const v=$('poseProcVal');if(v){v.textContent='—';v.style.color='#64748b';v.style.textShadow='none';}
@@ -1206,8 +1206,19 @@
           if(best==null||!isFinite(best)||!(best<EG._best-1e-9))return false;     // not a new minimum → leave it alone
           EG._best=best;EG._nImp++;
           const dg=EG._scoreConf(conf);                                           // the reportable ΔG
-          if(dg!=null){
-            EG._dg=dg;EG._bestHist.push(dg);
+          /* The improvement test above is on `best` — the search's own internal
+             score. What gets PLOTTED is `dg`, which _scoreConf recomputes for the
+             same conformation. They are different functions, so a step that
+             strictly improves `best` can report a WORSE ΔG, and a curve that
+             every label calls best-so-far ended up rising mid-run (…-7.0657 at
+             step 4, then -6.9711 at step 5).
+             A best-so-far series must be monotone in the quantity it displays,
+             so the plot and the headline are gated on `dg` improving. `best` and
+             `_nImp` keep tracking the search, which is what drives _procPose and
+             the sub-line — a step can still move the ligand without redrawing a
+             staircase that did not actually descend. */
+          if(dg!=null&&(EG._bestDg==null||dg<EG._bestDg-1e-9)){
+            EG._bestDg=dg;EG._dg=dg;EG._bestHist.push(dg);
             if(EG._bestHist.length>240)EG._bestHist.shift();                      // the sparkline is 184 px wide
             const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
             const v=$('poseProcVal');
@@ -1840,13 +1851,21 @@
         if(!PG._pinLigs)PG._pinLigs={};
         if(PG.init._pins[name]){                                   // unpin → drop the structure and redraw without it
           delete PG.init._pins[name];
-          if(PG._pinLigs[name]){delete PG._pinLigs[name];PG.init._pinRedraw();}
+          if(PG._pinLigs[name]){
+            delete PG._pinLigs[name];
+            PG._syncPinCenter(false);                              // last pin gone → box is free again
+            PG.init._pinRedraw();
+          }
           return;
         }
         PG.init._pins[name]=true;
         var kind=PG.init._kindOf(name);
         if(kind!=='ligand')return;                                 // receptors: badge only, nothing to overlay
-        if(PG._pinLigs[name]){PG.init._pinRedraw();return;}         // already loaded earlier this session
+        if(PG._pinLigs[name]){                                     // already loaded earlier this session
+          PG._syncPinCenter(false);                                // re-pin the box on it
+          PG.init._pinRedraw();
+          return;
+        }
         PG.init._pinLoad(name);
       },
       _kindOf(name){
@@ -1873,6 +1892,7 @@
             PG._pinLigs[name]=lig;
             PG._log('PINNED LIGAND ADDED →',PG._ligTag(lig),'· stays on screen across ligand swaps');
             PG._miniLog('📌 '+name.replace(/\.(pdb|ent)$/i,'')+' pinned in view','#f59e0b');
+            PG._syncPinCenter(false);        // anchor the docking box on this ligand's real centre
             PG.init._pinRedraw();
           })
           .catch(function(e){PG._miniLog('could not pin '+name+': '+e.message,'#fb7185');});
@@ -2890,53 +2910,41 @@
     var html =
       '<button id="poseReactBtn" onclick="PoseGen.reactToggle()" title="React this ligand with building blocks (SMARTS + CSV)" ' +
         'style="position:absolute;bottom:8px;right:10px;z-index:6;pointer-events:auto;padding:5px 11px;border-radius:8px;border:1px solid #0e4f63;background:rgba(11,17,32,.85);color:#67e8f9;font-family:ui-monospace,monospace;font-size:11px;font-weight:600;cursor:pointer;">&#9004; React</button>' +
-      '<div id="poseReactPop" style="display:none;position:absolute;bottom:42px;right:10px;z-index:7;pointer-events:auto;width:336px;max-height:calc(50% - 29px);overflow-y:auto;background:rgba(8,12,20,.97);border:1px solid #1e293b;border-radius:12px;padding:12px 13px;box-shadow:0 12px 34px rgba(0,0,0,.6);font-family:\'Inter\',system-ui,sans-serif;">' +
+      /* Glass panel, matching #poseLegend3D: the same rgba(8,12,20,.42) fill,
+         rgba(30,41,59,.6) hairline and 2px backdrop blur. The blur is what makes
+         42% opacity readable over the rendered pocket — without it the ligand
+         sticks show straight through the text. Keep the two in sync. */
+      '<div id="poseReactPop" style="display:none;position:absolute;bottom:42px;right:10px;z-index:7;pointer-events:auto;width:336px;max-height:calc(50% - 29px);overflow-y:auto;background:rgba(8,12,20,.42);border:1px solid rgba(30,41,59,.6);border-radius:12px;padding:12px 13px;box-shadow:0 12px 34px rgba(0,0,0,.6);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);font-family:\'Inter\',system-ui,sans-serif;">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;">' +
           '<span style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#67e8f9;">&#9004; React with building blocks</span>' +
           '<button onclick="PoseGen.reactToggle(false)" style="background:none;border:none;color:#475569;font-size:16px;cursor:pointer;line-height:1;">&times;</button>' +
         '</div>' +
 
-        /* ligand center — pins the start center of every product */
+        /* ── Pin center ───────────────────────────────────────────────────────
+           The anchor the docking box is held at. Filled automatically from a
+           pinned ligand's true docked centre (📌 on a gallery card), or typed in
+           by hand. While it is set, stepping through imported poses no longer
+           drags the box around — see PG._boxPinned / _impLoad. Clear all three
+           fields to release the pin and let the box follow each loaded ligand
+           again, which is the old behaviour. */
         '<div style="display:flex;align-items:center;gap:5px;margin-bottom:8px;">' +
-          '<span title="Every reacted ligand starts centered here instead of at a random xyz. Orientation and torsions stay random. Leave blank for a random center." style="' + lbl + 'width:62px;flex-shrink:0;cursor:help;">Ligand center</span>' +
-          '<input id="poseRxCx" type="number" step="0.5" placeholder="x" style="' + num + '">' +
-          '<input id="poseRxCy" type="number" step="0.5" placeholder="y" style="' + num + '">' +
-          '<input id="poseRxCz" type="number" step="0.5" placeholder="z" style="' + num + '">' +
+          '<span title="The docking box is held at this point. Pinning a ligand (📌 on its gallery card) fills it with that ligand\'s real docked centre and locks the box there, so stepping through imported poses keeps the same frame instead of the box jumping to every new ligand. Clear all three to unpin." style="' + lbl + 'width:62px;flex-shrink:0;cursor:help;">Pin center</span>' +
+          '<input id="poseRxCx" type="number" step="0.5" placeholder="x" onchange="PoseGen.pinCenterEdit()" style="' + num + '">' +
+          '<input id="poseRxCy" type="number" step="0.5" placeholder="y" onchange="PoseGen.pinCenterEdit()" style="' + num + '">' +
+          '<input id="poseRxCz" type="number" step="0.5" placeholder="z" onchange="PoseGen.pinCenterEdit()" style="' + num + '">' +
           '<span style="color:#475569;font-size:9px;">&#197;</span>' +
         '</div>' +
 
-        '<div style="margin-bottom:8px;">' +
-          '<div style="' + lbl + 'margin-bottom:3px;">Reaction SMARTS</div>' +
-          '<textarea id="poseRxSmarts" rows="3" spellcheck="false" placeholder="[A:1]&#8230;&gt;&gt;[A:1]&#8230;" style="' + txt + 'resize:vertical;line-height:1.4;"></textarea>' +
-        '</div>' +
+        /* The react product stepper (#poseRxResult) and its status line
+           (#poseRxStatus) used to sit here. Both belonged to react-by-SMARTS,
+           which no longer has any inputs, so they could never show anything but
+           "0 / 0" and an empty line. Removed. #poseFindStatus at the bottom of
+           the Import section is the one status line now. */
 
-        '<div style="margin-bottom:8px;">' +
-          '<div style="' + lbl + 'margin-bottom:3px;">Building-block CSV path</div>' +
-          '<input id="poseRxCsv" type="text" spellcheck="false" placeholder="/&#8230;/rxn208_1.csv" style="' + txt + '">' +
-        '</div>' +
-
-        /* editable cap */
-        '<div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;">' +
-          '<span title="Maximum number of building blocks read from the CSV. Raise it to react more; the run takes proportionally longer." style="' + lbl + 'cursor:help;">Cap &#183; max BBs</span>' +
-          '<input id="poseRxCap" type="number" min="1" step="50" value="500" style="' + num + 'width:74px;">' +
-          '<span id="poseRxCapNote" style="font-size:9px;color:#475569;">first N rows</span>' +
-        '</div>' +
-
-        '<button id="poseRxConfirm" onclick="PoseGen.reactConfirm()" style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Confirm &#8594; react &amp; build</button>' +
-
-        /* results: stepper + play */
-        '<div id="poseRxResult" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid #1e293b;">' +
-          '<div style="display:flex;align-items:center;gap:6px;">' +
-            '<button onclick="PoseGen.reactStep(-1)" title="previous product" style="' + step + '">&#9664;</button>' +
-            '<span id="poseRxCount" style="font-family:ui-monospace,monospace;font-size:11px;color:#67e8f9;min-width:54px;text-align:center;">0 / 0</span>' +
-            '<button onclick="PoseGen.reactStep(1)" title="next product" style="' + step + '">&#9654;</button>' +
-            '<button id="poseRxPlay" onclick="PoseGen.reactPlay()" title="play through every product, 0 &#8594; cap" ' +
-              'style="margin-left:auto;padding:3px 11px;border-radius:7px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10px;font-weight:700;cursor:pointer;">&#9654; Play</button>' +
-          '</div>' +
-          '<div id="poseRxCur" style="margin-top:5px;font-family:ui-monospace,monospace;font-size:9.5px;color:#64748b;word-break:break-all;line-height:1.4;max-height:46px;overflow:auto;"></div>' +
-        '</div>' +
-
-        '<div id="poseRxStatus" style="margin-top:8px;font-size:10px;color:#64748b;font-family:ui-monospace,monospace;min-height:13px;line-height:1.4;"></div>' +
+        /* Find pose by file name lives at the BOTTOM of the Import section, after
+           #poseImpStatus — see below. It reads PG._imp.all, which only exists once
+           a folder has been scanned, so it belongs after the scan controls that
+           populate it rather than above them. */
 
         /* ── Import: scan a folder (recursively) for .pdbqt and step through the
            matches with the same ◀ ▶ ▶ Play stepper the reacted products use. Kept
@@ -2945,7 +2953,7 @@
           '<div style="' + lbl + 'margin-bottom:6px;">Import from disk</div>' +
           '<div style="margin-bottom:8px;">' +
             '<div style="' + lbl + 'margin-bottom:3px;">Folder path</div>' +
-            '<input id="poseImpPath" type="text" spellcheck="false" placeholder="/&#8230;/vina_results" style="' + txt + '">' +
+            '<input id="poseImpPath" type="text" spellcheck="false" placeholder="/&#8230;/vina_results" title="Scanned recursively for .pdbqt, .pdb and .ent files. This is also the folder the Find box searches when nothing has been scanned yet." style="' + txt + '">' +
           '</div>' +
 
           /* score filter — Vina affinity is negative, so "better" means LOWER */
@@ -2958,7 +2966,7 @@
             '</label>' +
           '</div>' +
 
-          '<button id="poseImportBtn" onclick="PoseGen.importConfirm()" title="Recursively scans the folder above (including subfolders) for .pdbqt files and steps through them in the box, one at a time." style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Import &#8594; scan folder for .pdbqt</button>' +
+          '<button id="poseImportBtn" onclick="PoseGen.importConfirm()" title="Recursively scans the folder above (including subfolders) for .pdbqt / .pdb / .ent files and steps through them in the box, one at a time. Unzipped batches from the download button below are readable straight back in." style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Import &#8594; scan folder for poses</button>' +
 
           '<div id="poseImpSummary" style="display:none;margin-top:7px;font-size:9.5px;color:#64748b;font-family:ui-monospace,monospace;line-height:1.55;"></div>' +
 
@@ -2976,6 +2984,29 @@
           '</div>' +
 
           '<div id="poseImpStatus" style="margin-top:8px;font-size:10px;color:#64748b;font-family:ui-monospace,monospace;min-height:13px;line-height:1.4;"></div>' +
+
+          /* ── Find a pose by file name ────────────────────────────────────────
+             Sits at the bottom of the Import section, directly under
+             #poseImpStatus, because it operates on what the scan above produced:
+             the datalist and every match come from PG._imp.all, which is empty
+             until "Import → scan folder for poses" (or this box's own auto-scan)
+             has run. Typing a name locates the file, clears whatever filter would
+             hide it, and draws it in the 3D box. ──────────────────────────── */
+          '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #1e293b;">' +
+            '<div style="' + lbl + 'margin-bottom:3px;">Find pose by file name</div>' +
+            '<input id="poseFindName" type="text" spellcheck="false" autocomplete="off" list="poseFindList" ' +
+                   'placeholder="1424889_20260720103540_out.pdb" ' +
+                   'oninput="PoseGen._findSuggest()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();PoseGen.findPose();}" ' +
+                   'title="File name, or a fragment of one. A full path (anything containing /) is loaded directly without a scan. Enter to search." ' +
+                   'style="' + txt + 'margin-bottom:8px;">' +
+            '<datalist id="poseFindList"></datalist>' +
+
+            '<button id="poseFindBtn" onclick="PoseGen.findPose()" ' +
+              'title="Finds the file, clears any filter that would hide it, and shows its real docked geometry in the 3D box." ' +
+              'style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">&#128269; Find &#8594; show pose in 3D</button>' +
+
+            '<div id="poseFindStatus" style="margin-top:7px;font-size:9.5px;color:#64748b;font-family:ui-monospace,monospace;min-height:12px;line-height:1.5;word-break:break-all;"></div>' +
+          '</div>' +
         '</div>' +
       '</div>' +
 
@@ -2993,13 +3024,118 @@
     PG._reactSyncCenter();
   };
 
-  /* prefill the center fields from the docking-box center (a sensible default) */
+  /* Reflect the current pin in the Pin center fields.
+
+     If a ligand is pinned, those fields ARE the pin and must show it — the panel
+     is built lazily on first open, so a ligand pinned before the popover was
+     ever opened would otherwise leave the boxes blank while the box was in fact
+     pinned. Falling back to mirroring the docking-box centre only when nothing
+     is pinned keeps the old "sensible default" behaviour. */
   PG._reactSyncCenter = function () {
-    if (PG._rx.center) return;                                   // don't clobber a live pin
+    var pinned = PG._pinnedCenter ? PG._pinnedCenter() : null;
+    if (pinned) { PG._rx.center = pinned.slice(); PG._pinInputs(pinned); return; }
+    if (PG._rx.center) { PG._pinInputs(PG._rx.center); return; }   // hand-typed pin — don't clobber
     [['poseCx', 'poseRxCx'], ['poseCy', 'poseRxCy'], ['poseCz', 'poseRxCz']].forEach(function (p) {
       var s = $(p[0]), d = $(p[1]);
       if (d && !d.value && s && s.value !== '') d.value = s.value;
     });
+  };
+
+  /* ========================================================================
+     PIN CENTER — hold the docking box at one point
+     ------------------------------------------------------------------------
+     Problem this solves: _impLoad recentres box.center on EVERY imported file,
+     because for a lone docked pose that is the only sane framing. Stepping
+     through 573 results therefore drags the box (and the camera's sense of
+     where "here" is) to a new place 573 times, which makes comparing two poses
+     in the same pocket almost impossible — the thing you are looking at keeps
+     moving under you.
+
+     A pinned ligand is exactly the statement "this is my reference". So pinning
+     one now also pins the box: its true docked centre (lig._realCenter, set by
+     ligandFromPDB from the file's own coordinates) is written into the Pin
+     center fields AND into box.center, and _impLoad stops recentring while the
+     pin is live. Unpinning the last ligand releases it.
+
+     PG._rx.center is reused as the single source of truth for "is the box
+     pinned, and where" — it already existed for exactly this idea (it used to
+     pin the start centre of reaction products) and nothing else reads it now.
+     ======================================================================== */
+
+  /* Mean of every pinned ligand's real centre, or null when nothing is pinned.
+     Averaging matters when two ligands are pinned in the same pocket: the box
+     should sit between them, not on whichever happened to be pinned first. */
+  PG._pinnedCenter = function () {
+    var pins = PG._pinLigs || {}, acc = [0, 0, 0], n = 0;
+    Object.keys(pins).forEach(function (nm) {
+      var c = pins[nm] && pins[nm]._realCenter;
+      if (c && c.length === 3 && c.every(function (v) { return isFinite(v); })) {
+        acc[0] += +c[0]; acc[1] += +c[1]; acc[2] += +c[2]; n++;
+      }
+    });
+    return n ? [acc[0] / n, acc[1] / n, acc[2] / n] : null;
+  };
+
+  /* Write a centre into the Pin center inputs (null clears them). */
+  PG._pinInputs = function (c) {
+    ['poseRxCx', 'poseRxCy', 'poseRxCz'].forEach(function (id, i) {
+      var e = $(id); if (!e || e === document.activeElement) return;
+      e.value = c ? (+c[i]).toFixed(1) : '';
+    });
+  };
+
+  PG._boxPinned = function () { return !!PG._rx.center; };
+
+  /* Recompute the pin from the current pinned set and apply it to the box.
+     Called after any pin/unpin. `redraw` is false during a load that is going
+     to redraw anyway, so the scene is not rebuilt twice. */
+  PG._syncPinCenter = function (redraw) {
+    var c = PG._pinnedCenter();
+    PG._rx.center = c ? c.slice() : null;
+    PG._pinInputs(c);
+    if (c) {
+      box.center = c.slice();
+      if (protein) { protein._site = null; protein._siteCenter = null; }   // pocket selection follows the new centre
+      PG._syncBoxInputs();
+      PG._log('box PINNED to', c.map(function (v) { return v.toFixed(1); }).join(', '),
+              '· imported poses will no longer move it');
+      try {
+        PG._miniLog('📌 box pinned at ' + c.map(function (v) { return v.toFixed(1); }).join(', ') + ' Å', '#f59e0b');
+      } catch (e) {}
+    } else {
+      PG._log('box UNPINNED — imported poses recentre it again');
+      try { PG._miniLog('box unpinned — it follows each loaded pose again', '#7c6bae'); } catch (e) {}
+    }
+    if (redraw !== false) {
+      try { PG._invalidate(); PG._syncBoxInputs(); PG.stage(PG._stage); } catch (e) {
+        PG._log('pin redraw failed:', e && e.message);
+      }
+    }
+  };
+
+  /* Typing in the Pin center fields pins (or, when cleared, unpins) by hand.
+     Hand edits win over the pinned-ligand average until the pin set changes. */
+  PG.pinCenterEdit = function () {
+    var v = ['poseRxCx', 'poseRxCy', 'poseRxCz'].map(function (id) {
+      var e = $(id); return e ? parseFloat(e.value) : NaN;
+    });
+    var all = v.every(function (x) { return isFinite(x); });
+    var none = ['poseRxCx', 'poseRxCy', 'poseRxCz'].every(function (id) {
+      var e = $(id); return !e || e.value === '';
+    });
+    if (all) {
+      PG._rx.center = v;
+      box.center = v.slice();
+      if (protein) { protein._site = null; protein._siteCenter = null; }
+      PG._syncBoxInputs();
+      PG._log('box pinned by hand to', v.join(', '));
+    } else if (none) {
+      PG._rx.center = null;
+      PG._log('box unpinned by hand');
+    } else {
+      return;                                    // partial entry — wait for all three
+    }
+    try { PG._invalidate(); PG.stage(PG._stage); } catch (e) {}
   };
 
   PG.reactToggle = function (show) {
@@ -3013,7 +3149,316 @@
     var st = $('poseRxStatus'); if (st) { st.textContent = t; st.style.color = c || '#64748b'; }
   };
 
+  /* ========================================================================
+     FIND A POSE BY FILE NAME
+     ------------------------------------------------------------------------
+     Replaces the Reaction SMARTS / building-block CSV / cap / Confirm controls.
+     Type a name from a results folder — 1424889_20260720103540_out.pdb — and
+     this locates the file, makes sure the current filter cannot hide it, and
+     draws its real docked geometry in the 3D box.
+
+     Three things had to be true for that to work end to end, and only the first
+     is the search itself:
+
+       1. The list has to exist. PG._imp.all is only populated by a folder scan,
+          so a cold open has nothing to search. Rather than silently doing
+          nothing, this auto-scans the folder in #poseImpPath first. A value
+          containing "/" is treated as a full path and loaded directly, no scan.
+
+       2. The score filter has to let the file through. #poseImpMaxScore keeps
+          only files whose best affinity is AT MOST the value shown, so a folder
+          filtered to -8.5 hides a -7.7 pose completely: _impApplyFilter drops it
+          from PG._imp.files and the stepper can never reach it. Searching for a
+          file the filter excludes has to relax the filter or it is a no-op. The
+          relaxation is minimal — the box is set to the found file's own score,
+          rounded up to its 0.5 step, so everything at least that good stays
+          visible instead of the filter being thrown away entirely.
+          ("ligands only" gets the same treatment: a >300-atom file is invisible
+          while it is ticked, so finding one unticks it.)
+
+       3. The camera has to be looking at it. _draw3D re-applies PG._cam on every
+          redraw, so a camera the user left pointing at a previous molecule is
+          carried over onto the new one. Find explicitly reframes.
+     ======================================================================== */
+  var _POSE_FIND_MAX_SUGGEST = 60;    // datalist entries; more just slows the browser down
+
+  /* _findStatus writes innerHTML so it can bold the parts that matter, which
+     means every value interpolated into it must be escaped first. File names and
+     paths come off the server's directory scan, i.e. they are attacker-influenced
+     the moment anyone can write into a scanned folder: a file called
+     `"><img src=x onerror=alert(1)>.pdb` would otherwise execute here. Same
+     defect the codebase already has in its other data-driven innerHTML paths —
+     not repeating it. */
+  PG._esc = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  };
+
+  PG._findStatus = function (t, c) {
+    var st = $('poseFindStatus'); if (st) { st.innerHTML = t; st.style.color = c || '#64748b'; }
+  };
+
+  /* basename, lowercased — the unit every match below is done in */
+  PG._findBase = function (p) {
+    return String(p || '').split('/').pop().toLowerCase();
+  };
+
+  /* Live autocomplete over the last scan. Cheap: pure string work on a list the
+     scan already built, no fetch. */
+  PG._findSuggest = function () {
+    var dl = $('poseFindList'), inp = $('poseFindName');
+    if (!dl || !inp) return;
+    var q = inp.value.trim().toLowerCase();
+    var all = PG._imp.all || [];
+    if (!all.length) { dl.innerHTML = ''; return; }
+    var hits = [];
+    for (var i = 0; i < all.length && hits.length < _POSE_FIND_MAX_SUGGEST; i++) {
+      var b = PG._findBase(all[i].path);
+      if (!q || b.indexOf(q) !== -1) hits.push(all[i].path.split('/').pop());
+    }
+    dl.innerHTML = hits.map(function (h) {
+      return '<option value="' + PG._esc(h) + '"></option>';
+    }).join('');
+  };
+
+  /* name (or fragment) → the PG._imp.all entry, or a list of near misses.
+     Exact basename wins; then exact basename ignoring the extension (so
+     "..._out" finds "..._out.pdb"); then a unique substring. */
+  PG._findMatch = function (q) {
+    var all = PG._imp.all || [];
+    var needle = q.toLowerCase();
+    var noExt = function (s) { return s.replace(/\.(pdbqt|pdb|ent)$/i, ''); };
+    var exact = [], stem = [], loose = [];
+    all.forEach(function (f) {
+      var b = PG._findBase(f.path);
+      if (b === needle) exact.push(f);
+      else if (noExt(b) === noExt(needle)) stem.push(f);
+      else if (b.indexOf(needle) !== -1) loose.push(f);
+    });
+    if (exact.length) return { hit: exact[0], n: exact.length };
+    if (stem.length)  return { hit: stem[0],  n: stem.length  };
+    if (loose.length === 1) return { hit: loose[0], n: 1 };
+    return { hit: null, n: loose.length, near: loose.slice(0, 6) };
+  };
+
+  /* ── Hold the camera across a Find ─────────────────────────────────────────
+     Find used to snap the view back to a default framing (eye 1.25,1.25,1.25)
+     on the theory that "show me this file" means "point at it". That was wrong
+     in practice: you orbit to the angle that shows the pocket properly, search
+     for a pose to compare, and the view you just set up is thrown away. Every
+     other way of loading a pose — ◀ ▶, ▶ Play, picking from the gallery —
+     preserves the camera, so Find was also the odd one out.
+
+     Snapshot-and-restore rather than simply not touching the camera: _impLoad
+     can change box.center, which changes the scene's axis ranges, and a
+     Plotly.react across a range change is not guaranteed to leave the camera
+     untouched. Capturing the eye before the load and writing it back after
+     makes "the view does not move" true by construction instead of by luck.
+
+     _camSnap reads the LIVE camera (falling back to the saved one), never a
+     reference — Plotly mutates its own camera object in place, so holding the
+     reference would mean the "snapshot" mutates into the post-load value and
+     restores nothing. That is the same trap _draw3D documents. */
+  PG._camSnap = function () {
+    return PG._camClone(PG._camGet() || PG._cam) || null;
+  };
+
+  /* Put a snapshot back. PG._cam is set first so _draw3D and _camRestore agree
+     with the snapshot instead of fighting it; the relayout only fires if the
+     view actually drifted, so the common case costs nothing. _styling is held
+     across the call so the plotly_relayout echo is not read as a user orbit. */
+  PG._camApply = function (snap) {
+    if (!snap || !snap.eye) return;
+    PG._cam = PG._camClone(snap);
+    if (!window.Plotly || !PG._plotReady || !PG._plotReady()) return;
+    var live = PG._camGet();
+    if (live && live.eye &&
+        Math.abs(live.eye.x - snap.eye.x) < 1e-6 &&
+        Math.abs(live.eye.y - snap.eye.y) < 1e-6 &&
+        Math.abs(live.eye.z - snap.eye.z) < 1e-6) {
+      PG._log('find: camera unchanged by the load, nothing to restore');
+      return;
+    }
+    PG._log('find: restoring camera to', JSON.stringify(snap.eye));
+    PG._styling = true;
+    try {
+      var pr = Plotly.relayout('poseBox3D', { 'scene.camera': PG._camClone(snap) });
+      var done = function () { setTimeout(function () { PG._styling = false; }, 60); };
+      if (pr && pr.then) pr.then(done, done); else done();
+    } catch (e) {
+      PG._styling = false;
+      PG._log('camApply threw', e && e.message);
+    }
+  };
+
+  PG.findPose = function () {
+    var inp = $('poseFindName');
+    var q = inp ? inp.value.trim() : '';
+    if (!q) { PG._findStatus('type a file name, e.g. 1424889_20260720103540_out.pdb', '#fb7185'); if (inp) inp.focus(); return; }
+
+    PG._importStop();
+    PG._reactStop();
+
+    /* A full path skips the scan entirely — nothing to search, just load it. */
+    if (q.indexOf('/') !== -1) { PG._findLoadPath(q); return; }
+
+    if ((PG._imp.all || []).length) { PG._findIn(q); return; }
+
+    /* Nothing scanned yet — scan the Import folder, then search it. */
+    var folder = ($('poseImpPath') ? $('poseImpPath').value : '').trim();
+    if (!folder) {
+      PG._findStatus('nothing scanned yet — put the results folder in <b>Folder path</b> below, or paste a full file path here', '#fbbf24');
+      return;
+    }
+    var btn = $('poseFindBtn');
+    if (btn) btn.disabled = true;
+    PG._findStatus('scanning ' + PG._esc(folder) + '…', '#94a3b8');
+    fetch('/pose/scan_pdbqt', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: folder })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (btn) btn.disabled = false;
+        if (!res || !res.ok) { PG._findStatus('✗ ' + PG._esc((res && res.err) || 'scan failed'), '#fb7185'); return; }
+        PG._imp.dir = res.dir || folder;
+        PG._imp.all = (res.files || []).map(function (f) {
+          return (typeof f === 'string') ? { path: f, score: null, atoms: null, kind: 'ligand' } : f;
+        });
+        PG._imp.hist = []; PG._imp.best = null;
+        PG._impApplyFilter();
+        PG._findSuggest();
+        PG._findIn(q);
+      })
+      .catch(function (e) {
+        if (btn) btn.disabled = false;
+        PG._findStatus('✗ scan request failed: ' + PG._esc(e.message), '#fb7185');
+      });
+  };
+
+  /* Load one file by absolute path, whether or not it came from a scan. */
+  PG._findLoadPath = function (path) {
+    var all = PG._imp.all || [];
+    var known = -1;
+    for (var i = 0; i < all.length; i++) if (all[i].path === path) { known = i; break; }
+    if (known < 0) {                                   // not in the scan → adopt it as a one-file list
+      PG._imp.all = all.concat([{ path: path, score: null, atoms: null, kind: 'ligand' }]);
+      PG._imp.files = [path];
+      PG._imp.idx = 0;
+      PG._importUpdateStepper();
+      PG._impDownloadLabel();
+      var camBefore = PG._camSnap();                   // hold the user's view across the load
+      PG._findStatus('loading ' + PG._esc(path.split('/').pop()) + '…', '#94a3b8');
+      Promise.resolve(PG._impLoad(0)).then(function () {
+        PG._camApply(camBefore);
+        PG._findStatus('✓ loaded <span style="color:#67e8f9;">' + PG._esc(path.split('/').pop()) + '</span> by path', '#34d399');
+      });
+      return;
+    }
+    PG._findShow(PG._imp.all[known]);
+  };
+
+  PG._findIn = function (q) {
+    var m = PG._findMatch(q);
+    if (!m.hit) {
+      if (m.near && m.near.length) {
+        PG._findStatus('✗ no exact match — did you mean:<br>' +
+          m.near.map(function (f) { return '&nbsp;&nbsp;' + PG._esc(f.path.split('/').pop()); }).join('<br>') +
+          (m.n > m.near.length ? ('<br>&nbsp;&nbsp;… and ' + (m.n - m.near.length) + ' more') : ''), '#fbbf24');
+      } else {
+        PG._findStatus('✗ no file matching "' + PG._esc(q) + '" among ' + PG._imp.all.length +
+                       ' scanned under ' + PG._esc(PG._imp.dir || '?'), '#fb7185');
+      }
+      return;
+    }
+    PG._findShow(m.hit, m.n > 1 ? m.n : 0);
+  };
+
+  /* The payoff: clear whatever would hide this file, jump the stepper to it,
+     draw it WITHOUT moving the camera, and say exactly what was changed. */
+  PG._findShow = function (f, ambiguous) {
+    var name = f.path.split('/').pop();
+    var notes = [];
+
+    /* Snapshot the camera here, not in findPose(): the auto-scan path awaits a
+       fetch first, and the user can orbit while it runs. Taking it immediately
+       before the load captures the view they are actually looking at. */
+    var camBefore = PG._camSnap();
+
+    /* (1) ligands-only would drop a receptor-sized file before the score cut
+           even runs, so it has to go first. */
+    var lEl = $('poseImpLigOnly');
+    if (lEl && lEl.checked && f.kind === 'receptor') {
+      lEl.checked = false;
+      notes.push('unticked <b>ligands only</b> (' + (f.atoms != null ? f.atoms + ' atoms' : 'receptor-sized') + ')');
+    }
+
+    /* (2) the score cut. Vina scores are negative and LOWER is better, so a file
+           survives when score <= max. Raise max to this file's own score (rounded
+           up to the input's 0.5 step) rather than clearing the box, so the rest of
+           the filter still means something. A file with no score at all cannot
+           clear any numeric cut, so that one does clear the box. */
+    var mEl = $('poseImpMaxScore');
+    if (mEl && mEl.value !== '') {
+      var max = parseFloat(mEl.value);
+      if (isFinite(max)) {
+        if (typeof f.score !== 'number') {
+          mEl.value = '';
+          notes.push('cleared <b>max score</b> (this file carries no Vina score)');
+        } else if (f.score > max) {
+          var relaxed = Math.ceil(f.score * 2) / 2;        // next 0.5 step at or above the score
+          mEl.value = String(relaxed);
+          notes.push('relaxed <b>max score</b> ' + max.toFixed(1) + ' &#8594; ' + relaxed.toFixed(1));
+        }
+      }
+    }
+
+    /* (3) re-filter, then jump the stepper to this exact path.
+           Only re-filter when something actually changed or the file is not in
+           the current list — _impApplyFilter resets the score sparkline history,
+           and a plain search should not wipe the trend the user built up. */
+    var idx = PG._imp.files.indexOf(f.path);
+    if (idx < 0 || notes.length) {
+      PG._impApplyFilter();
+      idx = PG._imp.files.indexOf(f.path);
+    }
+    if (idx < 0) {                                        // should be unreachable after (1) and (2)
+      PG._findStatus('✗ ' + PG._esc(name) + ' is still being filtered out — clear the filters and retry', '#fb7185');
+      return;
+    }
+
+    PG._findStatus('loading ' + PG._esc(name) + '…', '#94a3b8');
+    Promise.resolve(PG._impLoad(idx)).then(function () {
+      PG._camApply(camBefore);                            // (4) put the view back exactly as it was
+      var bits = ['✓ <span style="color:#67e8f9;">' + PG._esc(name) + '</span>'];
+      if (typeof f.score === 'number') bits.push(f.score.toFixed(1) + ' kcal/mol');
+      bits.push('file ' + (PG._imp.idx + 1) + ' / ' + PG._imp.files.length);
+      var msg = bits.join(' · ');
+      if (ambiguous) msg += ' <span style="color:#fbbf24;">(' + ambiguous + ' matched, showing the first)</span>';
+      if (notes.length) msg += '<br><span style="color:#fbbf24;">↳ ' + notes.join(' · ') + '</span>';
+      PG._findStatus(msg, '#34d399');
+    }).catch(function (e) {
+      PG._findStatus('✗ could not load ' + PG._esc(name) + ': ' + PG._esc(e.message), '#fb7185');
+    });
+  };
+
+  /* React-by-SMARTS is retired: its four inputs (#poseRxSmarts, #poseRxCsv,
+     #poseRxCap, #poseRxConfirm) were replaced by the Find box above. The rest of
+     the reaction machinery — _reactLoad / reactStep / reactPlay and the product
+     stepper — is left intact and simply has no products, so nothing throws and a
+     future caller could still drive it. Kept as an explicit stub rather than
+     deleted so a stale onclick or an external caller gets a clear answer instead
+     of "PoseGen.reactConfirm is not a function". */
   PG.reactConfirm = function () {
+    PG._reactStop();
+    // Reports through _findStatus, not _reactStatus: #poseRxStatus was removed
+    // along with the product stepper, so _reactStatus now writes to nothing.
+    PG._findStatus('react-by-SMARTS was replaced by the Find box — ' +
+                   'search a results folder by file name instead', '#fbbf24');
+  };
+
+  PG._reactConfirmLegacy = function () {
     PG._reactStop();
     try { PG._impScoreShow(false); } catch (e) {}   // reaction products own the ligand now → drop the imported file's score
     var lig    = ($('poseSmiles')   ? $('poseSmiles').value   : '').trim();
@@ -3435,7 +3880,8 @@
           PG._importUpdateStepper(); return;
         }
         PG._impApplyFilter();                                       // sets PG._imp.files + the summary
-        var msg = '\u2713 scanned ' + PG._imp.all.length + ' .pdbqt file(s) under ' + PG._imp.dir;
+        try { PG._findSuggest(); } catch (e) {}                     // feed the Find box's autocomplete
+        var msg = '\u2713 scanned ' + PG._imp.all.length + ' pose file(s) under ' + PG._imp.dir;
         if (res.truncated) msg += ' \u00b7 stopped early at the scan cap';
         if (!PG._imp.files.length) {
           PG._importStatus(msg + ' \u2014 none match the filter', '#fbbf24'); return;
@@ -3482,21 +3928,73 @@
           try { PG.init._refreshMarks(); } catch (e) {}   // loading never clears gallery marks — reassert in case any redraw path touched them
           return;
         }
-        // recentre the docking box on the imported ligand's real position (same as picking one from the gallery)
+        // Recentre the docking box on the imported ligand's real position (same
+        // as picking one from the gallery) — UNLESS the box is pinned. A pinned
+        // ligand is the user saying "hold the frame here"; recentring on every
+        // file would move the box out from under the pinned reference on each
+        // ▶ step, which is precisely what pinning is meant to stop.
         var c = p.center;
-        if (c && c.length === 3 && c.every(function (v) { return isFinite(v); })) {
+        var pinned = PG._boxPinned();
+        if (!pinned && c && c.length === 3 && c.every(function (v) { return isFinite(v); })) {
           box.center = [+c[0], +c[1], +c[2]];
           if (protein) { protein._site = null; protein._siteCenter = null; }   // stale pocket selection → recompute around the new center
         }
         var lig = ligandFromPDB(p);
         if (!lig) { PG._importStatus('\u2717 could not build a ligand from ' + label, '#fb7185'); return; }
         L = lig; L._smiles = ''; L._label = label;                       // debug identity for _ligTag / the [Pose3D] log
-        PG.init.cur = { seed: 0, off: [0, 0, 0], quat: [1, 0, 0, 0], tors: [] };   // identity pose → show the real docked geometry
+
+        /* ── Where the pose actually gets drawn ──────────────────────────────
+           The renderer places the active ligand at
+               _ligCenter(off) = box.center + off · box.size · 0.32
+           and ligandFromPDB returns REF relative to the molecule's OWN centre.
+           So with off = [0,0,0] the pose is drawn centred on box.center — which
+           is only its true docked position while box.center equals that centre.
+
+           Unpinned that holds, because the branch above just set box.center = c.
+           PINNED it does not: the box is deliberately left on the pinned ligand,
+           so off = [0,0,0] silently TRANSLATES every searched pose by
+           (pin centre − its own centre). The geometry stays intact, so it still
+           looks like a plausible pose — it is simply in the wrong place against
+           the protein surface, sunk into it or pushed out of the pocket. For the
+           two ligands in the pinned session that is ~2.2 Å of drift.
+
+           Fix: invert the placement. off = (c − box.center)/(box.size·0.32) is
+           exactly _worldToOff, and makes _ligCenter return c regardless of where
+           the box is pinned. The box stays put, the pose stays true.
+
+           box.size·0.32 must be non-zero for that inverse to exist; if it ever
+           is not, fall back to recentring the box, because drawing the pose in
+           the wrong place is worse than moving the frame. */
+        var off = [0, 0, 0];
+        if (pinned && c && c.length === 3 && c.every(function (v) { return isFinite(v); })) {
+          var scale = (box.size || 0) * 0.32;
+          if (isFinite(scale) && Math.abs(scale) > 1e-9) {
+            off = PG._worldToOff(c);
+            PG._log('pinned draw: box at', box.center.map(function (v) { return (+v).toFixed(1); }).join(', '),
+                    '· pose true centre', c.map(function (v) { return (+v).toFixed(1); }).join(', '),
+                    '· off', off.map(function (v) { return v.toFixed(3); }).join(', '));
+          } else {
+            box.center = [+c[0], +c[1], +c[2]];                 // degenerate box → keep the pose honest
+            if (protein) { protein._site = null; protein._siteCenter = null; }
+            pinned = false;
+            PG._log('pinned draw: box.size is degenerate — recentred instead of offsetting');
+          }
+        }
+        PG.init.cur = { seed: 0, off: off, quat: [1, 0, 0, 0], tors: [] };   // identity rotation/torsions → real docked geometry
         PG._poseSrc = 'uploaded';
         PG._derived(); PG._invalidate(); PG._syncBoxInputs(); PG.stage(PG._stage);
         PG._impScoreShow(true);          // PG.stage() may toggle #poseProcPanel → re-place the panel
+        // Say which of the two framings happened, and \u2014 when pinned \u2014 where the
+        // pose itself landed. Reporting only the box centre while the pose is
+        // drawn somewhere else is how the placement drift stayed invisible: the
+        // status line looked correct because it was describing the box, not the
+        // molecule. These two numbers now differ openly whenever a pin is held.
+        var boxNote = pinned
+          ? (' \u00b7 \ud83d\udccc box held at ' + box.center.map(function (v) { return (+v).toFixed(1); }).join(', ') +
+             (c ? (' \u00b7 pose at ' + c.map(function (v) { return (+v).toFixed(1); }).join(', ')) : ''))
+          : (c ? (' \u00b7 box \u2192 ' + c.map(function (v) { return (+v).toFixed(1); }).join(', ')) : '');
         PG._importStatus('\u2713 ' + label + ' \u2014 ligand, ' + p.natoms + ' atoms' + poseNote + scoreNote +
-          (c ? (' \u00b7 box \u2192 ' + c.map(function (v) { return (+v).toFixed(1); }).join(', ')) : ''), '#34d399');
+          boxNote, '#34d399');
         try { PG.init._refreshMarks(); } catch (e) {}   // stepping/Play must never drop a pin or the selection dot — reassert from state
       })
       .catch(function (e) { PG._importStatus('\u2717 request failed: ' + e.message, '#fb7185'); });

@@ -6,7 +6,7 @@
 #   vina_parse_log
 # =============================================================================
 
-import os, re, json as _json, datetime, queue
+import os, re, json as _json, datetime, queue, threading as _threading
 import math          # _term_breakdown() below calls math.exp but math was never
                      # imported — _build_response() raised NameError on the dock path.
 from pathlib import Path
@@ -439,6 +439,63 @@ def vina_check_file():
         return jsonify({'exists': False, 'n_atoms': 0, 'error': str(exc)})
 
 
+# =============================================================================
+# Which vina binary can actually be run
+# -----------------------------------------------------------------------------
+# Used by BOTH the dock route and the rescore route, so a checkout that can dock
+# can always rescore and vice versa.
+#
+# This exists because VINA_BIN — engines/vina/vina — is frequently not a runnable
+# file. A fresh `git clone` of this repo leaves that path either absent or as a
+# DIRECTORY, while the CPU build sits one level down in engines/vina/vina_cpu/.
+# The two failures that produces are both misleading:
+#
+#   directory  -> exec raises EACCES, surfaced as
+#                 "[Errno 13] Permission denied: .../engines/vina/vina"
+#                 which reads as a permissions problem and sends you chmod'ing a
+#                 path that was never wrong.
+#   absent     -> "[Errno 2] No such file or directory: .../engines/vina/vina"
+#                 which does not say that a perfectly good binary is sitting in
+#                 the sibling directory.
+#
+# is_file() + X_OK rejects both up front, and the candidate list travels back in
+# the error so the answer is in the response rather than in this comment.
+#
+# Only CPU builds are candidates. engines/vina/ also ships AutoDock-Vina-GPU-2-1,
+# but that binary takes a different command line (config file, no --center_x /
+# --size_x), so falling back to it would turn a clear "no binary" error into a
+# confusing argument-parsing one.
+# =============================================================================
+def _resolve_vina_bin(vcfg):
+    """(path_or_None, [what was tried and why each failed]).
+
+    Order: the configured vina.bin (already absolutised by load_vina_config),
+    then the module constant, then the CPU build's conventional home.
+    """
+    tried, seen = [], set()
+    for cand in (vcfg.get('bin'), VINA_BIN, os.path.join(VINA_BASE, 'vina_cpu', 'vina')):
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        p = Path(cand)
+        if p.is_file() and os.access(str(p), os.X_OK):
+            return str(p), tried
+        tried.append('%s (%s)' % (cand, 'is a directory' if p.is_dir()
+                                  else 'not executable' if p.exists() else 'missing'))
+    return None, tried
+
+
+def _vina_bin_error(tried):
+    """One message for both callers, naming the fix rather than just the symptom."""
+    msg = ('No runnable AutoDock Vina binary. Tried, in order: ' + '; '.join(tried) + '. ')
+    if any('not executable' in x for x in tried):
+        msg += ('One candidate exists but has no execute bit — a fresh clone can drop '
+                'it; `chmod +x` that path. ')
+    msg += ('The CPU build normally lives in engines/vina/vina_cpu/vina. To point '
+            'somewhere else, set vina.bin in config/input_routes.yml.')
+    return msg
+
+
 @app.route('/vina_visualization/vina_dock', methods=['POST'])
 def vina_dock():
     """
@@ -509,8 +566,16 @@ def vina_dock():
             except (TypeError, ValueError):
                 return str(default)
 
+        # Resolve before building the command: exec'ing VINA_BIN blind is what
+        # produced "[Errno 13] Permission denied" / "[Errno 2] No such file or
+        # directory" on a fresh clone, neither of which points at the fix.
+        _vbin, _tried = _resolve_vina_bin(_vcfg)
+        if not _vbin:
+            logger.error('vina_dock: %s', _vina_bin_error(_tried))
+            return jsonify({'status': 'error', 'message': _vina_bin_error(_tried)}), 500
+
         cmd = [
-            VINA_BIN,
+            _vbin,
             '--receptor',       rec_path,
             '--ligand',         lig_path,
             '--center_x',       _box('center_x', -25.7),
@@ -781,6 +846,503 @@ def vina_export_pdb():
     except Exception as exc:
         logger.warning(f'vina_export_pdb error: {exc}')
         return jsonify({'ok': False, 'err': str(exc)}), 200
+
+
+# =============================================================================
+# Docked results — read straight off the `*_out.pdbqt` files. No database.
+#
+# A Vina output file already carries everything a results view needs, and it
+# carries it per pose:
+#
+#     MODEL 1
+#     REMARK VINA RESULT:    -9.871      0.000      0.000    <- affinity, rmsd l.b./u.b.
+#     REMARK INTER + INTRA:         -16.439
+#     REMARK INTER:                 -14.198
+#     REMARK INTRA:                  -2.240
+#     REMARK UNBOUND:                -2.240
+#     ...
+#     TORSDOF 8
+#     ENDMDL
+#
+# So the history is the directory listing. Nothing has to be recorded at dock
+# time and nothing can drift out of sync with the files, which is the failure
+# mode a side-car index would introduce.
+#
+# The one thing the file does NOT record is which receptor it was docked into.
+# That is inferred, and the inference is reported rather than assumed:
+#   * geometric — the pose has to sit inside the search box that produced it, so
+#     the mode-1 centroid is tested against every configured protein's box. A
+#     single containing box is strong evidence; several means the boxes overlap
+#     and the answer is genuinely ambiguous.
+#   * by name  — a configured protein whose `default_ligand` stem matches this
+#     file's stem.
+# Both are returned, along with `receptor_confidence`, so the UI can say "8P0M
+# (box + name)" or "ambiguous" instead of quietly picking one.
+# =============================================================================
+
+_VINA_REMARK_KEYS = (
+    ('INTER + INTRA', 'inter_intra'),
+    ('INTER',         'inter'),
+    ('INTRA',         'intra'),
+    ('UNBOUND',       'unbound'),
+)
+
+
+def _parse_out_pdbqt(path):
+    """Parse one Vina `*_out.pdbqt`. Returns a dict, or None if it has no poses.
+
+    Streams the file: these can run to tens of thousands of lines for a big
+    num_modes and nothing here needs the whole thing in memory.
+    """
+    modes, cur = [], None
+    n_atoms_first, torsdof = 0, None
+    sx = sy = sz = 0.0
+    n_xyz = 0
+    elements = {}
+    try:
+        with open(path, 'r', errors='replace') as fh:
+            for line in fh:
+                if line.startswith('MODEL'):
+                    cur = {'mode': len(modes) + 1}
+                    modes.append(cur)
+                    continue
+                if line.startswith('REMARK VINA RESULT:'):
+                    parts = line.split(':', 1)[1].split()
+                    try:
+                        if cur is None:
+                            cur = {'mode': 1}
+                            modes.append(cur)
+                        cur['affinity'] = float(parts[0])
+                        cur['rmsd_lb'] = float(parts[1])
+                        cur['rmsd_ub'] = float(parts[2])
+                    except (IndexError, ValueError):
+                        pass
+                    continue
+                if line.startswith('REMARK ') and cur is not None and ':' in line:
+                    label, _, rest = line[7:].partition(':')
+                    label = label.strip()
+                    for key, field in _VINA_REMARK_KEYS:
+                        if label == key:
+                            try:
+                                cur[field] = float(rest.split()[0])
+                            except (IndexError, ValueError):
+                                pass
+                            break
+                    continue
+                if line.startswith('TORSDOF'):
+                    try:
+                        torsdof = int(line.split()[1])
+                    except (IndexError, ValueError):
+                        pass
+                    continue
+                if line[:6] in ('ATOM  ', 'HETATM') and len(modes) <= 1:
+                    # Geometry from pose 1 only: every mode has the same atoms, and
+                    # the centroid is what the box test needs.
+                    n_atoms_first += 1
+                    try:
+                        x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                        sx += x; sy += y; sz += z; n_xyz += 1
+                    except (ValueError, IndexError):
+                        pass
+                    # Column 78-79 is the AutoDock TYPE, not the element: aromatic
+                    # carbon is `A`, carbonyl oxygen is `OA`, polar hydrogen `HD`.
+                    # Title-casing it gives you elements that do not exist ("Oa",
+                    # "Hd") and an H filter that never fires. The module already
+                    # has the mapping — use it.
+                    el = _adt_to_elem(line[77:79].strip() or line[12:16].strip()[:2])
+                    if el != 'H':
+                        elements[el] = elements.get(el, 0) + 1
+    except OSError as e:
+        logger.warning('[vina] could not read %s: %s', path, e)
+        return None
+
+    modes = [m for m in modes if 'affinity' in m]
+    if not modes:
+        return None
+
+    st = os.stat(path)
+    centroid = [round(sx / n_xyz, 3), round(sy / n_xyz, 3), round(sz / n_xyz, 3)] if n_xyz else None
+    p = Path(path)
+    stem = p.name[:-len('_out.pdbqt')] if p.name.endswith('_out.pdbqt') else p.stem
+    src = p.parent / (stem + '.pdbqt')
+    return {
+        'name': p.name,
+        'stem': stem,
+        'path': str(p),
+        'source_ligand': str(src) if src.is_file() else '',
+        'best': modes[0].get('affinity'),
+        'n_modes': len(modes),
+        'modes': modes,
+        'torsdof': torsdof,
+        'n_heavy': sum(elements.values()),
+        'n_atoms': n_atoms_first,
+        'elements': elements,
+        'centroid': centroid,
+        'size': st.st_size,
+        'mtime': datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec='seconds'),
+        'mtime_epoch': st.st_mtime,
+    }
+
+
+def _attribute_receptor(centroid, stem, proteins):
+    """Which configured protein does this pose belong to? Returns
+    (receptor_id, receptor_path, confidence, [candidate ids], box).
+
+    A docked pose cannot lie outside the box it was searched in, so box
+    containment is real evidence rather than a guess — but overlapping boxes make
+    it non-unique, and that is reported rather than resolved by picking the first.
+
+    `box` is the matched protein's search box, carried back so the client can
+    refill the box inputs without re-deriving it: this function already had to
+    read it to run the containment test.
+    """
+    in_box, by_name = [], []
+    for pr in proteins or []:
+        pid = pr.get('id') or ''
+        try:
+            c = [float(pr.get('center_x')), float(pr.get('center_y')), float(pr.get('center_z'))]
+            s = [float(pr.get('size_x', 20)), float(pr.get('size_y', 20)), float(pr.get('size_z', 20))]
+        except (TypeError, ValueError):
+            c = s = None
+        if centroid and c:
+            # half-size plus a little: the centroid of a pose that hugs one face
+            # of the box still sits inside, but rounding should not exclude it.
+            if all(abs(centroid[k] - c[k]) <= s[k] / 2.0 + 1e-6 for k in range(3)):
+                in_box.append(pid)
+        dl = pr.get('default_ligand') or ''
+        if dl and Path(dl).stem == stem:
+            by_name.append(pid)
+
+    both = [p for p in in_box if p in by_name]
+    if both:
+        pick, conf = both[0], 'box + name'
+    elif len(in_box) == 1:
+        pick, conf = in_box[0], 'box'
+    elif by_name:
+        pick, conf = by_name[0], 'name'
+    elif len(in_box) > 1:
+        pick, conf = in_box[0], 'ambiguous (%d boxes contain this pose)' % len(in_box)
+    else:
+        return '', '', 'unknown', [], None
+
+    path, box = '', None
+    for pr in (proteins or []):
+        if pr.get('id') == pick:
+            path = pr.get('default_receptor') or ''
+            try:
+                box = {'center_x': float(pr.get('center_x')), 'center_y': float(pr.get('center_y')),
+                       'center_z': float(pr.get('center_z')), 'size_x': float(pr.get('size_x', 20)),
+                       'size_y': float(pr.get('size_y', 20)), 'size_z': float(pr.get('size_z', 20))}
+            except (TypeError, ValueError):
+                box = None
+            break
+    return pick, path, conf, sorted(set(in_box) | set(by_name)), box
+
+
+# Records Vina's ligand parser accepts. A *_out.pdbqt additionally carries
+# MODEL/ENDMDL and REMARK lines, and Vina rejects all of them on input
+# ("Unknown or inappropriate tag" / "Unexpected multi-MODEL tag"), so a pose has
+# to be split back out before it can be fed to the binary again.
+_VINA_LIG_RECORDS = ('ROOT', 'ENDROOT', 'BRANCH', 'ENDBRANCH', 'TORSDOF',
+                     'ATOM', 'HETATM')
+
+# One process, one log file. Serialise the writers so a rescore can never
+# interleave with (or truncate) a dock that is still streaming into it.
+_VINA_LOG_LOCK = _threading.Lock()
+
+
+def _split_model1(src, dest):
+    """Write MODEL 1 of `src` to `dest` as a Vina-loadable ligand.
+
+    Never modifies `src`: the *_out.pdbqt is the record of the dock, and its
+    REMARK VINA RESULT lines are what the results list reads. (ensure_vina_safe_pdbqt
+    would have stripped them in place — hence this separate, copy-only path.)
+
+    Returns the number of atom records written.
+    """
+    n = 0
+    with open(src, 'r', errors='replace') as fh, open(dest, 'w') as out:
+        in_model = seen_model = False
+        for line in fh:
+            if line.startswith('MODEL'):
+                if seen_model:
+                    break                      # MODEL 2 — stop, we only want the best
+                seen_model = in_model = True
+                continue
+            if line.startswith('ENDMDL'):
+                break
+            if not seen_model:
+                in_model = True                # single-pose file, no MODEL wrapper
+            if not in_model:
+                continue
+            if not line.startswith(_VINA_LIG_RECORDS):
+                continue                       # REMARK, TITLE, USER, blank …
+            out.write(line)
+            if line.startswith(('ATOM', 'HETATM')):
+                n += 1
+    return n
+
+
+def _mode_table(modes):
+    """Reproduce the mode table Vina prints, from the file's own REMARK lines.
+
+    Not fabricated data — `REMARK VINA RESULT` *is* what Vina wrote for this
+    file. Restating it at the top of a rescored log matters for two reasons:
+    /vina_parse_log reads mode 1 from here for the score card, and
+    _live_log_signature() reads it to decide the log already belongs to a given
+    result — which is what lets a second Visualize click skip the rescore.
+    """
+    rows = ['mode |   affinity | dist from best mode',
+            '     | (kcal/mol) | rmsd l.b.| rmsd u.b.',
+            '-----+------------+----------+----------']
+    for m in modes:
+        rows.append('%4d%13.4f%11.4f%11.4f' % (
+            m.get('mode', 0), m.get('affinity', 0.0) or 0.0,
+            m.get('rmsd_lb', 0.0) or 0.0, m.get('rmsd_ub', 0.0) or 0.0))
+    return '\n'.join(rows)
+
+
+def _vina_env():
+    """Vina's own runtime env: the instrumented binary links boost from the
+    conda prefix, which is not on the default loader path."""
+    lib = os.path.join(os.environ.get('CONDA_PREFIX', ''), 'lib')
+    env = os.environ.copy()
+    if lib and lib not in env.get('LD_LIBRARY_PATH', ''):
+        env['LD_LIBRARY_PATH'] = (lib + ':' + env.get('LD_LIBRARY_PATH', '')).strip(':')
+    return env
+
+
+# =============================================================================
+# POST /vina_visualization/dock_result_rescore
+# -----------------------------------------------------------------------------
+# Make an OLD docked result visualizable.
+#
+# The per-atom energy view is rebuilt by /vina_parse_log from vina_non_cache.log,
+# and there is exactly one of those — every dock truncates and rewrites it. So
+# out of the box only the most recent dock could ever be visualized, and pointing
+# the viewer at an older result would paint this molecule's coordinates with the
+# previous molecule's energies while looking entirely plausible.
+#
+# Rather than disable the older ones, regenerate the log for the pose being
+# asked for: run the same instrumented binary in --score_only mode over MODEL 1
+# of its *_out.pdbqt. No search, no randomness — it re-evaluates coordinates
+# Vina already chose, so it reproduces that dock's own numbers (measured on
+# Structures_for_Vina_originalprotonated_out.pdbqt: score_only -5.445 / inter
+# -8.310 / intra -1.535 against REMARK -5.446 / -8.311 / -1.535) and emits the
+# identical [non_cache::eval pair] / [atom_map] instrumentation a dock does.
+# =============================================================================
+@app.route('/vina_visualization/dock_result_rescore', methods=['POST'])
+def vina_dock_result_rescore():
+    import subprocess, tempfile, shutil
+    try:
+        data = request.get_json(force=True) or {}
+        vcfg = current_app.config.get('VINA', {}) or {}
+
+        # ── resolve the result, inside the configured directory only ─────────
+        name = (data.get('name') or '').strip()
+        raw_dir = (data.get('dir') or '').strip() or (vcfg.get('ligand_pdbqt_dir') or '').strip()
+        if not raw_dir:
+            return jsonify({'ok': False, 'err': 'vina.ligand_pdbqt_dir is not configured'}), 200
+        d = Path(raw_dir).expanduser().resolve()
+        if not name:
+            return jsonify({'ok': False, 'err': 'name is required'}), 200
+        # Basename only, then re-check containment: a name is a value from the
+        # results list, but it arrives over HTTP and "../../etc/passwd" is a
+        # perfectly valid string.
+        out_path = (d / Path(name).name).resolve()
+        if out_path.parent != d or not out_path.is_file():
+            return jsonify({'ok': False, 'err': 'no such result: %s' % name}), 200
+
+        rec = _parse_out_pdbqt(str(out_path))
+        if not rec:
+            return jsonify({'ok': False, 'err': '%s holds no scored pose' % out_path.name}), 200
+
+        # ── receptor ─────────────────────────────────────────────────────────
+        # The client already has one from the scan of this same file; take it when
+        # it holds up, and only re-derive when it does not. _attribute_receptor is
+        # the single source either way, so the two paths cannot disagree.
+        rpath = (data.get('receptor_path') or '').strip()
+        if not rpath or not Path(rpath).is_file():
+            _, rpath, _, _, _ = _attribute_receptor(
+                rec['centroid'], rec['stem'], vcfg.get('proteins') or [])
+        if not rpath or not Path(rpath).is_file():
+            return jsonify({'ok': False, 'err':
+                            'no receptor could be identified for %s — open the card and '
+                            'check "inferred from"' % out_path.name}), 200
+
+        vbin, tried = _resolve_vina_bin(vcfg)
+        if not vbin:
+            return jsonify({'ok': False, 'err': 'no runnable vina binary',
+                            'detail': _vina_bin_error(tried)}), 200
+
+        if not _VINA_LOG_LOCK.acquire(blocking=False):
+            return jsonify({'ok': False, 'err': 'a dock or rescore is already writing '
+                                                'the log — try again in a moment'}), 200
+        tmp = None
+        try:
+            tmp = tempfile.mkdtemp(prefix='vina-rescore-')
+            pose = os.path.join(tmp, 'pose.pdbqt')
+            n_at = _split_model1(str(out_path), pose)
+            if n_at == 0:
+                return jsonify({'ok': False, 'err': 'MODEL 1 of %s has no atoms'
+                                                    % out_path.name}), 200
+
+            # --autobox, not the search box. score_only does not search, so the box
+            # has no bearing on the pair energies — its only role is the
+            # out-of-bounds penalty, and Vina hard-errors ("The ligand is outside
+            # the grid box") if any atom falls outside. That is not an edge case:
+            # docking constrains the ligand's CENTRE to the box, so a pose that
+            # docked perfectly well can still poke out at the edges, and roughly
+            # half the results here do. --autobox sizes the box to the pose, so the
+            # penalty is zero and every result can be rescored. Verified to give
+            # byte-identical energies on a pose that fits both ways
+            # (Structures_for_Vina_originalprotonated: -5.445 / -8.310 / -1.535
+            # either way), and to be the only way the ones that do not fit run at all
+            # (G001a_IL-6_gp130: -6.641, exactly its REMARK).
+            cmd = [vbin, '--receptor', str(rpath), '--ligand', pose,
+                   '--score_only', '--autobox']
+
+            logger.info('[vina] rescore: %s', ' '.join(cmd))
+            started = datetime.datetime.now()
+            try:
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, env=_vina_env(),
+                                      timeout=float(vcfg.get('rescore_timeout', 300)))
+            except subprocess.TimeoutExpired:
+                return jsonify({'ok': False, 'err': 'vina --score_only timed out'}), 200
+            body = proc.stdout.decode('utf-8', 'replace')
+
+            if proc.returncode != 0 or '[non_cache::eval pair]' not in body:
+                # Surface vina's own complaint rather than a generic failure —
+                # it is usually a specific, fixable one (bad atom type, unreadable
+                # receptor, a binary built without the instrumentation).
+                tail = '\n'.join(l for l in body.splitlines()
+                                 if l.strip() and not l.startswith('#'))[-600:]
+                return jsonify({'ok': False, 'rc': proc.returncode, 'err':
+                                ('vina --score_only produced no per-atom lines'
+                                 if proc.returncode == 0 else
+                                 'vina --score_only failed (rc=%d)' % proc.returncode),
+                                'detail': tail}), 200
+
+            header = ('# Vina rescore (--score_only) %s\n'
+                      '# POSE: %s  (MODEL 1 of %d, %d atoms)\n'
+                      '# CMD: %s\n\n%s\n\n'
+                      % (started.strftime('%Y-%m-%d %H:%M:%S'), out_path,
+                         len(rec['modes']), n_at, ' '.join(cmd),
+                         _mode_table(rec['modes'])))
+            with open(VINA_LOG, 'w') as lf:
+                lf.write(header)
+                lf.write(body)
+
+            # score_only recomputes the affinity; the REMARK is what the dock
+            # recorded. They describe the same pose under the same function, so a
+            # disagreement means the file and the receptor no longer belong
+            # together — worth saying, not worth refusing over.
+            m = re.search(r'Estimated Free Energy of Binding\s*:\s*([-\d.]+)', body)
+            rescored = float(m.group(1)) if m else None
+            drift = (None if rescored is None or rec['best'] is None
+                     else round(rescored - rec['best'], 4))
+            if drift is not None and abs(drift) > 0.05:
+                logger.warning('[vina] rescore of %s gave %.3f but its REMARK says %.3f '
+                               '(%.3f apart) — receptor mismatch?', out_path.name,
+                               rescored, rec['best'], drift)
+
+            return jsonify({
+                'ok': True, 'log': str(VINA_LOG), 'ligand': str(out_path),
+                'receptor': str(rpath), 'best': rec['best'], 'rescored': rescored,
+                'drift': drift, 'atoms': n_at,
+                'pairs': body.count('[non_cache::eval pair]'),
+                'seconds': round((datetime.datetime.now() - started).total_seconds(), 1),
+            }), 200
+        finally:
+            _VINA_LOG_LOCK.release()
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+    except Exception as e:
+        logger.warning('[vina] dock_result_rescore: %s', e)
+        return jsonify({'ok': False, 'err': str(e)}), 200
+
+
+def _live_log_signature():
+    """(best_affinity, has_pair_lines) for the ONE shared vina_non_cache.log.
+
+    Why this exists: the per-atom energy view is rebuilt by /vina_parse_log from
+    that log, and there is exactly one of it — every dock truncates and rewrites
+    it. So the decomposition can only ever describe the MOST RECENT run. Pointing
+    the viewer at an older result would render this molecule's coordinates against
+    the previous molecule's energies, and nothing about the picture would look
+    wrong.
+
+    The log names neither its ligand nor a checksum, but it does carry the mode
+    table, so mode 1's affinity identifies the run well enough to refuse a
+    mismatch. Two results that scored identically are genuinely indistinguishable
+    from it — both are offered, and the cost of picking the wrong one is bounded
+    because they scored the same anyway.
+    """
+    try:
+        p = Path(VINA_LOG)
+        if not p.is_file():
+            return None, False
+        txt = p.read_text(errors='replace')
+        m = re.search(r'^\s*1\s+([-\d.]+)', txt, re.MULTILINE)
+        return (float(m.group(1)) if m else None), ('[non_cache::eval pair]' in txt)
+    except Exception as e:
+        logger.warning('[vina] could not read the live log: %s', e)
+        return None, False
+
+
+# =============================================================================
+# GET /vina_visualization/dock_results?dir=<optional override>
+#
+# Every `*_out.pdbqt` in the ligand directory, newest first, fully parsed.
+# One request serves the whole panel — these files are small and there are tens
+# of them, not thousands.
+#
+# Returns: { ok, dir, results:[...], n } | { ok:false, err, results:[] }
+# =============================================================================
+@app.route('/vina_visualization/dock_results', methods=['GET'])
+def vina_dock_results():
+    try:
+        vcfg = current_app.config.get('VINA', {}) or {}
+        raw = (request.args.get('dir') or '').strip() or (vcfg.get('ligand_pdbqt_dir') or '').strip()
+        if not raw:
+            return jsonify({'ok': False, 'results': [],
+                            'err': 'vina.ligand_pdbqt_dir is not configured'}), 200
+        d = Path(raw).expanduser()
+        if not d.is_dir():
+            return jsonify({'ok': False, 'results': [], 'dir': str(d),
+                            'err': 'not a directory: %s' % d}), 200
+
+        proteins = vcfg.get('proteins') or []
+        log_best, log_has_pairs = _live_log_signature()      # read once, not per file
+        out, skipped = [], []
+        for fp in sorted(d.iterdir()):
+            if not fp.is_file() or not fp.name.endswith('_out.pdbqt'):
+                continue
+            rec = _parse_out_pdbqt(str(fp))
+            if not rec:
+                skipped.append(fp.name)          # exists but holds no scored pose
+                continue
+            rid, rpath, conf, cands, box = _attribute_receptor(rec['centroid'], rec['stem'], proteins)
+            rec['receptor_id'] = rid
+            rec['receptor'] = rpath
+            rec['receptor_confidence'] = conf
+            rec['receptor_candidates'] = cands
+            rec['box'] = box
+            # Can the per-atom decomposition be shown for this one? Only if the
+            # single shared log is the one this file came from.
+            rec['log_matches'] = bool(
+                log_has_pairs and log_best is not None and rec['best'] is not None
+                and abs(log_best - rec['best']) < 0.005)
+            out.append(rec)
+
+        out.sort(key=lambda r: r['mtime_epoch'], reverse=True)
+        return jsonify({'ok': True, 'dir': str(d), 'results': out, 'n': len(out),
+                        'skipped': skipped, 'log': str(VINA_LOG),
+                        'log_best': log_best, 'log_usable': log_has_pairs}), 200
+    except Exception as e:
+        logger.warning('[vina] dock_results: %s', e)
+        return jsonify({'ok': False, 'results': [], 'err': str(e)}), 200
 
 
 @app.route('/vina_visualization/vina_dock_progress', methods=['GET'])

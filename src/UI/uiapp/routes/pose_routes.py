@@ -336,18 +336,47 @@ def pose_deepatom_score():
         (ds / (name + '_ligand.pdb')).write_text(_clean_ligand(lig))
         (ds / (name + '_complex.pdb')).write_text(_clean_complex(rec, lig))
 
-        # the core command shown in the UI, and the directory the subprocess runs in
+        # How many compounds this call will actually process.
+        #
+        # The script is a virtual-screening driver: `-d <root>` means "atom-type,
+        # voxelise and predict EVERYTHING under <root>/Dataset_VS", not "the one
+        # I just wrote". Reusing one root therefore makes call N redo calls
+        # 1..N-1 — 78 complexes over a 12-pose trajectory instead of 12, and the
+        # only visible symptom is that each score takes longer than the last.
+        # Report it rather than let it look like the model got slower.
+        try:
+            n_ds = sum(1 for p in (root / 'Dataset_VS').iterdir() if p.is_dir())
+        except Exception:
+            n_ds = 1
+        if n_ds > 1:
+            logger.warning('[pose] deepatom_score: %s holds %d compounds; this run '
+                           're-processes all of them. Use one root per pose.',
+                           root / 'Dataset_VS', n_ds)
+
+        # the command shown in the UI, and the directory the subprocess runs in.
+        # This used to be the BARE script; the conda wrapper was stripped before
+        # display, so "run the command below" reproduced a different thing than
+        # the server ran and a failure inside `conda activate` was invisible.
+        # cmd_core is kept for anyone who wants the script on its own.
         core_cmd = '%s -t %s -d %s' % (script, test_type, str(root))
         run_cwd = str(root)
-        shell_cmd = (
-            'source "$(conda info --base)/etc/profile.d/conda.sh" && '
-            'conda activate elion_backend && '
-            '"%s" -t %s -d "%s" && conda deactivate' % (script, test_type, str(root))
-        )
+        # pose.deepatom_conda_env, falling back to the historical hard-coded
+        # name so an existing deployment keeps working. Blank disables activation.
+        da_env = pcfg.get('deepatom_conda_env')
+        da_env = 'elion_backend' if da_env is None else str(da_env).strip()
+        shell_cmd = _conda_wrap('"%s" -t %s -d "%s"' % (script, test_type, str(root)), da_env)
         logger.info('[pose] deepatom_score cwd=%s cmd: %s', run_cwd, shell_cmd)
         timeout = int(cfg.get('timeout_seconds', 600) or 600)
-        env = dict(os.environ)
-        env['AUGMENT'] = '1'    # build + average augmented grids (matches the batch methodology / avg_test)
+        # AUGMENT=1 builds + averages augmented grids (matches the batch
+        # methodology / avg_test). It is the default rather than a constant so
+        # pose.deepatom_env can override it, and can unset whatever else the
+        # host needs removed — see _subproc_env.
+        da_over = pcfg.get('deepatom_env')
+        if not isinstance(da_over, dict):
+            da_over = {}
+        da_over = dict({'AUGMENT': '1'}, **da_over)
+        env, env_note = _subproc_env(da_over)
+        logger.info('[pose] deepatom_score env overrides: %s', env_note)
         proc = subprocess.run(shell_cmd, shell=True, executable='/bin/bash',
                               cwd=run_cwd, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -390,14 +419,19 @@ def pose_deepatom_score():
                 'err': ('script exited %d but no pK was parsed — looked in stdout and %d CSV under the output dir '
                         '(%d .atomtypes, %d .npz produced). If these counts are 0 the pipeline never wrote there; '
                         'run the command below in the cwd below to see the real error (commonly arpeggio not on PATH '
-                        'inside the elion_backend env).'
-                        % (proc.returncode, len(produced['csv']), len(produced['atomtypes']), len(produced['npz']))),
-                'cmd': core_cmd,
+                        'inside the scoring env).'
+                        % (proc.returncode, len(produced['csv']), len(produced['atomtypes']), len(produced['npz']))
+                        + _conda_diagnose(out, da_env) + _link_diagnose(out)),
+                'cmd': shell_cmd,
+                'cmd_core': core_cmd,
+                'conda_env': da_env or '(none — running the script directly)',
+                'env_overrides': env_note,
                 'cwd': run_cwd,
                 'log': (str(log_path) if log_path else None),
                 'returncode': proc.returncode,
                 'out_dir': str(root),
                 'produced': produced,
+                'compounds': n_ds,
                 'stdout': out[-200000:],
             }), 200
 
@@ -405,11 +439,14 @@ def pose_deepatom_score():
                         'pred_pk': round(float(pred), 4),
                         'deltaG': round(-float(pred) * 1.36, 4),
                         'elapsed': '%.1fs' % (time.time() - t0),
-                        'cmd': core_cmd,
+                        'cmd': shell_cmd,
+                        'cmd_core': core_cmd,
+                        'conda_env': da_env or '(none — running the script directly)',
                         'cwd': run_cwd,
                         'log': (str(log_path) if log_path else None),
                         'out_dir': str(root),
                         'produced': produced,
+                        'compounds': n_ds,
                         'source': 'deepatom'}), 200
     except subprocess.TimeoutExpired:
         return jsonify({'ok': False, 'err': 'DeepAtom timed out'}), 200
@@ -451,6 +488,115 @@ def pose_deepatom_score():
 #
 # This endpoint could not be executed in the build sandbox -- verify on the host.
 # =============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# conda wrapping, shared by the two scorer endpoints
+# -----------------------------------------------------------------------------
+# Both scorers shell out to something that must run in a specific environment.
+# The env NAME is configuration, not a constant: /pose/deepatom_score hard-coded
+# "elion_backend" and produced a one-line log —
+#
+#     Could not find conda environment: elion_backend
+#
+# — with no way to tell from the UI whether the name was wrong, the env lived in
+# a conda installation `conda info --base` does not point at, or the script was
+# meant to activate its own env all along. All three are common and all three
+# looked identical.
+#
+# A blank env means "run the command as-is", which is the right answer when the
+# script activates its own environment or when the server already runs inside the
+# right one — previously impossible to express.
+# ─────────────────────────────────────────────────────────────────────────────
+def _subproc_env(overrides, base=None) -> tuple:   # noqa: C901
+    """(env, note) for a scorer subprocess.
+
+    `overrides` is a mapping from config. A null/blank value UNSETS the
+    variable, which is the point: the common way a working conda env still
+    fails to import torch is a stray LD_LIBRARY_PATH pointing at a system NCCL
+    or CUDA that shadows the ones bundled in torch/lib. You cannot express
+    "remove this" by setting it to something, so a null has to mean delete.
+
+    Everything here used to be a hard-coded `env['AUGMENT'] = '1'` — same class
+    of problem the conda env name had: a value only the source could change.
+    """
+    import os                    # imported per-route in this module, not at top level
+    env = dict(base if base is not None else os.environ)
+    applied = []
+    if isinstance(overrides, dict):
+        for k, v in overrides.items():
+            k = str(k)
+            if v is None or (isinstance(v, str) and not v.strip()):
+                if env.pop(k, None) is not None:
+                    applied.append('-' + k)
+            else:
+                env[k] = str(v)
+                applied.append('%s=%s' % (k, v))
+    return env, (', '.join(applied) if applied else '(none)')
+
+
+def _link_diagnose(out: str) -> str:
+    """Hint for the dynamic-linker failures that look like a broken env."""
+    if not out or 'undefined symbol' not in out:
+        return ''
+    lib = 'a shared library'
+    for token in ('libtorch_cuda', 'libtorch', 'libcudart', 'libnccl'):
+        if token in out:
+            lib = token
+            break
+    return ('\n\nThis is a LINKER failure inside %s, not a missing package: the '
+            'interpreter found the module and the module found a library of the '
+            'right NAME but the wrong build. Almost always LD_LIBRARY_PATH (or a '
+            'conda-installed nccl/cudatoolkit) shadowing the copies bundled in '
+            'torch/lib.\n'
+            'Check whether it imports on its own first:\n'
+            '    conda run -n <env> python -c "import torch; print(torch.__version__)"\n'
+            'If that works and this does not, the SCRIPT is changing the '
+            'environment. Unset the offending variable for the subprocess with, '
+            'in input_routes.yml:\n'
+            '    pose:\n'
+            '      deepatom_env:\n'
+            '        LD_LIBRARY_PATH: null      # null = unset it\n'
+            % lib)
+
+
+def _conda_wrap(cmd: str, env_name: str) -> str:
+    """`cmd` wrapped in `conda activate <env_name>`, or `cmd` unchanged if blank."""
+    env_name = (env_name or '').strip()
+    if not env_name:
+        return cmd
+    return ('source "$(conda info --base)/etc/profile.d/conda.sh" && '
+            'conda activate %s && %s && conda deactivate' % (env_name, cmd))
+
+
+def _conda_diagnose(out: str, env_name: str) -> str:
+    """When activation is what failed, say which envs actually exist.
+
+    Returns '' unless the output carries conda's not-found message, so the happy
+    path costs nothing and an unrelated failure is not buried under env noise.
+    """
+    if not env_name or not out:
+        return ''
+    if ('Could not find conda environment' not in out
+            and 'EnvironmentNameNotFound' not in out
+            and 'CondaEnvironmentError' not in out):
+        return ''
+    import subprocess          # imported per-route in this module, not at top level
+    listing = ''
+    try:
+        pr = subprocess.run(
+            'source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null; conda env list',
+            shell=True, executable='/bin/bash', stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, timeout=30)
+        listing = (pr.stdout or '').strip()
+    except Exception as e:                                        # noqa: BLE001
+        listing = 'could not run `conda env list`: %s' % e
+    return ('\n\nconda could not activate %r. Environments visible to the server '
+            '(note this is the conda that `conda info --base` resolves to — an env '
+            'created under a different installation will not appear here):\n%s\n\n'
+            'Fix by pointing the config at a name from that list, or set it blank '
+            'to run the command without activating anything.'
+            % (env_name, listing or '(none)'))
+
+
 @app.route('/pose/gign_score', methods=['POST'])
 def pose_gign_score():
     import os, time, json, tempfile, subprocess
@@ -471,7 +617,11 @@ def pose_gign_score():
     if not script or not Path(script).expanduser().is_file():
         return jsonify({'ok': False,
                         'err': 'GIGN predict script not found (set pose.gign_script in input_TS.yml): %s' % script}), 200
-    env_name = (pcfg.get('gign_conda_env') or 'elion_backend').strip()
+    # Blank is now meaningful: run yupu_GIGN_pose.py without activating anything,
+    # for a server already inside the right env. `or` would swallow that, so read
+    # the key explicitly and only default when it is absent.
+    env_name = pcfg.get('gign_conda_env')
+    env_name = 'elion_backend' if env_name is None else str(env_name).strip()
     model_ckpt = (pcfg.get('gign_model') or '').strip()        # blank -> script default
     try:
         cutoff = float(pcfg.get('gign_pocket_cutoff', 5) or 5)
@@ -511,20 +661,18 @@ def pose_gign_score():
     except Exception as e:
         return jsonify({'ok': False, 'err': 'cannot write staging files: %s' % e}), 200
 
-    core_cmd = 'python %s --stage %s --name %s' % (script, str(stage), name)
-    if env_name:
-        shell_cmd = ('source "$(conda info --base)/etc/profile.d/conda.sh" && '
-                     'conda activate %s && '
-                     'python "%s" --stage "%s" --name "%s" && conda deactivate'
-                     % (env_name, script, str(stage), name))
-    else:
-        shell_cmd = 'python "%s" --stage "%s" --name "%s"' % (script, str(stage), name)
+    core_cmd = 'python %s --stage %s --name %s' % (script, str(stage), name)   # see the note in deepatom_score
+    shell_cmd = _conda_wrap('python "%s" --stage "%s" --name "%s"'
+                            % (script, str(stage), name), env_name)
     logger.info('[pose] gign_score cwd=%s cmd: %s', run_cwd, shell_cmd)
 
     try:
         timeout = int(pcfg.get('gign_timeout_seconds', 1200) or 1200)
+        gi_over = pcfg.get('gign_env')
+        genv, genv_note = _subproc_env(gi_over if isinstance(gi_over, dict) else {})
+        logger.info('[pose] gign_score env overrides: %s', genv_note)
         proc = subprocess.run(shell_cmd, shell=True, executable='/bin/bash',
-                              cwd=run_cwd, env=dict(os.environ),
+                              cwd=run_cwd, env=genv,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=timeout)
         out = proc.stdout or ''
@@ -562,8 +710,10 @@ def pose_gign_score():
                         'Run the command below in the cwd below to see the real error '
                         '(common causes: wrong conda env, missing torch/CUDA, the model '
                         'checkpoint not found, or RDKit failing to parse the pose/pocket).'
-                        % proc.returncode),
-                'cmd': core_cmd, 'cwd': run_cwd, 'stage': str(stage),
+                        % proc.returncode) + _conda_diagnose(out, env_name) + _link_diagnose(out),
+                'cmd': shell_cmd, 'cmd_core': core_cmd,
+                'conda_env': env_name or '(none — running python directly)',
+                'cwd': run_cwd, 'stage': str(stage),
                 'log': (str(log_path) if log_path else None),
                 'returncode': proc.returncode,
                 'stdout': out[-200000:],
@@ -573,11 +723,13 @@ def pose_gign_score():
                         'pred_pk': round(pk, 4),
                         'deltaG': round(-pk * 1.36, 4),
                         'elapsed': '%.1fs' % (time.time() - t0),
-                        'cmd': core_cmd, 'cwd': run_cwd, 'stage': str(stage),
+                        'cmd': shell_cmd, 'cmd_core': core_cmd,
+                        'conda_env': env_name or '(none — running python directly)',
+                        'cwd': run_cwd, 'stage': str(stage),
                         'log': (str(log_path) if log_path else None),
                         'source': 'yupu_gign'}), 200
     except subprocess.TimeoutExpired:
-        return jsonify({'ok': False, 'err': 'GIGN timed out', 'cmd': core_cmd, 'cwd': run_cwd}), 200
+        return jsonify({'ok': False, 'err': 'GIGN timed out', 'cmd': shell_cmd, 'cwd': run_cwd}), 200
     except Exception as e:
         logger.warning('[pose] gign_score error: %s', e)
         return jsonify({'ok': False, 'err': 'server error: %s' % e, 'cmd': core_cmd, 'cwd': run_cwd}), 200
@@ -657,6 +809,21 @@ def pose_default_receptor():
     od = (pcfg.get('default_dir') or '').strip()
     if od:
         resp['out_dir'] = od
+
+    # Where the trajectory scorers stage every new-minimum pose.
+    #
+    # Separate from default_dir on purpose. default_dir is "the box the user can
+    # type in", one directory reused by every hand-clicked score; the trajectory
+    # writes a dozen poses per run plus, for DeepAtom, a per-record subtree of
+    # atomtypes and voxel grids. Pointing both at one directory is what made
+    # /pose/deepatom_score re-atom-type every earlier complex on each call —
+    # its pipeline processes everything under <root>/Dataset_VS by design.
+    #
+    # Blank falls back client-side to the panel's output-dir box, so an existing
+    # deployment that has not set this key behaves as it did before.
+    td = (pcfg.get('trajectory_dir') or '').strip()
+    if td:
+        resp['traj_dir'] = td
 
     # default ligand SMILES (optional) -- pre-fills the #poseSmiles box on open
     sm = (pcfg.get('default_smile') or '').strip()
@@ -1568,6 +1735,19 @@ def _pdbqt_probe(p):
 # anything. File bodies are still fetched one at a time via POST /pose/read_pdbqt
 # as the stepper visits them.
 # =============================================================================
+# Suffixes the folder import understands.
+#
+# This used to be '.pdbqt' alone, which made the tool unable to re-open its own
+# output: "⬇ Download filtered batch" converts every match to .pdb and zips it,
+# so the moment a user unzipped that batch and pointed the importer at it, the
+# scan reported "no .pdbqt files found" — the one folder guaranteed to be full of
+# real, scored, best-pose structures was the one folder it could not read.
+# _pdbqt_scores already parses the REMARK line those .pdb files carry, and
+# _pdbqt_probe already tolerates a file with no MODEL wrapper, so the only thing
+# standing in the way was the extension test.
+_POSE_IMPORT_SUFFIXES = ('.pdbqt', '.pdb', '.ent')
+
+
 @app.route('/pose/scan_pdbqt', methods=['POST'])
 def pose_scan_pdbqt():
     from pathlib import Path
@@ -1585,7 +1765,7 @@ def pose_scan_pdbqt():
     paths, truncated = [], False
     try:
         for p in root.rglob('*'):
-            if p.is_file() and p.suffix.lower() == '.pdbqt':
+            if p.is_file() and p.suffix.lower() in _POSE_IMPORT_SUFFIXES:
                 paths.append(p)
                 if len(paths) >= _POSE_SCAN_MAX_FILES:
                     truncated = True
@@ -1595,7 +1775,8 @@ def pose_scan_pdbqt():
         return jsonify({'ok': False, 'err': str(e)}), 200
 
     if not paths:
-        return jsonify({'ok': False, 'err': 'no .pdbqt files found under %s' % str(root)}), 200
+        return jsonify({'ok': False, 'err': 'no %s files found under %s'
+                        % ('/'.join(_POSE_IMPORT_SUFFIXES), str(root))}), 200
 
     paths.sort()
     files, n_lig, n_rec, n_scored = [], 0, 0, 0
@@ -1889,7 +2070,7 @@ def _pdb_block_with_conect(block):
         return block
 
 
-def _pdbqt_models_to_pdb(text):
+def _pdbqt_models_to_pdb(text, already_pdb=False):
     """Convert every pose in a .pdbqt to PDB blocks.
 
     Converts all of them so callers can choose: the download route keeps only
@@ -1898,6 +2079,12 @@ def _pdbqt_models_to_pdb(text):
     prefixed with a REMARK carrying that pose's Vina affinity. PDBQT-only records
     (ROOT/BRANCH/TORSDOF) are dropped — they have no meaning in PDB. had_models
     is False for files with no MODEL wrapper, i.e. prepared receptors.
+
+    already_pdb=True is for the .pdb/.ent inputs the importer now accepts
+    (including this tool's own downloaded batches). Those lines already carry a
+    real element symbol in columns 76-77, so rewriting them through
+    _pdbqt_atom_line — which infers the element from the last token past column
+    54 — would be guessing at data that is already correct.
     """
     scores, models = [], []
     cur, cur_score, had_models = [], None, False
@@ -1920,7 +2107,7 @@ def _pdbqt_models_to_pdb(text):
                 pass
             continue
         if head in ('ATOM', 'HETATM'):
-            cur.append(_pdbqt_atom_line(ln))
+            cur.append(ln.rstrip('\n') if already_pdb else _pdbqt_atom_line(ln))
     if cur:
         models.append(cur), scores.append(cur_score)
 
@@ -1977,6 +2164,41 @@ def _pdbqt_to_pdb(text):
     return '\n'.join(lines) + '\n'
 
 
+def _pdb_first_model(text):
+    """Keep MODEL 1 of an already-standard .pdb, verbatim.
+
+    Deliberately NOT _pdbqt_to_pdb. That function rebuilds every atom line and
+    derives the element from the last whitespace token past column 54 — correct
+    for PDBQT, where the AutoDock type sits there, but wrong in principle for a
+    real PDB, which already carries the element in columns 76-77 where the
+    client's ln.slice(76,78) reads it. Passing ATOM/HETATM through untouched
+    keeps two-character elements (Br, Cl, Fe) and occupancy/B-factor columns
+    exactly as written.
+
+    _best_poses.pdb from the download button holds one MODEL per ligand, so the
+    same first-MODEL rule the PDBQT path uses applies here: show pose 1, and let
+    the caller report how many there were.
+    """
+    lines, seen_model = [], False
+    for ln in text.splitlines():
+        head = ln[:6].rstrip()
+        if head == 'MODEL':
+            if seen_model:
+                break                                  # 2nd MODEL onwards → stop
+            seen_model = True
+            continue
+        if head == 'ENDMDL':
+            if seen_model:
+                break
+            continue
+        if head in ('ATOM', 'HETATM'):
+            lines.append(ln.rstrip('\n'))
+    if not lines:
+        return text
+    return '\n'.join(lines) + '\n'
+
+
+
 def _pdbqt_scores(text):
     """Vina affinities (kcal/mol) from a docked *_out.pdbqt*, best pose first.
 
@@ -2002,8 +2224,10 @@ def pose_read_pdbqt():
     raw = (data.get('path') or '').strip()
     if not raw:
         return jsonify({'ok': False, 'err': 'no file path given'}), 200
-    if Path(raw).suffix.lower() != '.pdbqt':
-        return jsonify({'ok': False, 'err': 'not a .pdbqt file: %s' % raw}), 200
+    suffix = Path(raw).suffix.lower()
+    if suffix not in _POSE_IMPORT_SUFFIXES:
+        return jsonify({'ok': False, 'err': 'not a %s file: %s'
+                        % ('/'.join(_POSE_IMPORT_SUFFIXES), raw)}), 200
     try:
         fp = Path(raw).expanduser()
         if not fp.is_file():
@@ -2011,7 +2235,9 @@ def pose_read_pdbqt():
         raw_text = fp.read_text(errors='ignore')
         # Count MODELs before conversion (conversion keeps only the first)
         n_models = sum(1 for ln in raw_text.splitlines() if ln[:6].rstrip() == 'MODEL')
-        pdb = _pdbqt_to_pdb(raw_text)
+        # .pdbqt needs its AutoDock atom types mapped back to elements; .pdb/.ent
+        # is already in the format parsePDB reads, so it passes through untouched.
+        pdb = _pdbqt_to_pdb(raw_text) if suffix == '.pdbqt' else _pdb_first_model(raw_text)
         resp = {'ok': True, 'name': fp.name, 'path': str(fp), 'pdb': pdb}
         if n_models > 1:
             resp['n_models'] = n_models
@@ -2062,10 +2288,11 @@ def pose_download_pdbqt():
             fp = Path(str(p)).expanduser()
         except Exception:
             continue
-        if fp.is_file() and fp.suffix.lower() == '.pdbqt':
+        if fp.is_file() and fp.suffix.lower() in _POSE_IMPORT_SUFFIXES:
             files.append(fp)
     if not files:
-        return jsonify({'ok': False, 'err': 'none of those paths are readable .pdbqt files'}), 200
+        return jsonify({'ok': False, 'err': 'none of those paths are readable %s files'
+                        % '/'.join(_POSE_IMPORT_SUFFIXES)}), 200
 
     # Keep subfolder structure so same-named files in sibling batches don't collide
     try:
@@ -2103,7 +2330,8 @@ def pose_download_pdbqt():
                     skipped += 1
                     continue
 
-                scores, models, had_models = _pdbqt_models_to_pdb(raw)
+                scores, models, had_models = _pdbqt_models_to_pdb(
+                    raw, already_pdb=(fp.suffix.lower() != '.pdbqt'))
                 if not models:                 # nothing convertible in this file
                     skipped += 1
                     continue
@@ -2119,7 +2347,10 @@ def pose_download_pdbqt():
                         arc = str(fp.relative_to(base))
                     except ValueError:
                         arc = fp.name
-                arc = re.sub(r'\.pdbqt$', '', arc, flags=re.I) + '.pdb'
+                # Strip whichever accepted suffix the source had before appending
+                # .pdb. This was '\.pdbqt$' only, which turned a re-downloaded
+                # batch's "foo.pdb" into "foo.pdb.pdb".
+                arc = re.sub(r'\.(pdbqt|pdb|ent)$', '', arc, flags=re.I) + '.pdb'
                 if arc in used:                # last-ditch de-dupe
                     stem, ext = os.path.splitext(arc)
                     n = 2

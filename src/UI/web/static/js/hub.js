@@ -537,6 +537,16 @@ const _FEATURES = {
             // only resolves if ts_core.js has already executed. _loadSerial is
             // serial, so array order IS execution order. Do not reorder.
             'ts/ts_rl.js',
+            // ts_rl_loop.js — the closed loop inside that tab. AFTER ts_rl.js
+            // (it splices a card into #tsPaneRl, which ts_rl.js creates) and
+            // after ts_run.js (it hooks _tsFinalise to auto-start on a clean
+            // run). Serial loader, so array order is execution order.
+            'ts/ts_rl_loop.js',
+            // ts_rl_debug.js — the ranking-chain probe. LAST: it reads the
+            // globals every other ts/*.js writes, so it must run after all of
+            // them. Reports into the pose activity panel; _tsRlDbgOff() to
+            // silence. Remove this line and the file when the RL panel is fixed.
+            'ts/ts_rl_debug.js',
         ],
         loaded: false,
         onload: () => {

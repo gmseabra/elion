@@ -25,12 +25,17 @@ split, §23 the two removed tools, and the new §0 rows G67–G91).
 | **⌁ Consolidated CoT** | `uiapp/routes/cot_routes.py` | One chain-of-thought router replacing four copy-pasted ones. The broken copy in `hub_routes.py` was deleted. |
 | **⬢ Pose generation** | `uiapp/routes/pose_routes.py`, `web/static/js/pose.js` | SMILES → 3-D conformer + torsion tree server-side; all kinematics in the browser. Three scorers: DeepAtom, GIGN, and a pure-Python Vina five-term function. 15 endpoints under `/pose/`. |
 | **⟐ TS frontend, split** | `web/static/js/ts/` (7 modules) | Was one file. Adds multi-job fan-out, worker pre-seeding, traceback capture, rAF frame budgets, and off-thread top-5 ranking with hysteresis. |
+| **⌖ Source map** | `uiapp/routes/devmap_routes.py`, `web/static/js/devmap.js` | Hover any button → the file:line of its handler, its markup, and the Flask view behind every endpoint it calls. Development aid, so it ships **off**: enable it with **Alt+Ctrl/⌘+Shift+D** or the bottom-left badge. Default state, hotkey, pin modifier and badge visibility are configured under `visualizer.devmap` in the engine's `input_TS.yml` (see `add_devmap_config.py`). 4 endpoints under `/devmap/`. |
 
 Frontend shell: `web/static/js/hub.js` now owns what used to be `hub.html`'s
 inline script (nav, chat SSE, lazy feature loader, model picker, session panel).
 `web/static/js/elion_mini_chat.js` drives one themed panel for four tools.
 
-**Route count: 38 → 81.**
+**Route count: 38 → 81 → 95** (devmap 4, the RL loop 4, devmap source 3, and the
+TS/pose additions). OpenDock's 9 endpoints were added and later removed with the
+engine; `engines/opendock/`, `uiapp/routes/opendock_routes.py`,
+`web/static/js/opendock.js`, `web/templates/opendock_modal.html` and
+`OPENDOCK.md` are gone from the tree — see git history.
 
 ## Changes I made during the port
 

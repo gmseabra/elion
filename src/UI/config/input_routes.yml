@@ -151,29 +151,131 @@ deepatom:
 # The two scorer scripts live in the sibling elion checkout, so they are the one
 # genuinely-external pair here — leave them blank to disable that scorer rather
 # than pointing at a path that does not exist.
+# NOTE ON WHICH FILE THIS IS
+# --------------------------
+# This is the file the pose / vina / deepatom routes actually read
+# (uiapp.config.INPUT_ROUTES_YML → uiapp.routes.shared._INPUT_ROUTES_YML).
+# The engine's input_TS.yml carries `pose:`, `vina:` and `deepatom:` blocks too,
+# left over from when the UI lived at src/visualizer/ — but NOTHING reads them
+# from there unless $UI_INPUT_ROUTES_YML is pointed at that file, and doing so
+# also swaps the repo-relative `vina:` paths below for absolute ones under
+# src/visualizer/ that no longer exist. Keep the scorer paths HERE.
 pose:
   # Seed molecule shown when the tool first opens.
-  default_smile: "CC(=O)Oc1ccccc1C(=O)O"
+  default_smile: "ClC(C(F)=CC1=C2C[C@](C3=CC=CC=C3)([C@@H]4CCCN4)O1)=[C@]2[C@@]5=C(C(NC)=O)C=NC(OCCO)=C5F"
 
-  # Receptor + upload gallery roots (repo-relative; created on first write).
-  default_receptor_pdb: "data/pose/receptor/receptor.pdb"
-  default_upload_path:  "data/pose/uploads"
-  default_dir:          "data/pose"
+  # Receptor + upload gallery roots. Repo-relative paths resolve against the
+  # repo root and are created on first write; absolute paths are used as given.
+  default_receptor_pdb: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/data/8P0M/protein/8P0M_Prepared_water_605_632.pdb"
+  default_upload_path:  "/home/huangzihang/repos/user_data/uploaded_pdb"
+  default_dir:          "/home/huangzihang/repos/user_data/gign"
+
+  # ── Trajectory poses ────────────────────────────────────────────────────────
+  # Where the affinity scorers stage EVERY new-minimum pose the Vina search
+  # finds. A 12-record run leaves:
+  #
+  #   <trajectory_dir>/rec001_dgm4p200.pdb        the pose itself, always written
+  #   <trajectory_dir>/gign_rec001_dgm4p200/      GIGN staging + its run log
+  #   <trajectory_dir>/rec001_dgm4p200/           DeepAtom's root FOR THAT RECORD
+  #        Dataset_VS/rec001_dgm4p200/…_complex.pdb
+  #        atomtypes/  npz/  …_score.log
+  #
+  # The .pdb is written before any scoring and independently of it, so a run
+  # leaves a complete set of record poses on disk even if every scorer is
+  # disarmed or every score fails.
+  #
+  # Deliberately NOT default_dir, and the per-record subdirectory is not tidiness.
+  # The DeepAtom pipeline is a virtual-screening driver: `-d <root>` atom-types,
+  # voxelises and predicts EVERY compound under <root>/Dataset_VS. Point a
+  # trajectory at one shared root and record 12 re-processes records 1..11 as
+  # well — 78 complexes for a 12-record run instead of 12, growing as n²/2, with
+  # each score simply taking longer than the last as the only symptom. One root
+  # per record keeps every call at exactly one complex. GIGN needs no such
+  # treatment: /pose/gign_score already stages into <root>/gign_<name>/.
+  #
+  # Blank => the client falls back to the panel's own output-dir box, i.e. the
+  # pre-trajectory behaviour.
+  trajectory_dir:       "/home/huangzihang/repos/user_data/vina_poses"
+
+  # ── Conda environments for the two scorer subprocesses ──────────────────────
+  # Both scorers shell out to something that must run in a specific environment.
+  # The NAME is configuration, not a constant — /pose/deepatom_score used to
+  # hard-code "elion_backend", which is why DeepAtom failed with
+  #     Could not find conda environment: elion_backend
+  # on a host where GIGN worked: GIGN already read gign_conda_env, and that was
+  # set to a name that exists here.
+  #
+  # Set either to "" to run the command WITHOUT activating anything. That is the
+  # right answer when the script activates its own env, or when Flask already
+  # runs inside the correct one — and it was impossible to express before,
+  # because the old code read the key with `or`, which turned "" back into the
+  # default.
+  #
+  # When activation fails the route now appends the output of `conda env list`,
+  # so a wrong name shows you the real ones rather than leaving you to guess.
+  # Note that list comes from whichever conda `conda info --base` resolves to:
+  # an env created under a different installation will not appear in it.
+  deepatom_conda_env: "elion-ui"
+
+  # Environment variables for the DeepAtom subprocess. A null (or blank) value
+  # UNSETS the variable, which is the point of the key existing: "remove this
+  # from the environment" cannot be expressed by setting it to something.
+  #
+  # AUGMENT=1 (build + average augmented grids, matching the batch methodology)
+  # is applied by default; list it here to change it.
+  #
+  # CORRECTION, and it is worth reading before you reach for LD_LIBRARY_PATH.
+  # This block used to claim that
+  #     libtorch_cuda.so: undefined symbol: ncclCommResume
+  # meant LD_LIBRARY_PATH was shadowing torch's bundled NCCL. That was wrong on
+  # this host, and the evidence took three dead ends to reach:
+  #
+  #   LD_LIBRARY_PATH= python -c "import torch"      -> failed identically
+  #   ls $CONDA_PREFIX/lib/libnccl.so*               -> nothing; no conda nccl
+  #   ldd .../torch/lib/libtorch_cuda.so | grep nccl -> torch's OWN bundled copy won
+  #   ctypes.CDLL(<that copy>) has ncclCommResume?   -> False
+  #
+  # The env had TWO NCCL wheels — nvidia-nccl-cu13 2.29.7 (what torch 2.13 pins)
+  # and a leftover nvidia-nccl-cu12 2.21.5 — and the nvidia.* wheels share one
+  # namespace, so both unpack to the SAME site-packages/nvidia/nccl/lib/
+  # libnccl.so.2. The old one was on disk; NCCL 2.21 predates the symbol.
+  # `pip list | grep -i "^nvidia-"` showed fourteen more cu12/cu13 pairs in the
+  # same state, from an unpinned `pip install torch_geometric` that re-resolved
+  # torch onto a CUDA 13 build.
+  #
+  # So: on `undefined symbol`, run `ldd` on the failing library FIRST. It
+  # separates "the wrong file is being found" (LD_LIBRARY_PATH, and this knob
+  # helps) from "the right file is too old" (a package problem, and this knob
+  # will not help at all). The two are indistinguishable from the traceback and
+  # have opposite fixes.
+  deepatom_env:
+    AUGMENT: "1"
+    # LD_LIBRARY_PATH: null      # ← only if `ldd` shows a library from OUTSIDE
+                                 #   site-packages/nvidia/ or torch/lib winning
+
+  # Same knob for the GIGN subprocess. Empty by default.
+  gign_env: {}
 
   # DeepAtom scorer — the consolidated single-pose driver in the elion tree.
   # Blank disables the "deepatom" option in the Scorer dropdown.
-  default_script: ""
+  default_script: "/home/huangzihang/repos/elion/src/elion/properties/deepatom/bin/deepatom_score_pipeline.sh"
 
   # GIGN scorer — graph-network pose scorer in the elion tree.
-  # Blank disables the "yupu_gign" option.
-  gign_script: ""
-  gign_model: ""                 # blank => the script's own default checkpoint
-  gign_conda_env: "elion_backend"
+  # Blank disables the "yupu_gign" option, and /pose/gign_score answers
+  # "GIGN predict script not found" before it stages anything — which is why a
+  # blank here produces no debug log to look at.
+  gign_script: "/home/huangzihang/repos/elion/src/elion/properties/Yupu_GIGN/yupu_GIGN_pose.py"
+  gign_model: "/home/huangzihang/repos/elion/src/elion/properties/Yupu_GIGN/model/Yupu_GIGN.pt"                 # blank => the script's own default checkpoint
+  gign_conda_env: "elion-ui"
   gign_pocket_cutoff: 5          # Angstrom. MUST be > 0 — 0 means "whole
                                  # receptor", and the model's sum pooling makes
                                  # that produce a physically impossible score.
   gign_drop_water: true
-  gign_scratch: ""               # blank => a temp dir per invocation
+  # Staging root. Each call writes <gign_scratch>/gign_<name>/ containing
+  # <name>_ligand.pdb, <name>_protein.pdb, <name>_meta.json and the run log
+  # <name>_gign.log. Blank => a fresh /tmp/elion_gign_* per invocation, which
+  # makes the log effectively unfindable after the fact.
+  gign_scratch: "/home/huangzihang/repos/user_data/GIGN"
   gign_timeout_seconds: 1200
 
   # Docking box drawn in the 3-D view. Matches vina.active_protein (8P0M).
@@ -181,3 +283,11 @@ pose:
   box_center_y: 0.22
   box_center_z: 28.39
   box_length: 20
+
+  # Per-atom-pair Vina score breakdown ("Vina" tab). Writes
+  # <name>_vina_breakdown.log here. Blank => shown in-browser only.
+  vina_breakdown_dir: "/home/huangzihang/repos/user_data/vina_breakdown"
+
+  # Auto-save target for "▶ Run search" on the Monte-Carlo tab, and the fallback
+  # out_dir for POST /pose/save_pdb. Blank => completed searches save nothing.
+  search_pose_dir: "/home/huangzihang/repos/user_data/search_pose"

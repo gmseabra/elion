@@ -3413,3 +3413,373 @@ function _voxelStyleButton(on) {
         btn.setAttribute('aria-pressed', 'false');
     }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Docked results — the ligand directory IS the history
+ *
+ * A Vina `*_out.pdbqt` already records, per pose: the affinity, both RMSDs, and
+ * the INTER / INTRA / UNBOUND decomposition, plus TORSDOF and the coordinates.
+ * So there is nothing to record at dock time and no index that can drift out of
+ * sync with the files — the server just scans the directory and parses.
+ *
+ * The one thing a .pdbqt does NOT record is the receptor. The server infers it
+ * (a pose has to lie inside the box it was searched in, and filenames often
+ * match a configured protein's default ligand) and reports WHICH evidence
+ * applied. The badge below shows that verbatim, including "ambiguous" — an
+ * inferred field that presents itself as a fact is worse than a blank one.
+ *
+ * Route: GET /vina_visualization/dock_results
+ * ═══════════════════════════════════════════════════════════════════════════ */
+var _VRES = { all: [], open: {} };
+
+function _vinaResultsShow() {
+    var p = document.getElementById('vinaResultsPanel');
+    if (p) p.classList.remove('hidden');
+    _vinaResultsLoad();
+}
+function _vinaResultsHide() {
+    var p = document.getElementById('vinaResultsPanel');
+    if (p) p.classList.add('hidden');
+}
+function _vinaResSay(msg, err) {
+    try { if (typeof _vinaStatus === 'function') _vinaStatus(msg, !!err); } catch (e) {}
+}
+function _vinaResEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+}
+function _vinaResNum(v, dp) {
+    return (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(dp == null ? 2 : dp);
+}
+function _vinaResNote(txt) {
+    return '<div style="font-size:11.5px;color:#64748b;background:#0b1120;border:1px dashed #1e293b;' +
+           'border-radius:11px;padding:18px;text-align:center;line-height:1.6;">' + txt + '</div>';
+}
+
+function _vinaResultsLoad() {
+    var body = document.getElementById('vinaResultsBody');
+    if (!body) return;
+    body.innerHTML = _vinaResNote('scanning…');
+    fetch('/vina_visualization/dock_results')
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) {
+                _VRES.all = [];
+                body.innerHTML = _vinaResNote('could not read the ligand directory' +
+                    ((res && res.err) ? ' — ' + _vinaResEsc(res.err) : ''));
+                return;
+            }
+            _VRES.all = res.results || [];
+            var dir = document.getElementById('vinaResultsDir');
+            if (dir) { dir.textContent = res.dir || ''; dir.title = res.dir || ''; }
+            var cnt = document.getElementById('vinaResultsCount');
+            if (cnt) cnt.textContent = _VRES.all.length ? String(_VRES.all.length) : '';
+            _VRES.skipped = res.skipped || [];
+            _vinaResultsRender();
+        })
+        .catch(function (e) {
+            body.innerHTML = _vinaResNote('results unavailable (is /vina_visualization/dock_results deployed?) — ' +
+                                          _vinaResEsc(e.message));
+        });
+}
+
+/* Filter + sort happen in the browser: the whole set is already here, and a
+   round trip per keystroke would be slower and no more correct. */
+function _vinaResultsRender() {
+    var body = document.getElementById('vinaResultsBody');
+    if (!body) return;
+    var q = ((document.getElementById('vinaResultsSearch') || {}).value || '').trim().toLowerCase();
+    var mode = (document.getElementById('vinaResultsSort') || {}).value || 'time';
+    var rows = _VRES.all.filter(function (r) {
+        if (!q) return true;
+        return (r.stem + ' ' + (r.receptor_id || '') + ' ' + (r.receptor || '')).toLowerCase().indexOf(q) >= 0;
+    });
+    rows = rows.slice().sort(function (a, b) {
+        if (mode === 'score') return (a.best == null ? 1e9 : a.best) - (b.best == null ? 1e9 : b.best);
+        if (mode === 'name') return a.stem.localeCompare(b.stem);
+        return (b.mtime_epoch || 0) - (a.mtime_epoch || 0);
+    });
+    var tot = document.getElementById('vinaResultsTotal');
+    if (tot) tot.textContent = rows.length + (rows.length === 1 ? ' result' : ' results') +
+        (rows.length !== _VRES.all.length ? (' of ' + _VRES.all.length) : '');
+    if (!rows.length) {
+        body.innerHTML = _vinaResNote(q
+            ? 'nothing matches “' + _vinaResEsc(q) + '”'
+            : 'no *_out.pdbqt in the ligand directory yet — run ⚗️ Vina Dock and it will appear here');
+        return;
+    }
+    body.innerHTML = rows.map(_vinaResCard).join('') +
+        ((_VRES.skipped && _VRES.skipped.length)
+            ? '<div style="font-size:9.5px;color:#475569;font-family:ui-monospace,monospace;padding:2px 4px;">' +
+              _VRES.skipped.length + ' *_out.pdbqt file(s) held no scored pose and were skipped: ' +
+              _vinaResEsc(_VRES.skipped.join(', ')) + '</div>'
+            : '');
+    // re-open whatever was expanded before the re-render
+    rows.forEach(function (r) { if (_VRES.open[r.name]) _vinaResExpand(r.name, true); });
+}
+
+function _vinaResFormula(el) {
+    if (!el) return '—';
+    var order = ['C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I'];
+    var keys = Object.keys(el).sort(function (a, b) {
+        var ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+    });
+    return keys.map(function (k) { return k + (el[k] > 1 ? el[k] : ''); }).join('');
+}
+
+function _vinaResRecBadge(r) {
+    var conf = r.receptor_confidence || 'unknown';
+    var col = (conf === 'box + name') ? '#34d399'
+            : (conf === 'box' || conf === 'name') ? '#22d3ee'
+            : (conf.indexOf('ambiguous') === 0) ? '#fbbf24' : '#64748b';
+    var label = r.receptor_id || 'receptor unknown';
+    return '<span title="' + _vinaResEsc(r.receptor || 'not stored in the .pdbqt; inferred from the pose and the filename') +
+           '" style="font-size:9.5px;padding:1px 6px;border-radius:999px;border:1px solid ' + col +
+           '55;background:' + col + '18;color:' + col + ';">' + _vinaResEsc(label) +
+           ' · ' + _vinaResEsc(conf) + '</span>';
+}
+
+function _vinaResCard(r) {
+    var best = (r.best == null) ? null : Number(r.best);
+    var col = (best == null) ? '#64748b' : (best < 0 ? '#34d399' : '#fb7185');
+    var when = String(r.mtime || '').replace('T', '  ');
+    var id = 'vres_' + _vinaResId(r.name);
+    return '' +
+    // flex-shrink:0 is load-bearing, not tidiness. #vinaResultsBody is a flex COLUMN,
+    // so its children default to flex-shrink:1 — once the cards total more than the
+    // panel's height they all compress instead of overflowing, and because each card
+    // is overflow:hidden the compression silently slices their content off. With six
+    // results and one expanded that hid the whole action row (the Visualize button
+    // was in the DOM, correctly styled, and simply not on screen) and cut the
+    // affinity in half on every collapsed row. Pinning shrink to 0 lets the total
+    // exceed the container, which is what gives overflow-y:auto something to scroll.
+    '<div id="' + id + '" data-res="' + _vinaResEsc(r.name) + '" ' +
+         'style="flex-shrink:0;background:#0b1120;border:1px solid #1e293b;border-radius:12px;overflow:hidden;">' +
+      '<div onclick="_vinaResExpand(\'' + _vinaResEsc(r.name).replace(/'/g, "\\'") + '\')" ' +
+           'style="display:flex;align-items:center;gap:14px;padding:11px 13px;cursor:pointer;">' +
+        '<div style="min-width:92px;text-align:right;font-family:ui-monospace,monospace;font-size:19px;font-weight:700;color:' + col + ';">' +
+          _vinaResNum(best, 3) + '</div>' +
+        '<div style="min-width:0;flex:1;">' +
+          '<div style="font-family:ui-monospace,monospace;font-size:12px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _vinaResEsc(r.path) + '">' +
+            '<span style="color:#a78bfa;">ligand</span> ' + _vinaResEsc(r.stem) + '</div>' +
+          '<div style="margin-top:2px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
+            _vinaResRecBadge(r) +
+            '<span style="font-family:ui-monospace,monospace;font-size:10px;color:#64748b;">' +
+              _vinaResFormula(r.elements) + ' · ' + (r.n_heavy || 0) + ' heavy' +
+              (r.torsdof != null ? (' · TORSDOF ' + r.torsdof) : '') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-family:ui-monospace,monospace;font-size:10px;color:#64748b;line-height:1.6;text-align:right;min-width:172px;">' +
+          when + '<br>' +
+          (r.n_modes || 0) + ' mode' + (r.n_modes === 1 ? '' : 's') +
+          ' · ' + (r.size != null ? (r.size / 1024).toFixed(1) + ' KB' : '—') + '<br>' +
+          (r.centroid ? ('ctr ' + r.centroid.map(function (v) { return v.toFixed(1); }).join(', ')) : '') +
+        '</div>' +
+        '<span id="' + id + '_chev" style="color:#475569;font-size:12px;">▸</span>' +
+      '</div>' +
+      '<div id="' + id + '_body" style="display:none;border-top:1px solid #1e293b;padding:12px 13px;"></div>' +
+    '</div>';
+}
+
+function _vinaResExpand(name, keep) {
+    var r = null, i;
+    for (i = 0; i < _VRES.all.length; i++) if (_VRES.all[i].name === name) r = _VRES.all[i];
+    if (!r) return;
+    var id = 'vres_' + _vinaResId(name);
+    var b = document.getElementById(id + '_body'), c = document.getElementById(id + '_chev');
+    if (!b) return;
+    var opening = keep ? true : (b.style.display === 'none' || !b.style.display);
+    b.style.display = opening ? 'block' : 'none';
+    if (c) c.textContent = opening ? '▾' : '▸';
+    _VRES.open[name] = opening;
+    if (!opening) { b.innerHTML = ''; return; }
+
+    var rows = (r.modes || []).map(function (m) {
+        return '<div style="display:flex;padding:2px 0;border-bottom:1px solid rgba(30,41,59,.6);">' +
+          '<span style="width:42px;color:#22d3ee;">' + m.mode + '</span>' +
+          '<span style="width:82px;text-align:right;color:' + (m.affinity < 0 ? '#34d399' : '#fb7185') + ';">' + _vinaResNum(m.affinity, 3) + '</span>' +
+          '<span style="width:74px;text-align:right;color:#64748b;">' + _vinaResNum(m.rmsd_lb, 3) + '</span>' +
+          '<span style="width:74px;text-align:right;color:#64748b;">' + _vinaResNum(m.rmsd_ub, 3) + '</span>' +
+          '<span style="width:78px;text-align:right;color:#94a3b8;">' + _vinaResNum(m.inter, 3) + '</span>' +
+          '<span style="width:74px;text-align:right;color:#94a3b8;">' + _vinaResNum(m.intra, 3) + '</span>' +
+        '</div>'; }).join('');
+    var kv = function (k, v) {
+        return '<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;">' +
+          '<span style="color:#64748b;">' + k + '</span>' +
+          '<span style="color:#cbd5e1;text-align:right;word-break:break-all;">' + _vinaResEsc(v) + '</span></div>'; };
+    var esc = _vinaResEsc(name).replace(/'/g, "\\'");
+    b.innerHTML =
+      '<div style="font-family:ui-monospace,monospace;font-size:11px;">' +
+        '<p style="font-size:9.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#475569;margin:0 0 6px;">' +
+          'Modes <span style="color:#334155;font-weight:400;text-transform:none;letter-spacing:0;">' +
+          '· affinity and RMSDs are Vina’s own REMARK lines, not recomputed</span></p>' +
+        '<div style="display:flex;color:#475569;font-size:10px;border-bottom:1px solid #1e293b;padding-bottom:2px;">' +
+          '<span style="width:42px;">mode</span><span style="width:82px;text-align:right;">affinity</span>' +
+          '<span style="width:74px;text-align:right;">rmsd l.b.</span><span style="width:74px;text-align:right;">rmsd u.b.</span>' +
+          '<span style="width:78px;text-align:right;">inter</span><span style="width:74px;text-align:right;">intra</span></div>' +
+        rows +
+      '</div>' +
+      '<div style="display:flex;gap:16px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:11px;margin-top:12px;">' +
+        '<div style="flex:1 1 300px;min-width:280px;">' +
+          kv('file', r.path) +
+          kv('source ligand', r.source_ligand || '(the un-docked input is gone)') +
+          kv('modified', String(r.mtime || '').replace('T', ' ')) +
+          kv('size', r.size != null ? (r.size / 1024).toFixed(1) + ' KB' : '—') +
+        '</div>' +
+        '<div style="flex:1 1 300px;min-width:280px;">' +
+          kv('receptor', r.receptor || '(not stored in the file)') +
+          kv('inferred from', r.receptor_confidence || 'unknown') +
+          kv('candidates', (r.receptor_candidates || []).join(', ') || '—') +
+          kv('pose 1 centroid', r.centroid ? r.centroid.join(', ') : '—') +
+          kv('heavy atoms', r.n_heavy + '  (' + _vinaResFormula(r.elements) + ')') +
+          kv('TORSDOF', r.torsdof == null ? '—' : r.torsdof) +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:7px;margin-top:12px;flex-wrap:wrap;">' +
+        _vinaResVisBtn(r, esc) +
+        '<button onclick="_vinaResUse(\'' + esc + '\')" title="refill the receptor, ligand and box fields from this result" ' +
+          'style="padding:5px 11px;border-radius:8px;border:1px solid #164e63;background:#083344;color:#67e8f9;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⤴ Use these inputs</button>' +
+        '<button onclick="_vinaResExport(\'' + esc + '\')" title="convert this file’s best pose to .pdb and download it" ' +
+          'style="padding:5px 11px;border-radius:8px;border:1px solid #1e293b;background:#0b1120;color:#94a3b8;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⬇ Export best pose (.pdb)</button>' +
+      '</div>';
+}
+
+function _vinaResId(name) { return String(name).replace(/[^A-Za-z0-9_]/g, '_'); }
+
+/* ── ⚡ Visualize ────────────────────────────────────────────────────────────
+   Renders a past result in the per-atom decomposition view — the same
+   #vizBtn → _vinaVisualize() path the toolbar drives, so this is the shipped
+   renderer and not a second implementation of it.
+
+   The catch this works around: _vinaVisualize reads vina_non_cache.log, and
+   there is exactly ONE of those — every dock truncates and rewrites it. Firing
+   it straight at an older result would paint this molecule's coordinates with
+   the previous molecule's energies, and the picture would look entirely
+   plausible. So before rendering, ask the server to regenerate the log for
+   THIS pose (vina --score_only over MODEL 1 of its _out.pdbqt: no search, no
+   randomness, it just re-evaluates coordinates Vina already chose). Takes a few
+   seconds; skipped entirely when the log already belongs to this result. */
+function _vinaResVisBtn(r, esc) {
+    return '<button onclick="_vinaResVisualize(\'' + esc + '\')" ' +
+      'id="vresviz_' + _vinaResId(r.name) + '" ' +
+      'title="' + _vinaResEsc(
+          r.log_matches
+            ? 'Render this pose with its per-atom Vina contributions'
+            : 'Re-score this pose with Vina (a few seconds) and render its per-atom '
+              + 'contributions. The stored affinity is not recomputed.') + '" ' +
+      'class="flex-shrink-0 flex items-center gap-1.5 px-5 py-2 bg-cyan-500 hover:bg-cyan-400 ' +
+      'text-slate-950 font-semibold rounded-xl text-xs transition-all active:scale-95">' +
+      '⚡ Visualize</button>';
+}
+
+function _vinaResVisualize(name) {
+    var r = null, i;
+    for (i = 0; i < _VRES.all.length; i++) if (_VRES.all[i].name === name) r = _VRES.all[i];
+    if (!r) return;
+
+    var btn = document.getElementById('vresviz_' + _vinaResId(r.name));
+    var restore = function (label) {
+        if (!btn) return;
+        btn.disabled = false;
+        btn.textContent = label || '⚡ Visualize';
+        btn.style.opacity = '';
+    };
+    var hand_off = function () {
+        _vinaResApply(r, true);          // ligand := the _out.pdbqt the log describes
+        _vinaResultsHide();
+        _vinaResSay('visualizing ' + r.stem + ' · best ' + _vinaResNum(r.best, 3) + ' kcal/mol');
+        // let the panel finish closing so the viewer's own spinner is visible
+        setTimeout(function () {
+            try { if (typeof _vinaVisualize === 'function') _vinaVisualize(); }
+            catch (e) { _vinaResSay('visualize failed: ' + e.message, true); }
+        }, 60);
+    };
+
+    if (r.log_matches) { hand_off(); return; }   // log is already this pose — no rescore
+
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Re-scoring…'; btn.style.opacity = '.7'; }
+    _vinaResSay('re-scoring ' + r.stem + ' so its per-atom energies can be drawn…');
+    fetch('/vina_visualization/dock_result_rescore', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: r.name, receptor_path: r.receptor || '' })
+    })
+    .then(function (res) { return res.json(); })
+    .then(function (d) {
+        restore();
+        if (!d || !d.ok) {
+            _vinaResSay('re-score failed: ' + ((d && (d.err || d.detail)) || 'unknown error'), true);
+            return;
+        }
+        // The log now describes this pose, so a second click takes the fast path.
+        r.log_matches = true;
+        if (d.receptor) r.receptor = d.receptor;
+        if (d.drift != null && Math.abs(d.drift) > 0.05) {
+            _vinaResSay('re-scored ' + _vinaResNum(d.rescored, 3) + ' vs the stored '
+                        + _vinaResNum(r.best, 3) + ' — check the receptor on this card', true);
+        }
+        hand_off();
+    })
+    .catch(function (e) { restore(); _vinaResSay('re-score failed: ' + e.message, true); });
+}
+
+/* Fill the receptor / ligand / box fields from a result. Shared by Use and
+   Visualize so the two cannot drift apart. Returns whether the ligand field got
+   the original input rather than the docked output. */
+function _vinaResApply(r, want_pose) {
+    var set = function (elId, v) { var e = document.getElementById(elId); if (e && v) { e.value = v; e.title = v; } };
+    // Use wants the ORIGINAL input, because that is what a re-dock needs — feeding
+    // it the _out file would re-dock an already-docked pose. Visualize wants the
+    // opposite: the _out file IS the pose the regenerated log describes, and
+    // /vina_parse_log recognises a *_out.pdbqt as its own docked pose.
+    set('ligPath', want_pose ? (r.path || r.source_ligand) : (r.source_ligand || r.path));
+    if (r.receptor) set('recPath', r.receptor);
+    // The box rides along with the result: the server had to read it anyway to run
+    // the containment test, so the client never re-derives it from a protein list
+    // it would have to fetch — and which no page script actually exposes.
+    try {
+        if (r.box && typeof _applyGridBox === 'function') _applyGridBox(r.box);
+    } catch (e) { _vinaResSay('box not applied: ' + e.message, true); }
+    return !!r.source_ligand;
+}
+
+/* Refill the form. The LIGAND field gets the un-docked input when it still
+   exists, because that is what a re-dock needs; falling back to the *_out file
+   would re-dock an already-docked pose. The box goes through _applyGridBox,
+   which owns _GRID *and* the four inputs, so the overlay cannot drift out of
+   sync with the numbers. */
+function _vinaResUse(name) {
+    var r = null, i;
+    for (i = 0; i < _VRES.all.length; i++) if (_VRES.all[i].name === name) r = _VRES.all[i];
+    if (!r) return;
+    _vinaResApply(r);
+    _vinaResultsHide();
+    _vinaResSay('loaded ' + r.stem + ' · best ' + _vinaResNum(r.best, 3) + ' kcal/mol' +
+                (r.receptor_id ? (' · ' + r.receptor_id) : '') +
+                (r.source_ligand ? '' : ' · ligand field points at the docked output (the input is gone)'));
+}
+
+function _vinaResExport(name) {
+    var r = null, i;
+    for (i = 0; i < _VRES.all.length; i++) if (_VRES.all[i].name === name) r = _VRES.all[i];
+    if (!r) return;
+    fetch('/vina_visualization/vina_export_pdb', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ out_path: r.path })
+    })
+        .then(function (x) { return x.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) { _vinaResSay('export failed: ' + ((res && res.err) || '?'), true); return; }
+            var blob = new Blob([res.pdb_text], { type: 'chemical/x-pdb' });
+            var url = URL.createObjectURL(blob), a = document.createElement('a');
+            a.href = url; a.download = res.filename || (r.stem + '.pdb');
+            document.body.appendChild(a); a.click(); a.remove();
+            // revoke on a delay, never on the same tick: a same-tick revoke can
+            // cancel the write the browser has not started yet
+            setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            _vinaResSay('exported ' + (res.filename || ''));
+        })
+        .catch(function (e) { _vinaResSay('export failed: ' + e.message, true); });
+}

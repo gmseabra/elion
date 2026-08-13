@@ -30,3 +30,4 @@ seaborn>=0.12
 
 # ── added with the Thompson-Sampling monitor + pose tooling ──────────────────
 psutil>=5.9          # ts_routes: CPU/GPU monitor SSE endpoints
+

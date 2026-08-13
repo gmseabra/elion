@@ -448,8 +448,8 @@ pose:
   # gign_conda_env: set to your GIGN env; leave "" to run plain `python`.
   # gign_model:     leave "" to use yupu_GIGN_pose.py's built-in default checkpoint.
   gign_script: "/home/huangzihang/repos/elion/src/elion/properties/Yupu_GIGN/yupu_GIGN_pose.py"
-  gign_model: ""
-  gign_conda_env: "elion_backend"
+  gign_model: "/home/huangzihang/repos/elion/src/elion/properties/Yupu_GIGN/model/Yupu_GIGN.pt"
+  gign_conda_env: "elion-ui"
   gign_pocket_cutoff: 5
   gign_drop_water: true
   gign_scratch: "/home/huangzihang/repos/user_data/GIGN"

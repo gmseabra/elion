@@ -10,6 +10,39 @@
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* ══ Scrollbars — one rule for the whole app ═════════════════════════
+           Every scrollable surface uses the same thin dark bar: thumb #1e3a5f
+           on track #0f172a, the treatment #miniChatOutput already had.
+
+           Before this, scrollbar styling was per-element and inline, so it only
+           existed where someone remembered to type it: the sidebar was cyan
+           (#22d3ee), the pose mini-chat purple (#3b2a6b), the TS log had its own
+           class, and the ~20 other scrollable panels — including every panel the
+           JS builds at runtime, like #poseReactPop and the TS system table — had
+           no styling at all and fell back to the browser default, which is a
+           light bar on a dark UI.
+
+           A universal selector is the right tool here precisely because the set
+           of scrollable elements is not knowable from the markup: most of them
+           are created by pose.js / vina.js / ts_ui.js after load. `*` carries
+           specificity 0, so this is a floor, not a ceiling — any element that
+           genuinely needs a different bar can still override it with a normal
+           selector.
+
+           Both syntaxes are needed. scrollbar-width / scrollbar-color are the
+           standard and are all Firefox reads; Chromium only honoured them from
+           v121, so the ::-webkit-scrollbar rules carry earlier Chrome and every
+           WebKit browser. Keep them in sync if you change the colours. */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #1e3a5f #0f172a;
+        }
+        *::-webkit-scrollbar              { width: 8px; height: 8px; }
+        *::-webkit-scrollbar-track        { background: #0f172a; border-radius: 4px; }
+        *::-webkit-scrollbar-thumb        { background: #1e3a5f; border-radius: 4px; }
+        *::-webkit-scrollbar-thumb:hover  { background: #2b5286; }
+        *::-webkit-scrollbar-corner       { background: #0f172a; }
+
         .title-font { font-family: "Space Grotesk", sans-serif; }
 
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap');
@@ -252,6 +285,18 @@
     box-shadow: 0 0 10px rgba(251,191,36,.35) !important;
 }
 
+        /* the results list is a long scroller on a dark panel; the browser default
+           bar is a light-grey stripe against #0f172a. Both syntaxes: the standard
+           properties cover Firefox and Chrome 121+, the webkit pseudo-elements
+           cover Safari and older Chrome, and they cannot fight each other. */
+        .vina-res-scroll { scrollbar-width: thin; scrollbar-color: #1e293b transparent; }
+        .vina-res-scroll::-webkit-scrollbar { width: 9px; }
+        .vina-res-scroll::-webkit-scrollbar-track { background: transparent; }
+        .vina-res-scroll::-webkit-scrollbar-thumb {
+            background: #1e293b; border-radius: 5px;
+            border: 2px solid transparent; background-clip: content-box;
+        }
+
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 h-screen flex flex-col">
@@ -394,6 +439,7 @@
                     <div style="margin-left:auto;font-size:10px;padding:2px 7px;background:#083344;color:#22d3ee;border-radius:8px;border:1px solid #0e4f63;white-space:nowrap;">Estimator</div>
                 </button>
 
+
                 <!-- DeepAtom Property Estimators -->
                 <button data-nav="deepatom" style="
                     width:100%;text-align:left;padding:12px 14px;
@@ -418,7 +464,6 @@
         <div>
             <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#475569;margin-bottom:10px;">Tools</div>
             <div style="display:flex;flex-direction:column;gap:8px;">
-
 
 
                 <!-- PDB → PDBQT Converter -->
@@ -1121,6 +1166,16 @@
               class="text-[10px] font-semibold px-3 py-1.5 bg-cyan-900 hover:bg-cyan-800 border border-cyan-700 text-cyan-300 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5">
         <span id="vinaDockIcon">⚗️</span> Vina Dock
       </button>
+
+      <!-- Past docking results. There is no results database: a Vina *_out.pdbqt
+           already records every pose's affinity, RMSDs and inter/intra terms, so
+           the history IS the ligand directory. -->
+      <button onclick="_vinaResultsShow()"
+              id="vinaResultsBtn"
+              title="Every *_out.pdbqt in the ligand directory — ligand, docking score, receptor, modes and the energy breakdown, read straight from the files."
+              class="text-[10px] font-semibold px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5">
+        📊 Docked results <span id="vinaResultsCount" class="text-[9px] text-slate-500"></span>
+      </button>
     </div>
 
     <!-- ── Visualize row ── -->
@@ -1491,16 +1546,8 @@
 </div>
 
 
-
-
-
-
-
-
-
 <!-- ══ Mini chat panel (bottom-left, shown after visualizer opens) ══════════ -->
 <!-- ══ Mini Chat · ChemBERT (fixed bottom-left) ══════════════════════════ -->
-
 
 
 <!-- ══ JS — load order: (early stubs) → elion_mini_chat → vina → hub ══════════ -->
@@ -1528,7 +1575,6 @@ window._HUB_EAGER_SCRIPTS = [
 window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 </script>
 <script src="{{ url_for('static', filename='js/hub.js') }}"></script>
-
 
 
 <!-- ══ PDB → PDBQT Converter Modal ══════════════════════════════════════════ -->
@@ -1659,6 +1705,46 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 
 <script src="{{ url_for('static', filename='js/vina_engine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pose.js') }}"></script>
+<!-- pose_gign_dock.js — drag #poseGignCard onto the pocket view and it becomes a
+     floating pK readout shaped like #poseProcPanel. AFTER pose.js: it wraps
+     PG.mc._gignSet / setScorer / scoreGign, which must exist first. Nothing in
+     pose.js or this template was changed for it — delete the file and this tag
+     and the feature is gone. -->
+<script src="{{ url_for('static', filename='js/pose_affinity_dock.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gign_dock.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_deepatom_dock.js') }}"></script>
+<!-- pose_spark_hover.js — crosshair + score readout on every pose sparkline
+     (#poseProcChart, #poseImpScoreChart, #poseGignFloatChart). Wraps the one
+     renderer they share, PG._spark, so it must load after pose.js; after
+     pose_gign_dock.js too, so the GIGN chart is registered before the first
+     hover. Delete the file and this tag to go back to static lines. -->
+<script src="{{ url_for('static', filename='js/pose_spark_hover.js') }}"></script>
+<!-- pose_vina_record_stepper.js — ◀ ▶ ▶Play under #poseProcSub, walking the
+     poses behind each step of the Vina staircase. Captures from _procBest and
+     _procFinal so its N/M equals the number of points on #poseProcChart, and
+     moves with eng._applyMode — the same call a #poseVinaModeList row makes.
+     Order against the trajectory modules is free: all of them wrap _procBest by
+     property lookup and all call through. Delete the file and this tag and the
+     panel goes back to a chart you cannot step. -->
+<script src="{{ url_for('static', filename='js/pose_vina_record_stepper.js') }}"></script>
+<!-- pose_affinity_trajectory.js — score the pose behind each NEW MINIMUM Vina ΔG
+     with EVERY registered predictor, staging every one into
+     pose.trajectory_dir. Wraps PG.vina.eng._procBest and PG._applyProtein, so
+     it loads after pose.js; after the two dock files too, since results are fed
+     back through PG.mc._gignSet / _daSet which those wrap.
+
+     Order below is load-bearing: the engine must exist before either scorer
+     registers against it. Both configs are ~30 lines and decide nothing — they
+     name an endpoint, a setter and a busy flag. _trajOff() disarms everything,
+     _trajOff('deepatom') just the slow one. -->
+<script src="{{ url_for('static', filename='js/pose_affinity_trajectory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gign_trajectory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_deepatom_trajectory.js') }}"></script>
+<!-- devmap.js LAST: it indexes the repository and annotates every button with
+     the file:line its handler lives at. Loading it after the feature modules
+     is cosmetic (it reads the server index, not the live JS) but keeps the
+     dev tool visibly separate from the application. -->
+<script src="{{ url_for('static', filename='js/devmap.js') }}"></script>
 
 <!-- ══ Pose Generation Modal ═══════════════════════════════════════════════════ -->
 <div id="poseModal" onclick="if(event.target.id==='poseModal')PoseGen.close()"
@@ -2489,8 +2575,6 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 </div>
 
 
-
-
 <!-- ══ Session Viewer Panel ══════════════════════════════════════════════════ -->
 <div id="elionSessionPanel" style="
     display:none;position:fixed;top:72px;left:0;bottom:0;width:320px;z-index:9800;
@@ -2524,6 +2608,54 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
     <div style="padding:8px 16px 12px;border-top:1px solid #1e293b;font-size:10px;color:#334155;line-height:1.5;">
         Model affects all chat endpoints on this server instance.
     </div>
+</div>
+
+
+<!-- ══ Docked results ═══════════════════════════════════
+     Its own fixed overlay above #vinaModal (z 10000 vs 9999) rather than a child
+     of the modal card: that card is `overflow-hidden flex flex-col`, so an
+     absolutely-positioned child of it gets clipped by the flex layout. -->
+<div id="vinaResultsPanel" onclick="if(event.target.id==='vinaResultsPanel')_vinaResultsHide()"
+     class="hidden fixed inset-0 bg-black/80 z-[10000] flex items-center justify-center">
+  <div onclick="event.stopPropagation()"
+       class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col"
+       style="width:min(1060px,94vw);height:min(85vh,880px);">
+    <div class="flex items-center gap-3 px-5 py-3 border-b border-slate-800 flex-shrink-0">
+      <span class="text-sm font-semibold text-slate-200">📊 Docked results</span>
+      <span id="vinaResultsTotal" class="text-[10px] px-2 py-0.5 rounded-full"
+            style="background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);color:#22d3ee;">—</span>
+      <input id="vinaResultsSearch" type="text" spellcheck="false" placeholder="filter by ligand or receptor…"
+             oninput="_vinaResultsRender()"
+             style="flex:1;min-width:0;max-width:320px;font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:7px;padding:4px 9px;color:#cbd5e1;outline:none;">
+      <select id="vinaResultsSort" onchange="_vinaResultsRender()"
+              style="font-family:ui-monospace,monospace;font-size:11px;background:#070b16;border:1px solid #28344a;border-radius:7px;padding:4px 7px;color:#cbd5e1;outline:none;cursor:pointer;">
+        <option value="time">newest first</option>
+        <option value="score">best score first</option>
+        <option value="name">name</option>
+      </select>
+      <span id="vinaResultsDir" class="text-[9.5px] text-slate-600 font-mono truncate" style="max-width:260px;"></span>
+      <div class="flex-1"></div>
+      <button onclick="_vinaResultsLoad()" title="rescan the directory"
+              class="text-[10px] font-semibold px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg">↻</button>
+      <button onclick="_vinaResultsHide()"
+              class="text-sm px-2.5 py-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">✕</button>
+    </div>
+    <div id="vinaResultsBody" class="flex-1 overflow-y-auto px-5 py-4 vina-res-scroll"
+         style="display:flex;flex-direction:column;gap:9px;"></div>
+    <div class="px-5 py-2 border-t border-slate-800 flex-shrink-0">
+      <p class="text-[9.5px] text-slate-600 font-mono leading-relaxed" style="margin:0;">
+        Read live from <span class="text-slate-400">vina.ligand_pdbqt_dir</span> — no index, nothing to keep in sync.
+        The receptor is not stored in a .pdbqt, so it is <span class="text-slate-400">inferred</span>: a pose must lie inside the
+        box it was searched in, so the mode-1 centroid is tested against every configured protein, and the
+        filename is matched against each protein's default ligand. The badge says which evidence applied.
+        <span class="text-cyan-400">Visualize</span> draws the per-atom breakdown — the energy log holds only the
+        most recent dock, so an older pose is re-scored first (<span class="text-slate-400">--score_only</span>,
+        a few seconds, no search and no change to the stored affinity);
+        <span class="text-cyan-400">Use</span> refills receptor / ligand / box;
+        <span class="text-cyan-400">Export</span> converts that file's best pose to .pdb.
+      </p>
+    </div>
+  </div>
 </div>
 
 </body>

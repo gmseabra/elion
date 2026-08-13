@@ -57,3 +57,8 @@ _load("uiapp.routes.pose_routes",            "pose_routes")
 _load("uiapp.routes.ts_routes",              "ts_routes")
 _load("uiapp.routes.tools_routes",           "tools_routes")
 _load("uiapp.routes.deepatom_routes",        "deepatom_routes")
+# devmap_routes: the hover source-map index. Last, deliberately — it walks the
+# repository looking for @app.route decorators, so every other route module has
+# to be on disk (it reads files, not the URL map, but keeping it last matches
+# the intent and costs nothing).
+_load("uiapp.routes.devmap_routes",          "devmap_routes")

@@ -1,0 +1,52 @@
+Changes vs de91225.zip
+======================================================================
+
+This tree = de91225 (glycine: Cuda fix + OpenDock + devmap + tests)
+          + 8137cea  (lysine: .pdb/.ent pose import, pin-center box anchor,
+                      universal scrollbar rule)
+          + elion_rl_loop
+          + source map off by default, hotkey configurable in input_TS.yml
+          + pose scorer paths (GIGN / DeepAtom) filled in
+          + finished TS runs stay visible to /ts_top5
+          - OpenDock, removed entirely
+
+ADDED (11)
+  + CHANGES.txt
+  + UI/RL_LOOP.md
+  + UI/add_devmap_config.py
+  + UI/elion_bias_generator_TS.py
+  + UI/tests/js/devmap_hotkey.test.js
+  + UI/tests/test_devmap_config.py
+  + UI/tests/test_devmap_routes.py
+  + UI/tests/test_ts_session_retention.py
+  + UI/tests_rl_roundtrip.py
+  + UI/uiapp/core/rl_bias.py
+  + UI/web/static/js/ts/ts_rl_loop.js
+
+MODIFIED (14)
+  ~ UI/NEW_FEATURES.md
+  ~ UI/config/input_routes.yml
+  ~ UI/pytest.ini
+  ~ UI/requirements.txt
+  ~ UI/uiapp/config.py
+  ~ UI/uiapp/routes/__init__.py
+  ~ UI/uiapp/routes/devmap_routes.py
+  ~ UI/uiapp/routes/pose_routes.py
+  ~ UI/uiapp/routes/ts_routes.py
+  ~ UI/web/static/js/devmap.js
+  ~ UI/web/static/js/hub.js
+  ~ UI/web/static/js/pose.js
+  ~ UI/web/static/js/ts/ts_ui.js
+  ~ UI/web/templates/hub.html
+
+REMOVED (118)
+  - UI/OPENDOCK.md
+  - UI/data/opendock/runs/20260806-140254/job.json
+  - UI/tests/test_opendock.py
+  - UI/uiapp/routes/opendock_routes.py
+  - UI/web/static/js/opendock.js
+  - UI/web/templates/opendock_modal.html
+  - UI/engines/opendock/**    (104 files, 19 MB — the vendored engine)
+  - stale __pycache__/*.pyc   (8 files, bytecode for sources this change edited)
+
+UNTOUCHED: 268 of 400
