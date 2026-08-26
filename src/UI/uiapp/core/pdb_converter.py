@@ -59,8 +59,11 @@ _AUTODOCK_TYPES: dict[str, str] = {
     "Ca": "Ca", "Mg": "Mg", "Mn": "Mn",
 }
 
-# Records allowed in receptors (no torsion-tree records)
-_RECEPTOR_ALLOWED = ('ATOM  ', 'HETATM', 'TER', 'END')
+# Records allowed in receptors (no torsion-tree records).
+# NOTE: END is deliberately absent.  Vina's parse_pdbqt_rigid() accepts only
+# blank / TER / WARNING / REMARK / ATOM / HETATM and throws
+# "Unknown or inappropriate tag" on anything else — END included.
+_RECEPTOR_ALLOWED = ('ATOM  ', 'HETATM', 'TER')
 
 # Records allowed in ligands — no END, ligands terminate with TORSDOF
 _LIGAND_ALLOWED = ('ATOM  ', 'HETATM', 'ROOT', 'ENDROOT', 'TORSDOF', 'BRANCH', 'ENDBRANCH')
@@ -82,7 +85,7 @@ def _sanitize_pdbqt(pdbqt_path: str, mol_type: str = "receptor") -> None:
     In both cases best affinity is reported as None.
 
     Allowed records:
-      Receptor — ATOM, HETATM, TER, END
+      Receptor — ATOM, HETATM, TER          (NO END — Vina rejects it)
       Ligand   — ATOM, HETATM, ROOT, ENDROOT, TORSDOF, BRANCH, ENDBRANCH
 
     Also fixes blank chain ID (column 21) → defaults to 'A'.
@@ -105,10 +108,13 @@ def _sanitize_pdbqt(pdbqt_path: str, mol_type: str = "receptor") -> None:
 
             clean.append(s + '\n')
 
-    # Receptors must end with END; ligands terminate with TORSDOF (already present)
+    # Receptors terminate at TER; ligands terminate with TORSDOF (already present).
+    # Appending END here is what produced
+    #   Parse error on line N in file "<receptor>.pdbqt": Unknown or inappropriate tag
+    # followed by the misleading "No valid ligands in the input directory".
     if mol_type == "receptor":
-        if clean and not clean[-1].rstrip().startswith('END'):
-            clean.append('END\n')
+        if clean and not clean[-1].rstrip().startswith('TER'):
+            clean.append('TER\n')
 
     Path(pdbqt_path).write_text(''.join(clean))
 
@@ -191,8 +197,7 @@ def _pdb_to_pdbqt_receptor_passthrough(pdb_path: str, out_path: str) -> dict:
         base   = line[:66]
         out_lines.append(f"{base}{charge:+9.3f} {atype:<2s}\n")
 
-    out_lines.append("TER\n")
-    out_lines.append("END\n")
+    out_lines.append("TER\n")   # no END — Vina's rigid-receptor parser rejects it
     Path(out_path).write_text("".join(out_lines))
     return {"status": "success", "message": "Converted successfully (receptor).",
             "output_path": out_path}

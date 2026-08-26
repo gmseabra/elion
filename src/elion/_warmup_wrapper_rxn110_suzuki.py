@@ -8,7 +8,7 @@ logging.basicConfig(
     force=True,
     format='%(levelname)s %(name)s: %(message)s'
 )
-sys.argv = ['elion.py', '-i', '/home/huangzihang/repos/elion/src/UI/.raytmp/elion_ts_gxadx2w_/input_TS_rxn110_suzuki.yml']
+sys.argv = ['elion.py', '-i', '/home/huangzihang/repos/elion/src/UI/.raytmp/elion_ts_xpiwv193/input_TS_rxn110_suzuki.yml']
 os.environ['TS_WARMUP_CHECKPOINT'] = '/home/huangzihang/repos/user_data/Warmup_TS/suzuki_20260611_224623_warmup.json'
 
 # Import and patch BEFORE any elion modules load

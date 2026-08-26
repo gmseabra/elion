@@ -394,34 +394,62 @@
     });
     return {atoms:keep,bonds:nb,map:map,removed:n-keep.length};
   }
-  /* ---- perceive bond orders for a coordinates-only ligand (PDB/PDBQT) --------
-     PDB files carry no bond orders, so a benzene ring or an amide C=O renders as
-     plain single sticks. This recovers orders from geometry so stickTraces can
-     draw the inner parallel line:
-       · aromatic rings: 5-/6-membered rings of C/N/O/S that are planar (all atoms
-         within ~0.35 Å of the mean plane) → alternating ring bonds order-2
-         (Kekulé), so a 6-ring gets 3 inner lines like benzene.
-       · isolated doubles: a non-ring bond noticeably shorter than the single-bond
-         reference (carbonyl C=O, imine C=N, alkene C=C) → order-2.
-     Heuristic, not a full valence model, but it matches Maestro for the common
-     cases without a chemistry toolkit. `bonds` is [i,j] from inferBonds. */
-  function perceivePdbBondOrders(atoms, bonds){
+  /* ---- perceive bond orders + formal charges for a coordinates-only ligand ----
+     PDB files carry no bond orders (and no formal charges), so a benzene ring or
+     an amide C=O would render as plain single sticks. This recovers both from
+     geometry so stickTraces can draw the inner parallel line.
+
+     The rule that matters, and that the first version of this function was
+     missing, is a VALENCE CAP:
+
+         cap[i] = neutral_valence(element) − number_of_bonds(i)
+
+     Without it, "every planar 5-/6-ring of C/N/O/S gets alternating Kekulé
+     doubles" happily hands a double bond to a ring ether oxygen that already
+     has two neighbours — a trivalent oxygen. That is what made 4H-chromen-4-one
+     (and coumarins, flavones, every γ-pyranone) come out as a 4-hydroxychromene
+     once a reader repaired the impossible valence, and what left quinoline
+     N-oxides looking like N-hydroxy. Same fix, same reasoning as the server-side
+     twin in uiapp/core/pose_chem.py — keep the two in step.
+
+     Four passes, all of them spending from that budget:
+       A  terminal multiple bonds (C=O, N=O, C≡N) first, so a ring can never
+          starve an exocyclic carbonyl of its carbon's last free valence. An
+          O on a ring N is skipped here: an aromatic N-oxide is N⁺–O⁻, not N=O.
+       B  planar 5-/6-rings → alternating doubles, best rotation wins, skipping
+          any atom with nothing left to spend.
+       C  whatever short bonds remain.
+       D  an atom still short of its valence means a missing charge (amidinium,
+          guanidinium, pyridinium): promote the partner N to N⁺ and pair it up.
+     Then formal charges are read off the finished valences.
+
+     Heuristic, not a full valence model, but it no longer produces structures
+     that cannot exist. `bonds` is [i,j] from inferBonds. */
+  const _PC_REF={'C-C':1.54,'C-N':1.47,'C-O':1.43,'N-O':1.44,'C-S':1.82,'N-N':1.45,'O-P':1.63,'O-S':1.57,'N-S':1.71};
+  const _PC_DBL={'C-C':1.34,'C-N':1.28,'C-O':1.23,'N-O':1.22,'C-S':1.60,'N-N':1.25,'O-P':1.50,'O-S':1.44,'N-S':1.54};
+  const _PC_TRIP={'C-C':1.27,'C-N':1.24,'N-N':1.20};
+  const _PC_VAL={H:1,B:3,C:4,N:3,O:2,F:1,Si:4,P:3,S:2,Cl:1,Se:2,Br:1,I:1};
+  function _pcCut(pk){ const s=_PC_REF[pk]; if(s==null)return null; const d=_PC_DBL[pk]; return d==null?s-0.13:(s+d)/2; }
+
+  function perceivePdbChemistry(atoms, bonds){
     const n=atoms.length;
-    const order=bonds.map(()=>1);
+    const order=bonds.map(()=>1), charge=new Array(n).fill(0);
+    if(!bonds.length) return {order:order, charge:charge};
     const bidx={}; bonds.forEach((b,i)=>{bidx[(b[0]<b[1]?b[0]+'_'+b[1]:b[1]+'_'+b[0])]=i;});
     const bkey=(i,j)=>i<j?i+'_'+j:j+'_'+i;
     const adj=Array.from({length:n},()=>[]);
     bonds.forEach(b=>{adj[b[0]].push(b[1]);adj[b[1]].push(b[0]);});
     const P=i=>atoms[i], D=(i,j)=>Math.hypot(P(i).x-P(j).x,P(i).y-P(j).y,P(i).z-P(j).z);
+    const pk=(i,j)=>[P(i).el,P(j).el].sort().join('-');
 
     // small rings (size 5,6) via bounded DFS, dedup by sorted membership
-    const seen={}, rings=[];
+    const seen={}, rawRings=[];
     const dfs=(start,cur,prev,path)=>{
       if(path.length>6)return;
       for(const nx of adj[cur]){
         if(nx===prev)continue;
         if(nx===start&&path.length>=5&&path.length<=6){
-          const key=path.slice().sort((a,b)=>a-b).join(','); if(!seen[key]){seen[key]=1;rings.push(path.slice());}
+          const key=path.slice().sort((a,b)=>a-b).join(','); if(!seen[key]){seen[key]=1;rawRings.push(path.slice());}
           continue;
         }
         if(path.indexOf(nx)>=0)continue;
@@ -430,10 +458,10 @@
     };
     for(let i=0;i<n;i++){ if(adj[i].length>=2) dfs(i,i,-1,[i]); }
 
+    // keep the planar all-C/N/O/S ones, as ordered cycles
     const aromaticEl=el=>el==='C'||el==='N'||el==='O'||el==='S';
-    const usedDbl=new Array(n).fill(false);   // each atom takes at most one double
-
-    rings.forEach(ring=>{
+    const rings=[];
+    rawRings.forEach(ring=>{
       const m=ring.length;
       if(!ring.every(i=>aromaticEl(P(i).el)))return;
       const a=P(ring[0]),b=P(ring[1]),c=P(ring[2]);
@@ -444,27 +472,116 @@
       if(maxdev>0.35)return;                                   // non-planar → not aromatic
       const cyc=[ring[0]]; let prev=-1,cur=ring[0];
       for(let k=0;k<m-1;k++){const nxt=adj[cur].find(w=>w!==prev&&ring.indexOf(w)>=0&&cyc.indexOf(w)<0); if(nxt==null)break; prev=cur;cur=nxt;cyc.push(cur);}
-      if(cyc.length!==m)return;
-      for(let k=0;k<m;k++){
-        const i=cyc[k], j=cyc[(k+1)%m];
-        if(usedDbl[i]||usedDbl[j])continue;
-        const bi=bidx[bkey(i,j)]; if(bi==null)continue;
-        if(D(i,j)>1.62)continue;
-        order[bi]=2; usedDbl[i]=true; usedDbl[j]=true;
+      if(cyc.length===m) rings.push(cyc);
+    });
+    const inRing=new Set(); rings.forEach(c=>c.forEach(i=>inRing.add(i)));
+
+    // spare valence per atom
+    const cap=new Array(n).fill(0);
+    for(let i=0;i<n;i++){
+      const el=P(i).el, deg=adj[i].length; let val=_PC_VAL[el]!=null?_PC_VAL[el]:4;
+      if(el==='N'&&deg===3&&adj[i].some(j=>adj[j].length===1&&(P(j).el==='O'||P(j).el==='S'))) val=4;
+      else if(el==='N'&&deg===4) val=4;
+      else if(el==='S'&&deg>=3) val=6;
+      else if(el==='P'&&deg>=4) val=5;
+      cap[i]=Math.max(0,val-deg);
+    }
+    const take=(k,o)=>{
+      const a=bonds[k][0], b=bonds[k][1], extra=o-order[k];
+      if(extra<=0||cap[a]<extra||cap[b]<extra)return false;
+      order[k]=o; cap[a]-=extra; cap[b]-=extra; return true;
+    };
+
+    // pass A — terminal multiple bonds, most-shortened first
+    const cand=[];
+    bonds.forEach((b,k)=>{
+      const ea=P(b[0]).el, eb=P(b[1]).el;
+      if(ea==='H'||eb==='H')return;
+      if(adj[b[0]].length!==1&&adj[b[1]].length!==1)return;
+      const term=adj[b[0]].length===1?b[0]:b[1], core=term===b[0]?b[1]:b[0];
+      // aromatic N-oxide → keep N⁺–O⁻, let the ring have the double
+      if((P(term).el==='O'||P(term).el==='S')&&P(core).el==='N'&&inRing.has(core))return;
+      const key=pk(b[0],b[1]), ref=_PC_REF[key]; if(ref==null)return;
+      cand.push([D(b[0],b[1])-ref,k,D(b[0],b[1]),key]);
+    });
+    cand.sort((x,y)=>x[0]-y[0]);
+    cand.forEach(c=>{
+      const tri=_PC_TRIP[c[3]];
+      if(tri!=null&&c[2]<tri&&take(c[1],3))return;
+      const cut=_pcCut(c[3]); if(cut!=null&&c[2]<cut)take(c[1],2);
+    });
+
+    // pass B — planar rings, the rotation that covers the most atoms
+    rings.forEach(cyc=>{
+      const m=cyc.length; let bestOff=-1,bestHits=-1;
+      for(let off=0;off<m;off++){
+        let hits=0; const used=new Set();
+        for(let t=0;t+1<m;t+=2){
+          const i=cyc[(off+t)%m], j=cyc[(off+t+1)%m];
+          if(used.has(i)||used.has(j)||cap[i]<1||cap[j]<1)continue;
+          const bi=bidx[bkey(i,j)]; if(bi==null||order[bi]!==1||D(i,j)>1.62)continue;
+          used.add(i);used.add(j);hits++;
+        }
+        if(hits>bestHits){bestHits=hits;bestOff=off;}
+      }
+      if(bestHits<=0)return;
+      const used=new Set();
+      for(let t=0;t+1<m;t+=2){
+        const i=cyc[(bestOff+t)%m], j=cyc[(bestOff+t+1)%m];
+        if(used.has(i)||used.has(j)||cap[i]<1||cap[j]<1)continue;
+        const bi=bidx[bkey(i,j)]; if(bi==null||order[bi]!==1||D(i,j)>1.62)continue;
+        if(take(bi,2)){used.add(i);used.add(j);}
       }
     });
 
-    // isolated (non-ring) doubles by short length
-    const REF={'C-C':1.54,'C-N':1.47,'C-O':1.43,'N-O':1.44,'C-S':1.82,'N-N':1.45,'P-O':1.63,'S-O':1.57};
-    bonds.forEach((b,i)=>{
-      if(order[i]!==1)return;
+    // pass C — leftovers, shortest (most certain) first
+    const left=[];
+    bonds.forEach((b,k)=>{
+      if(order[k]!==1)return;
       const ea=P(b[0]).el, eb=P(b[1]).el; if(ea==='H'||eb==='H')return;
-      if(usedDbl[b[0]]||usedDbl[b[1]])return;
-      const ref=REF[[ea,eb].sort().join('-')]; if(!ref)return;
-      if(D(b[0],b[1]) < ref-0.13){ order[i]=2; usedDbl[b[0]]=true; usedDbl[b[1]]=true; }
+      const key=pk(b[0],b[1]); if(_PC_REF[key]==null)return;
+      left.push([D(b[0],b[1])-_PC_REF[key],k,D(b[0],b[1]),key]);
     });
-    return order;
+    left.sort((x,y)=>x[0]-y[0]);
+    left.forEach(c=>{
+      const tri=_PC_TRIP[c[3]];
+      if(tri!=null&&c[2]<tri&&take(c[1],3))return;
+      const cut=_pcCut(c[3]); if(cut!=null&&c[2]<cut)take(c[1],2);
+    });
+
+    // pass D — an under-valent atom means a missing cationic N
+    const rescue=[];
+    for(let i=0;i<n;i++){
+      if(cap[i]<1||(P(i).el!=='C'&&P(i).el!=='N'))continue;
+      adj[i].forEach(j=>{
+        if(P(j).el!=='N'||cap[j]!==0||adj[j].length!==3)return;
+        const bi=bidx[bkey(i,j)]; if(bi==null||order[bi]!==1)return;
+        const cut=_pcCut(pk(i,j)); if(cut!=null&&D(i,j)<cut)rescue.push([D(i,j),bi,j]);
+      });
+    }
+    rescue.sort((x,y)=>x[0]-y[0]);
+    const promoted=new Set();
+    rescue.forEach(c=>{
+      if(promoted.has(c[2]))return;
+      cap[c[2]]+=1;
+      if(take(c[1],2))promoted.add(c[2]); else cap[c[2]]-=1;
+    });
+
+    // formal charges from the finished valences
+    const tot=new Array(n).fill(0);
+    bonds.forEach((b,k)=>{tot[b[0]]+=order[k];tot[b[1]]+=order[k];});
+    for(let i=0;i<n;i++){
+      const el=P(i).el;
+      if(el==='N'&&tot[i]===4)charge[i]=1;
+      else if(el==='O'&&tot[i]===1&&adj[i].length===1){
+        const j=adj[i][0], ej=P(j).el;
+        const sib=adj[j].some(w=>w!==i&&adj[w].length===1&&P(w).el==='O'&&tot[w]===2);
+        if((ej==='N'&&tot[j]===4)||((ej==='S'||ej==='P')&&tot[j]>=4)||sib)charge[i]=-1;
+      }
+    }
+    return {order:order, charge:charge};
   }
+  function perceivePdbBondOrders(atoms, bonds){ return perceivePdbChemistry(atoms,bonds).order; }
   /* ---- build a rigid ligand model straight from PDB atoms (for the uploaded-ligand
      gallery): real 3D coordinates, distance-inferred bonds, no torsion tree. It is
      rendered green by the shared pose path exactly like a SMILES-built ligand. ---- */
@@ -2959,7 +3076,7 @@
 
           '<div id="poseImpSummary" style="display:none;margin-top:7px;font-size:9.5px;color:#64748b;font-family:ui-monospace,monospace;line-height:1.55;"></div>' +
 
-          '<button id="poseImpDownload" onclick="PoseGen.importDownload()" title="Zip every file currently passing the filter, converted to PDB with only its best pose kept, plus a _manifest.csv ranked by score and _best_poses.pdb holding them all as one multi-model file." style="display:none;width:100%;margin-top:7px;padding:7px;border-radius:9px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;cursor:pointer;">&#11015; Download filtered batch (.pdb .zip)</button>' +
+          '<button id="poseImpDownload" onclick="PoseGen.importDownload()" title="Zip every file currently passing the filter, best pose only, as both .sdf and .pdb. Open the .sdf in Maestro: bond orders and formal charges are written out explicitly (rebuilt from the ligand SMILES where one can be found), so nothing has to be guessed from the coordinates. Also includes _manifest.csv ranked by score, _best_poses.sdf and _best_poses.pdb holding them all in one file." style="display:none;width:100%;margin-top:7px;padding:7px;border-radius:9px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;cursor:pointer;">&#11015; Download filtered batch (.pdb .zip)</button>' +
 
           '<div id="poseImpResult" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid #1e293b;">' +
             '<div style="display:flex;align-items:center;gap:6px;">' +
@@ -3702,7 +3819,7 @@
     var n = PG._imp.files.length;
     b.style.display = n ? 'block' : 'none';
     if (n && !PG._imp.zipping) {
-      b.innerHTML = '\u2B07 Download ' + n + ' filtered file' + (n === 1 ? '' : 's') + ' (.pdb .zip)';
+      b.innerHTML = '\u2B07 Download ' + n + ' filtered file' + (n === 1 ? '' : 's') + ' (.sdf .pdb .zip)';
     }
   };
 
@@ -3742,7 +3859,10 @@
           n: r.headers.get('X-Pose-Zip-Count'),
           skipped: r.headers.get('X-Pose-Zip-Skipped'),
           poses: r.headers.get('X-Pose-Zip-Poses'),
-          trunc: r.headers.get('X-Pose-Zip-Truncated') === '1'
+          trunc: r.headers.get('X-Pose-Zip-Truncated') === '1',
+          exact: +(r.headers.get('X-Pose-Zip-Exact') || 0),
+          perceived: +(r.headers.get('X-Pose-Zip-Perceived') || 0),
+          geometry: +(r.headers.get('X-Pose-Zip-Geometry') || 0)
         };
         return r.blob().then(function (blob) { return { blob: blob, meta: meta }; });
       })
@@ -3758,6 +3878,17 @@
         if (o.meta.poses && +o.meta.poses) msg += ' \u00b7 ' + o.meta.poses + ' best poses combined';
         if (o.meta.skipped && +o.meta.skipped) msg += ' \u00b7 ' + o.meta.skipped + ' unreadable, skipped';
         if (o.meta.trunc) msg += ' \u00b7 stopped at the size cap';
+        /* Say where the chemistry came from. "exact" means bond orders and
+           formal charges were rebuilt from the ligand's own SMILES; anything
+           else was perceived from the coordinates and is worth a look before
+           it is trusted in a figure. */
+        var chem = [];
+        if (o.meta.exact) chem.push(o.meta.exact + ' exact (from SMILES)');
+        if (o.meta.perceived) chem.push(o.meta.perceived + ' perceived');
+        if (o.meta.geometry) chem.push(o.meta.geometry + ' geometry-only');
+        /* _importStatus writes textContent, so this stays plain text. */
+        if (chem.length) msg += ' \u00b7 chemistry: ' + chem.join(' \u00b7 ') +
+                                ' \u2014 open the .sdf in Maestro for exact bond orders and charges';
         done(msg, o.meta.trunc ? '#fbbf24' : '#34d399');
       })
       .catch(function (e) { done('\u2717 download failed: ' + e.message, '#fb7185'); });

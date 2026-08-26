@@ -1855,30 +1855,70 @@ def _parse_pdb_atoms(atom_lines):
     return out
 
 
-def _pdb_block_with_conect(block):
-    """Append Maestro-readable CONECT records (with bond orders) to a PDB block.
+_POSE_CHEM = '?'                                 # '?' = not tried yet, None = unavailable
 
-    A .pdbqt carries no bond orders, so Maestro/PyMOL show single sticks only.
-    This perceives connectivity and orders from the 3D coordinates (geometry
-    heuristic — see _perceive_pdb_orders) and writes CONECT in the SYMMETRIC form
-    Maestro honours: for a bond a-b of order n, atom a lists b n times AND atom b
-    lists a n times. (RDKit's MolToPDBBlock writes doubles one-directionally,
-    which Maestro silently ignores — that was the bug.)
 
-    `block` is a list of PDB lines. Returns a new list with CONECT inserted
-    before END. On any failure the block is returned unchanged (single bonds
-    only — never worse than before; geometry is always correct).
+def _pose_chem():
+    """uiapp.core.pose_chem, or None when it (or RDKit) is unavailable.
+
+    Imported lazily and defensively: the download route must keep working on a
+    box without RDKit, just with the older geometry-only chemistry.
+    """
+    global _POSE_CHEM
+    if _POSE_CHEM == '?':
+        try:
+            from uiapp.core import pose_chem as _pc
+            _POSE_CHEM = _pc
+        except Exception as e:                   # pragma: no cover
+            logger.warning('[pose] pose_chem unavailable (%s) — falling back to '
+                           'the geometry-only bond perception', e)
+            _POSE_CHEM = None
+    return _POSE_CHEM
+
+
+def _pose_block(block, smiles=None):
+    """Rewrite a PDB block with correct bond orders, charges and CONECT records.
+
+    A .pdbqt carries no bond orders and a .pdb carries no formal charges, so
+    everything downstream of the docking had to reconstruct the chemistry. That
+    reconstruction now happens in uiapp/core/pose_chem.py, which prefers the
+    ligand's own SMILES (`smiles`, exact by construction), falls back to RDKit's
+    valence-consistent perception, and only then to a geometry heuristic.
+
+    What comes back: the same atoms in the same order with the same coordinates,
+    as HETATM records carrying the element AND the formal charge in columns
+    79-80, followed by CONECT written SYMMETRICALLY with the partner repeated
+    once per bond order — the form Maestro honours. (RDKit's MolToPDBBlock
+    writes doubles one-directionally, which Maestro silently ignores; that was
+    the first bug. The second was perceiving a TRIVALENT ring oxygen, which made
+    Maestro "repair" chromen-4-ones into 4-hydroxychromenes and N-oxides into
+    N-hydroxy — see pose_chem.py for the full story.)
+
+    `block` is a list of PDB lines. Returns (lines, PoseMol|None); the PoseMol
+    is handed back so the caller can write the matching .sdf without rebuilding
+    the molecule. On any failure the block comes back unchanged with a None pose
+    (single bonds only — never worse than before; geometry is always correct).
     """
     try:
         atom_lines = [l for l in block if l[:6].rstrip() in ('ATOM', 'HETATM')]
         if len(atom_lines) < 2:
-            return block
+            return block, None
+        head = [l for l in block
+                if l[:6].rstrip() not in ('ATOM', 'HETATM') and l.strip() != 'END']
+
+        pc = _pose_chem()
+        if pc is not None:
+            pose = pc.build_pose(atom_lines, smiles=smiles)
+            if pose.bonds:
+                return pc.pose_pdb_lines(pose, atom_lines, remarks=head), pose
+
+        # ── legacy path: geometry only, no charges (pose_chem/RDKit missing) ──
         atoms = _parse_pdb_atoms(atom_lines)
         if len(atoms) != len(atom_lines):
-            return block
+            return block, None
         bonds = _infer_bonds_py(atoms)
         if not bonds:
-            return block
+            return block, None
         orders = _perceive_pdb_orders(atoms, bonds)
 
         from collections import defaultdict
@@ -1898,9 +1938,16 @@ def _pdb_block_with_conect(block):
 
         out = [l for l in block if l.strip() != 'END']
         out.extend(conect)
-        return out
-    except Exception:
-        return block
+        return out, None
+    except Exception as e:
+        logger.warning('[pose] bond-order rebuild failed (%s) — writing the '
+                       'block unchanged', e)
+        return block, None
+
+
+def _pdb_block_with_conect(block, smiles=None):
+    """_pose_block, lines only — kept for callers that don't need the molecule."""
+    return _pose_block(block, smiles)[0]
 
 
 def _pdbqt_models_to_pdb(text, already_pdb=False):
@@ -2088,20 +2135,64 @@ def pose_read_pdbqt():
 # ── Download the filtered batch ──────────────────────────────────────────────
 _POSE_ZIP_MAX_BYTES = 1 << 29     # 512 MB uncompressed budget for one download
 
+_POSE_ZIP_README = """\
+Docked poses exported from the Pose Generation tool
+===================================================
 
+files/*.sdf   ← OPEN THESE IN MAESTRO
+files/*.pdb      same pose, same coordinates, same atom order
+_best_poses.sdf  every ligand in one file, best score first
+_best_poses.pdb  the same, as a multi-model PDB
+_manifest.csv    score / atom count / chemistry source / SMILES per ligand
+
+Why the .sdf?
+-------------
+A PDB file cannot express a formal charge except in two columns most readers
+ignore, and a PDBQT (what Vina writes) carries no bond orders at all. Anything
+reading those files has to GUESS the chemistry back from the 3D coordinates,
+and the guess goes wrong in predictable places: a ring oxygen picks up a double
+bond it cannot have, so a chromen-4-one is "repaired" into a 4-hydroxychromene;
+an N-oxide loses its N+/O- pair, so the viewer caps the oxygen with a hydrogen
+and shows N-OH. H-bond donors and acceptors then swap, and the net charge is
+wrong.
+
+An SDF states bond orders and formal charges outright. There is nothing left to
+perceive, so Maestro shows exactly the molecule that was docked.
+
+The .pdb files here are still worth having (they are what most tools expect) and
+they now carry symmetric order-duplicated CONECT records plus the formal charge
+in columns 79-80 — but the .sdf is the one to trust when the drawing matters.
+
+Chemistry source, per the manifest's `chemistry` column
+------------------------------------------------------
+  template   rebuilt from the ligand's own SMILES — exact by construction
+  perceived  no SMILES available; RDKit's valence-consistent perception
+  geometry   last-resort geometric heuristic (RDKit unavailable)
+
+This batch: %d ligand(s) — %d template, %d perceived, %d geometry.
+Docking is unaffected either way: Vina reads AutoDock atom types and
+coordinates, neither of which this touches. Scores and poses stand as they are.
+"""
 
 
 # =============================================================================
 # POST /pose/download_pdbqt
-# Body: {"paths": ["/abs/a.pdbqt", ...], "name": "results_p100"}
-# Returns: a .zip attachment of PDB files converted from the requested .pdbqt —
+# Body: {"paths": ["/abs/a.pdbqt", ...], "name": "results_p100",
+#        "smiles_csv": ["/abs/table.csv", ...]   (optional, see below)}
+# Returns: a .zip attachment of the requested poses converted to PDB *and* SDF —
 #          the best pose only (Vina's MODEL 1), AutoDock atom types mapped back
-#          to real elements, plus _manifest.csv (score / atoms / source pose
-#          count per file, best first) and _best_poses.pdb (all of them
-#          concatenated as one multi-model PDB that loads as a single batch).
+#          to real elements, bond orders and formal charges rebuilt from the
+#          ligand's SMILES where one can be found, plus _manifest.csv (score /
+#          atoms / chemistry source / SMILES per file, best first),
+#          _best_poses.pdb and _best_poses.sdf (all of them in one file).
 #          Counts ride back on X-Pose-Zip-* headers; errors return JSON.
 # Paths come from the client's current filter, so the download always matches
 # exactly what the stepper is showing.
+#
+# SMILES lookup order, per file: <stem>.smi sidecar → a REMARK SMILES line in
+# the file itself → any CSV/SMI table found beside the batch or in its parent
+# directories (Name/ligand_id + SMILES columns), or one named explicitly in
+# "smiles_csv". Nothing found → RDKit perception, which is still valence-correct.
 # =============================================================================
 @app.route('/pose/download_pdbqt', methods=['POST'])
 def pose_download_pdbqt():
@@ -2148,8 +2239,26 @@ def pose_download_pdbqt():
             pass
         return resp
 
-    rows, best_poses = [], []
+    # ── the ligands' own SMILES, if they can be found ────────────────────────
+    # Bond orders and formal charges cannot be recovered reliably from docked
+    # coordinates alone (that is the whole bug: chromen-4-one came back as
+    # 4-hydroxychromene, quinoline N-oxide as N-hydroxy). Where the batch's
+    # SMILES table is reachable, the export is exact instead of perceived.
+    pc = _pose_chem()
+    smi_index, extra = {}, data.get('smiles_csv') or []
+    if isinstance(extra, str):
+        extra = [extra]
+    if pc is not None:
+        try:
+            smi_index = pc.build_smiles_index([str(f) for f in files], extra)
+        except Exception as e:
+            logger.warning('[pose] SMILES index scan failed: %s', e)
+    logger.info('[pose] download: %d file(s), %d SMILES in the index',
+                len(files), len(smi_index))
+
+    rows, best_poses, best_sdf = [], [], []
     used, added, skipped, total = set(), 0, 0, 0
+    chem_counts = {'template': 0, 'perceived': 0, 'geometry': 0, 'none': 0}
     truncated = False
     try:
         with zipfile.ZipFile(tmp.name, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -2168,9 +2277,17 @@ def pose_download_pdbqt():
                 if not models:                 # nothing convertible in this file
                     skipped += 1
                     continue
+
+                smiles, smi_where = (None, '')
+                if pc is not None:
+                    try:
+                        smiles, smi_where = pc.resolve_smiles(str(fp), raw, smi_index)
+                    except Exception:
+                        smiles, smi_where = (None, '')
+
                 # Vina sorts poses best-first, so MODEL 1 is the top hit — keep
                 # only that. One pose per file means no MODEL wrapper is needed.
-                best_block = _pdb_block_with_conect(models[0])     # add Maestro-readable bond orders
+                best_block, pose = _pose_block(models[0], smiles)
                 pdb = _pdb_text([best_block], False)
                 total += len(pdb)
 
@@ -2197,25 +2314,71 @@ def pose_download_pdbqt():
 
                 score = scores[0] if scores else None
                 atoms = sum(1 for l in models[0] if l[:6].rstrip() in ('ATOM', 'HETATM'))
+                chem = pose.source if pose is not None else 'none'
+                chem_counts[chem] = chem_counts.get(chem, 0) + 1
+
+                # The .sdf beside it is the lossless one: bond orders and formal
+                # charges are first-class fields in an MDL molfile, so Maestro
+                # has nothing left to perceive and nothing to perceive wrongly.
+                sdf = ''
+                if pose is not None and pc is not None:
+                    sdf = pc.pose_sdf_block(
+                        pose, name=re.sub(r'\.pdb$', '', arc, flags=re.I),
+                        props={'VINA_SCORE_KCAL_MOL': ('' if score is None else score),
+                               'SMILES': pose.smiles, 'CHEMISTRY_SOURCE': pose.source,
+                               'SOURCE_FILE': str(fp)})
+                    if sdf:
+                        zf.writestr('files/' + re.sub(r'\.pdb$', '.sdf', arc, flags=re.I), sdf)
+                        total += len(sdf)
+
                 rows.append({'file': arc, 'score_kcal_mol': ('' if score is None else score),
-                             'atoms': atoms, 'source_poses': len(models), 'source': str(fp)})
+                             'atoms': atoms, 'source_poses': len(models),
+                             'chemistry': chem,
+                             'net_charge': (sum(pose.charges) if pose is not None else ''),
+                             'smiles': (pose.smiles if pose is not None else ''),
+                             'smiles_from': smi_where,
+                             'note': (pose.note if pose is not None else ''),
+                             'source': str(fp)})
                 if had_models:
-                    best_poses.append((score, arc, models[0]))
+                    best_poses.append((score, arc, models[0], smiles, pose))
+                if sdf:
+                    best_sdf.append((score, sdf))
 
             # manifest, best score first (unscored last)
             buf = io.StringIO()
-            w = csv.DictWriter(buf, fieldnames=['file', 'score_kcal_mol', 'atoms', 'source_poses', 'source'])
+            w = csv.DictWriter(buf, fieldnames=[
+                'file', 'score_kcal_mol', 'atoms', 'source_poses', 'chemistry',
+                'net_charge', 'smiles', 'smiles_from', 'note', 'source'])
             w.writeheader()
             for r in sorted(rows, key=lambda r: (r['score_kcal_mol'] == '', r['score_kcal_mol'])):
                 w.writerow(r)
             zf.writestr('_manifest.csv', buf.getvalue())
 
+            # best score first, unscored last. The second key must not be a raw
+            # None: two unscored files would compare None < None and blow up the
+            # whole download.
+            by_score = lambda t: (t[0] is None, t[0] if t[0] is not None else 0.0)
+
             if best_poses:
-                best_poses.sort(key=lambda t: (t[0] is None, t[0]))
-                # each MODEL gets its own CONECT block (per-model bond orders)
-                blocks = [_pdb_block_with_conect(['REMARK 999 SOURCE %s' % arc] + blk)
-                          for _s, arc, blk in best_poses]
+                best_poses.sort(key=by_score)
+                # each MODEL gets its own CONECT block (per-model bond orders),
+                # reusing the molecule already built for this file
+                blocks = []
+                for _s, arc, blk, smi, pose in best_poses:
+                    remarks = ['REMARK 999 SOURCE %s' % arc] + [
+                        l for l in blk if l[:6].rstrip() not in ('ATOM', 'HETATM')]
+                    if pose is not None and pc is not None:
+                        blocks.append(pc.pose_pdb_lines(pose, blk, remarks=remarks))
+                    else:
+                        blocks.append(_pdb_block_with_conect(
+                            ['REMARK 999 SOURCE %s' % arc] + blk, smi))
                 zf.writestr('_best_poses.pdb', _pdb_text(blocks, True))
+            if best_sdf:
+                best_sdf.sort(key=by_score)
+                zf.writestr('_best_poses.sdf', ''.join(s for _sc, s in best_sdf))
+            zf.writestr('_README.txt', _POSE_ZIP_README % (
+                added, chem_counts.get('template', 0), chem_counts.get('perceived', 0),
+                chem_counts.get('geometry', 0) + chem_counts.get('none', 0)))
     except Exception as e:
         logger.warning('[pose] download_pdbqt zip error: %s', e)
         return jsonify({'ok': False, 'err': str(e)}), 200
@@ -2231,6 +2394,13 @@ def pose_download_pdbqt():
     resp.headers['X-Pose-Zip-Skipped'] = str(skipped)
     resp.headers['X-Pose-Zip-Poses'] = str(len(best_poses))
     resp.headers['X-Pose-Zip-Truncated'] = '1' if truncated else '0'
+    # How the chemistry was rebuilt, so the UI can say so out loud rather than
+    # leaving the user to discover a perceived structure in Maestro.
+    resp.headers['X-Pose-Zip-Exact'] = str(chem_counts.get('template', 0))
+    resp.headers['X-Pose-Zip-Perceived'] = str(chem_counts.get('perceived', 0))
+    resp.headers['X-Pose-Zip-Geometry'] = str(chem_counts.get('geometry', 0) +
+                                              chem_counts.get('none', 0))
+    resp.headers['X-Pose-Zip-Sdf'] = str(len(best_sdf))
     return resp
 
 

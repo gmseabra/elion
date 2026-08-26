@@ -957,6 +957,17 @@ as a JSON string** browser→server for all three scorers and both save paths; P
 server-side; SVG for molecule cards; a zip for batch download. The client never sees PDBQT and the server
 never sends binary except the zip.
 
+**Chemistry is not a format detail here.** PDB cannot express a formal charge and PDBQT carries no bond
+orders, so anything reconstructing a molecule from those files is guessing — and the guess used to be a
+planarity heuristic with no valence cap, which handed ring ether oxygens a third bond (chromen-4-one
+exported as 4-hydroxychromene) and left N-oxides uncharged (exported as N-hydroxy). The batch download
+now rebuilds bond orders **and** formal charges from the ligand's own SMILES where one can be found
+(`uiapp/core/pose_chem.py`), falls back to a valence-consistent solver, and ships a `.sdf` beside every
+`.pdb` — SDF states orders and charges outright, so Maestro has nothing left to perceive. Vina's atom
+types are unaffected by any of this, verified atom-by-atom, so docked scores never move. Full write-up in
+`POSE_EXPORT_CHEMISTRY.md`; the browser twin of the heuristic (`perceivePdbBondOrders` in `pose.js`) is
+kept algorithmically identical to the Python one on purpose — if you touch one, cross-check the other.
+
 **Three scoring backends** behind one dropdown: the voxel CNN, the graph network (§16 of the engine
 playbook), and a **pure-Python reimplementation of the five-term docking score** — which is now the
 *third* copy of that function in the system (server docking route, pose route, and the browser), with the
