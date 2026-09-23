@@ -23,14 +23,20 @@ split, §23 the two removed tools, and the new §0 rows G67–G91).
 | **⧉ Sessions** | `uiapp/routes/session_routes.py` | SQLite chat history keyed on `(client, chat_type)`, plus a model registry. 6 endpoints under `/session/`. |
 | **✎ Unified mini-chat** | `uiapp/routes/mini_chat_routes.py` | One SSE generator serves vina / attn / deepatom. Replaces the three near-duplicate per-tool implementations (`vina_chat_routes.py` is gone). |
 | **⌁ Consolidated CoT** | `uiapp/routes/cot_routes.py` | One chain-of-thought router replacing four copy-pasted ones. The broken copy in `hub_routes.py` was deleted. |
-| **⬢ Pose generation** | `uiapp/routes/pose_routes.py`, `web/static/js/pose.js` | SMILES → 3-D conformer + torsion tree server-side; all kinematics in the browser. Three scorers: DeepAtom, GIGN, and a pure-Python Vina five-term function. 15 endpoints under `/pose/`. |
+| **⬢ Pose generation** | `uiapp/routes/pose_routes.py`, `web/static/js/pose.js` | SMILES → 3-D conformer + torsion tree server-side; all kinematics in the browser. Four scorers: DeepAtom, GIGN, GatorAffinity, and a pure-Python Vina five-term function. 25 endpoints under `/pose/` in this tree (incl. the folder batch and the 3D Builder's `/pose/score_models`). |
 | **⟐ TS frontend, split** | `web/static/js/ts/` (7 modules) | Was one file. Adds multi-job fan-out, worker pre-seeding, traceback capture, rAF frame budgets, and off-thread top-5 ranking with hysteresis. |
+| **⌖ Source map** | `uiapp/routes/devmap_routes.py`, `web/static/js/devmap.js` | Hover any button → the file:line of its handler, its markup, and the Flask view behind every endpoint it calls. Development aid, so it ships **off**: enable it with **Alt+Ctrl/⌘+Shift+D** or the bottom-left badge. Default state, hotkey, pin modifier and badge visibility are configured under `visualizer.devmap` in the engine's `input_TS.yml` (see `add_devmap_config.py`). 4 endpoints under `/devmap/`. |
 
 Frontend shell: `web/static/js/hub.js` now owns what used to be `hub.html`'s
 inline script (nav, chat SSE, lazy feature loader, model picker, session panel).
 `web/static/js/elion_mini_chat.js` drives one themed panel for four tools.
 
-**Route count: 38 → 81.**
+**Route count: 38 → 81 → 95 → 108** (devmap 4, the RL loop 4, devmap source 3, and the
+TS/pose additions; 108 is this tree's Flask URL map without `static`, counted
+2026-09-23 after the glycine wiring was merged in). OpenDock's 9 endpoints were added and later removed with the
+engine; `engines/opendock/`, `uiapp/routes/opendock_routes.py`,
+`web/static/js/opendock.js`, `web/templates/opendock_modal.html` and
+`OPENDOCK.md` are gone from the tree — see git history.
 
 ## Changes I made during the port
 
@@ -120,7 +126,8 @@ is untouched. Grep for `ligand_center`, never `ligCenter`.
 
 Every external resource is blank-by-default and reports as unconfigured rather
 than failing: the sibling elion engine (`ELION_CWD`), DeepAtom
-(`DEEPATOM_SCRIPT`), the GIGN scorer (`pose.gign_script`), MGLTools
+(`DEEPATOM_SCRIPT`), the GIGN scorer (`pose.gign_script`), the GatorAffinity
+scorer (`pose.gatoraffinity_script`), MGLTools
 (`UI_MGLTOOLS_DIR`), the sentence-transformer encoder (`UI_ENCODER_PATH`) and
 the ChemBERT weights.
 

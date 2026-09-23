@@ -439,6 +439,7 @@
                     <div style="margin-left:auto;font-size:10px;padding:2px 7px;background:#083344;color:#22d3ee;border-radius:8px;border:1px solid #0e4f63;white-space:nowrap;">Estimator</div>
                 </button>
 
+
                 <!-- DeepAtom Property Estimators -->
                 <button data-nav="deepatom" style="
                     width:100%;text-align:left;padding:12px 14px;
@@ -463,7 +464,6 @@
         <div>
             <div style="font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#475569;margin-bottom:10px;">Tools</div>
             <div style="display:flex;flex-direction:column;gap:8px;">
-
 
 
                 <!-- PDB → PDBQT Converter -->
@@ -495,6 +495,34 @@
                     <div><div style="color:#67e8f9;font-weight:600;font-size:13px;">Pose Generation</div>
                         <div style="font-size:11px;color:#22d3ee;margin-top:2px;text-decoration:underline;text-underline-offset:2px;text-decoration-color:rgba(34,211,238,.4);">random start · minimization · MC+BFGS</div></div>
                     <div style="margin-left:auto;font-size:10px;padding:2px 7px;background:#083344;color:#22d3ee;border-radius:8px;border:1px solid #0e4f63;white-space:nowrap;">Tool</div>
+                </button>
+
+                <!-- Predict Affinity Batch — opens exactly what the Pose
+                     Generation button above opens: the same workspace, same
+                     stage, same sidebar, same header. The only difference is
+                     that it mounts a folder-wide "score every .pdbqt" panel
+                     under each scorer card — #poseGignBatch under the GIGN card,
+                     #poseDaBatch under the DeepAtom one, #poseGatorBatch under
+                     the GatorAffinity one — so picking any of the three scorers
+                     in ③ Monte-Carlo gets you the batch for it. Emerald,
+                     to match the Tools section rather than the Estimator cards
+                     it came from.
+                     Routing: data-nav="affinity_batch" -> hub.js _navRun ->
+                     PoseGen.openAffinityBatch (pose_affinity_batch.js). -->
+                <button id="sidebarAffinityBatchBtn" data-nav="affinity_batch" style="
+                    width:100%;text-align:left;padding:12px 14px;
+                    background:#111827;border:1px solid #1e293b;border-radius:14px;
+                    cursor:pointer;font-family:inherit;
+                    transition:border-color .15s,background .15s;display:flex;align-items:center;gap:10px;
+                " onmouseover="this.style.borderColor='#34d399';this.style.background='#031a12'"
+                   onmouseout="this.style.borderColor='#1e293b';this.style.background='#111827'">
+                    <div style="width:36px;height:36px;border-radius:10px;background:#052e1c;border:1px solid #064e3b;
+                                display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">⚛️</div>
+                    <div>
+                        <div style="color:#6ee7b7;font-weight:600;font-size:13px;">Predict Affinity Batch</div>
+                        <div style="font-size:11px;color:#34d399;margin-top:2px;text-decoration:underline;text-underline-offset:2px;text-decoration-color:rgba(52,211,153,.4);">score a folder of poses with GIGN / DeepAtom / GatorAffinity</div>
+                    </div>
+                    <div style="margin-left:auto;font-size:10px;padding:2px 7px;background:#052e1c;color:#34d399;border-radius:8px;border:1px solid #064e3b;white-space:nowrap;">Tool</div>
                 </button>
 
 
@@ -1546,16 +1574,8 @@
 </div>
 
 
-
-
-
-
-
-
-
 <!-- ══ Mini chat panel (bottom-left, shown after visualizer opens) ══════════ -->
 <!-- ══ Mini Chat · ChemBERT (fixed bottom-left) ══════════════════════════ -->
-
 
 
 <!-- ══ JS — load order: (early stubs) → elion_mini_chat → vina → hub ══════════ -->
@@ -1583,7 +1603,6 @@ window._HUB_EAGER_SCRIPTS = [
 window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 </script>
 <script src="{{ url_for('static', filename='js/hub.js') }}"></script>
-
 
 
 <!-- ══ PDB → PDBQT Converter Modal ══════════════════════════════════════════ -->
@@ -1714,6 +1733,69 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 
 <script src="{{ url_for('static', filename='js/vina_engine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pose.js') }}"></script>
+<!-- pose_gign_dock.js — drag #poseGignCard onto the pocket view and it becomes a
+     floating pK readout shaped like #poseProcPanel. AFTER pose.js: it wraps
+     PG.mc._gignSet / setScorer / scoreGign, which must exist first. Nothing in
+     pose.js or this template was changed for it — delete the file and this tag
+     and the feature is gone. -->
+<script src="{{ url_for('static', filename='js/pose_affinity_dock.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gign_dock.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_deepatom_dock.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gator_dock.js') }}"></script>
+<!-- pose_spark_hover.js — crosshair + score readout on every pose sparkline
+     (#poseProcChart, #poseImpScoreChart, #poseGignFloatChart). Wraps the one
+     renderer they share, PG._spark, so it must load after pose.js; after
+     pose_gign_dock.js too, so the GIGN chart is registered before the first
+     hover. Delete the file and this tag to go back to static lines. -->
+<script src="{{ url_for('static', filename='js/pose_spark_hover.js') }}"></script>
+<!-- pose_vina_record_stepper.js — ◀ ▶ ▶Play under #poseProcSub, walking the
+     poses behind each step of the Vina staircase. Captures from _procBest and
+     _procFinal so its N/M equals the number of points on #poseProcChart, and
+     moves with eng._applyMode — the same call a #poseVinaModeList row makes.
+     Order against the trajectory modules is free: all of them wrap _procBest by
+     property lookup and all call through. Delete the file and this tag and the
+     panel goes back to a chart you cannot step. -->
+<script src="{{ url_for('static', filename='js/pose_vina_record_stepper.js') }}"></script>
+<!-- pose_affinity_trajectory.js — score the pose behind each NEW MINIMUM Vina ΔG
+     with EVERY registered predictor, staging every one into
+     pose.trajectory_dir. Wraps PG.vina.eng._procBest and PG._applyProtein, so
+     it loads after pose.js; after the two dock files too, since results are fed
+     back through PG.mc._gignSet / _daSet which those wrap.
+
+     Order below is load-bearing: the engine must exist before either scorer
+     registers against it. Both configs are ~30 lines and decide nothing — they
+     name an endpoint, a setter and a busy flag. _trajOff() disarms everything,
+     _trajOff('deepatom') just the slow one. -->
+<script src="{{ url_for('static', filename='js/pose_affinity_trajectory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gign_trajectory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_deepatom_trajectory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pose_gator_trajectory.js') }}"></script>
+<!-- pose_affinity_batch.js — PoseGen.openAffinityBatch(), the one thing the
+     "Predict Affinity Batch" sidebar card calls. It opens this workspace the
+     way PoseGen.open() always does and changes nothing about it; all it adds is
+     two folder-batch panels, each shown by the same scorer condition that shows
+     the card it sits under:
+         #poseGignBatch  under #poseGignCard  (Yupu_GIGN     → /pose/gign_score)
+         #poseDaBatch    under #poseDaCard    (DeepAtom      → /pose/deepatom_score)
+         #poseGatorBatch under #poseGatorCard (GatorAffinity → /pose/gatoraffinity_score)
+     Each scores every .pdbqt in a folder with the same call that card's
+     single-pose button makes, one file at a time, one panel at a time. The run
+     itself is held by the server (/pose/batch_start | _result | _stop | _resume |
+     _runs | _state | _csv), journalled to pose.batch_dir as it goes, and a panel
+     shows a ten-row live window — so a 20,000-pose folder is ten DOM rows, not
+     twenty thousand, and a closed tab or a restarted server leaves a run the
+     panel offers back as "▶ Resume 2431 / 20000".
+     AFTER pose.js: it wraps PG.open, PG._applyProtein (to keep the receptor .pdb
+     the batch has to send), PG.mc.setScorer and PG.close. After the dock modules
+     too, so both cards exist to insert beside. Delete the file and this tag (and
+     the 'affinity_batch' case in hub.js) and the card is gone — nothing else
+     reads it. -->
+<script src="{{ url_for('static', filename='js/pose_affinity_batch.js') }}"></script>
+<!-- devmap.js LAST: it indexes the repository and annotates every button with
+     the file:line its handler lives at. Loading it after the feature modules
+     is cosmetic (it reads the server index, not the live JS) but keeps the
+     dev tool visibly separate from the application. -->
+<script src="{{ url_for('static', filename='js/devmap.js') }}"></script>
 
 <!-- ══ Pose Generation Modal ═══════════════════════════════════════════════════ -->
 <div id="poseModal" onclick="if(event.target.id==='poseModal')PoseGen.close()"
@@ -1813,9 +1895,11 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
               <option value="surrogate">No Estimators</option>
               <option value="deepatom">DeepAtom ΔG (server CNN)</option>
               <option value="yupu_gign">Yupu_GIGN · GIGN affinity</option>
+              <option value="gatoraffinity">GatorAffinity ΔG (server)</option>
             </select>
             <button id="poseDaScoreBtn" onclick="PoseGen.mc.scoreDeepAtom()" style="display:none;padding:6px 12px;border-radius:9px;border:1px solid #6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score best pose</button>
             <button id="poseGignScoreBtn" onclick="PoseGen.mc.scoreGign()" style="display:none;padding:6px 12px;border-radius:9px;border:1px solid #6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score (GIGN)</button>
+            <button id="poseGatorScoreBtn" onclick="PoseGen.mc.scoreGator()" style="display:none;padding:6px 12px;border-radius:9px;border:1px solid #15803d;background:rgba(52,211,153,.14);color:#6ee7b7;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score (GatorAffinity)</button>
             <div class="flex-1"></div>
             <span class="text-[11px] text-slate-500">Temp</span>
             <div id="poseMcTempToggles" style="display:flex;gap:6px;">
@@ -2148,6 +2232,17 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
               <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(59,42,107,.5);"><span style="color:#7c6bae;">ΔG (kcal/mol)</span><span id="poseGignDg" style="color:#e2e8f0;">—</span></div>
               <button id="poseGignRunBtn" onclick="PoseGen.mc.scoreGign()" style="margin-top:9px;padding:6px 12px;border-radius:9px;border:1px solid #6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score (GIGN)</button>
               <p style="font-size:10px;color:#5b4b8a;font-family:ui-monospace,monospace;line-height:1.5;margin:8px 0 0;">Scores the current <b>best</b> pose against the loaded receptor: cuts the 5 Å binding pocket (matches GIGN training), builds the graph and runs the model server-side. pK = −ΔG/1.36.</p>
+            </div>
+            <div id="poseGatorCard" style="display:none;flex-direction:column;gap:0;background:#08201a;border:1px solid #14532d;border-radius:13px;padding:13px;">
+              <p style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#34d399;margin:0 0 8px;">GatorAffinity · ATOMICA backbone</p>
+              <div style="display:flex;flex-direction:column;gap:4px;padding:0 0 9px;margin-bottom:5px;border-bottom:1px solid rgba(20,83,45,.6);">
+                <label for="poseGatorOutDir" style="font-size:9.5px;color:#4f9e7c;font-family:ui-monospace,monospace;letter-spacing:.03em;">server output dir · pocket <b style="color:#6ee7b7;">.pdb</b> + blocks + results</label>
+                <input id="poseGatorOutDir" type="text" spellcheck="false" autocomplete="off" value="" placeholder="/path/to/writable/scratch  (blank → temp dir)" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:10.5px;background:#04120e;border:1px solid #14532d;border-radius:6px;padding:4px 7px;color:#6ee7b7;outline:none;" onfocus="this.style.borderColor='#34d399'" onblur="this.style.borderColor='#14532d'">
+              </div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(20,83,45,.6);"><span style="color:#4f9e7c;">predicted pK</span><span id="poseGatorPk" style="color:#6ee7b7;font-weight:700;">—</span></div>
+              <div style="display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(20,83,45,.6);"><span style="color:#4f9e7c;">ΔG (kcal/mol)</span><span id="poseGatorDg" style="color:#e2e8f0;">—</span></div>
+              <button id="poseGatorRunBtn" onclick="PoseGen.mc.scoreGator()" style="margin-top:9px;padding:6px 12px;border-radius:9px;border:1px solid #15803d;background:rgba(52,211,153,.14);color:#6ee7b7;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">⚛ Score (GatorAffinity)</button>
+              <p style="font-size:10px;color:#3f7a62;font-family:ui-monospace,monospace;line-height:1.5;margin:8px 0 0;">Scores the current <b>best</b> pose against the loaded receptor: cuts the 5 Å pocket (matches the <code>*_pocket_5A.pdb</code> the model was fine-tuned on), fragments the ligand (PS_300), builds the ATOMICA blocks and runs the <code>pose.gatoraffinity_model</code> checkpoint (blank → the script's default) server-side. The model predicts <b>pK</b> directly; ΔG = −1.36·pK, as with the other two.</p>
             </div>
             <p style="font-size:10.5px;color:#475569;font-family:ui-monospace,monospace;line-height:1.55;">The editable surrogate above drives the per-step search (clash + box-center restraint). Production docking uses the full Vina scoring function on GPU/CPU (server-side).</p>
           </div>
@@ -2544,8 +2639,6 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
 </div>
 
 
-
-
 <!-- ══ Session Viewer Panel ══════════════════════════════════════════════════ -->
 <div id="elionSessionPanel" style="
     display:none;position:fixed;top:72px;left:0;bottom:0;width:320px;z-index:9800;
@@ -2580,7 +2673,6 @@ window._HUB_FEATURE_BASE = "{{ url_for('static', filename='js/') }}";
         Model affects all chat endpoints on this server instance.
     </div>
 </div>
-
 
 
 <!-- ══ Docked results ═══════════════════════════════════

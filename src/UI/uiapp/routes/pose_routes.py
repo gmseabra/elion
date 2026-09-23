@@ -446,6 +446,12 @@ def pose_deepatom_score():
             try:
                 root = Path(out_dir_req).expanduser()
                 root.mkdir(parents=True, exist_ok=True)
+                # Absolute, for the same reason as the GIGN staging dir below:
+                # out_dir comes from the browser and is usually repo-relative, but
+                # this subprocess is launched with cwd=root and then handed
+                # `-d <root>` -- so a relative value would be resolved a second
+                # time, against itself.
+                root = root.resolve()
             except Exception as e:
                 return jsonify({'ok': False, 'err': 'cannot use output dir "%s": %s' % (out_dir_req, e)}), 200
             ephemeral = False
@@ -453,6 +459,7 @@ def pose_deepatom_score():
             try:
                 root = Path(pose_default_dir).expanduser()
                 root.mkdir(parents=True, exist_ok=True)
+                root = root.resolve()
             except Exception as e:
                 return jsonify({'ok': False, 'err': 'cannot use pose.default_dir "%s": %s' % (pose_default_dir, e)}), 200
             ephemeral = False
@@ -802,6 +809,17 @@ def pose_gign_score():
         else:
             stage = Path(tempfile.mkdtemp(prefix='elion_gign_'))
         stage.mkdir(parents=True, exist_ok=True)
+        # ABSOLUTE, always. `out_dir` arrives from the browser and is typically the
+        # repo-relative pose.default_dir ("data/pose"), so mkdir and the writes
+        # below land relative to the FLASK process CWD -- while the subprocess is
+        # launched with cwd=<the GIGN script's own directory>. The script then
+        # resolves --stage against that directory instead, finds nothing, and
+        # RDKit reports it as a parse failure:
+        #     OSError: Bad input file data/pose/gign_<name>/<name>_ligand.pdb
+        # which reads like malformed chemistry and is actually a missing file.
+        # resolve() after mkdir turns the one path both sides share into an
+        # absolute one; nothing else about the contract changes.
+        stage = stage.resolve()
     except Exception as e:
         return jsonify({'ok': False, 'err': 'cannot create staging dir: %s' % e}), 200
 
@@ -1007,6 +1025,9 @@ def pose_gatoraffinity_score():
         else:
             stage = Path(tempfile.mkdtemp(prefix='elion_gator_'))
         stage.mkdir(parents=True, exist_ok=True)
+        # Same defect shape as GIGN above: the child runs from the script's own
+        # directory, so the staging path it is handed must be absolute.
+        stage = stage.resolve()
     except Exception as e:
         return jsonify({'ok': False, 'err': 'cannot create staging dir: %s' % e}), 200
 

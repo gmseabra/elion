@@ -7,7 +7,7 @@
 #   ts_cpu    — GET SSE: stream per-core CPU% every second via psutil
 # =============================================================================
 
-import os, re, subprocess, threading, uuid, queue, signal, shutil, tempfile, json
+import os, re, subprocess, threading, uuid, queue, signal, shutil, tempfile, json, time, math
 import sys as _sys
 from flask import jsonify, request, Response, stream_with_context
 from uiapp import app
@@ -372,10 +372,40 @@ def _delete_session(job_id: str) -> None:
     except Exception as e:
         logger.warning("[TS] session delete failed for %s: %s", job_id, e)
 
-def _load_sessions() -> list:
-    """Load all running session files; skip orphaned ones (process dead).
-    Returns (sessions, debug_log) where debug_log is a list of strings
-    surfaced to the browser via /ts_active for console visibility.
+# How long a finished run's session file is kept before it is treated as
+# litter. Deleting the instant the process exits is what made a completed run
+# vanish from /ts_top5 the moment it succeeded: the job is dropped from
+# _ts_jobs by the reaper (status "done" + pid gone), and the disk copy that was
+# supposed to be the fallback had already been unlinked by whichever poll got
+# here first. A retention window keeps the final ranking readable without
+# letting genuinely orphaned files accumulate forever.
+_SESSION_RETENTION_S: int = max(0, int(float(
+    os.environ.get("UI_TS_SESSION_RETENTION_H", "24") or 24) * 3600))
+
+
+def _load_sessions(include_finished: bool = False) -> list:
+    """Session files from _STATE_DIR, newest state first.
+
+    By default returns only sessions whose process is still ALIVE — that is
+    what /ts_active and the reconnect path mean by "sessions".
+
+    ``include_finished=True`` also returns sessions whose process has exited,
+    for callers asking "what is the best ranking so far" rather than "what is
+    running". /ts_top5 is the motivating case: a clean finish sets the job's
+    status to "done" and the reaper drops it from _ts_jobs, so the disk copy is
+    the ONLY remaining source of the final reagent ranking.
+
+    Every returned session carries two annotations the caller can trust:
+        _alive     — the process is still running
+        _finished  — it is not, and the file was kept because it is recent
+
+    Files are only unlinked once dead AND older than _SESSION_RETENTION_S. A
+    read path that deletes what it just read cannot be polled concurrently by
+    two endpoints without one of them losing the race, which is exactly the bug
+    this replaced.
+
+    ``_load_sessions._last_debug`` holds this call's debug lines, surfaced to
+    the browser via /ts_active for console visibility.
     """
     import glob as _glob
     sessions  = []
@@ -430,10 +460,32 @@ def _load_sessions() -> list:
             debug_log.append(msg)
             logger.info("[TS:_load_sessions] %s", msg)
 
+            s["_alive"]    = alive
+            s["_finished"] = not alive
+
             if not alive:
-                debug_log.append(f"  → REMOVING {_os.path.basename(path)}")
-                _os.remove(path)
-                continue
+                # Age is taken from the file, not from anything inside it: a run
+                # killed mid-write may have no end timestamp, and mtime is the
+                # one fact that is always present and always correct.
+                try:
+                    age = time.time() - _os.path.getmtime(path)
+                except OSError:
+                    age = float("inf")
+                if age > _SESSION_RETENTION_S:
+                    debug_log.append(
+                        f"  → REMOVING {_os.path.basename(path)} "
+                        f"(dead, {age / 3600:.1f}h old > retention "
+                        f"{_SESSION_RETENTION_S / 3600:.1f}h)")
+                    try:
+                        _os.remove(path)
+                    except OSError as _re:
+                        debug_log.append(f"  → could not remove: {_re}")
+                    continue
+                debug_log.append(
+                    f"  → FINISHED, kept ({age / 60:.0f} min old); "
+                    f"{'returned' if include_finished else 'withheld — caller wants live only'}")
+                if not include_finished:
+                    continue
             sessions.append(s)
         except Exception as e:
             debug_log.append(f"  → EXCEPTION loading {_os.path.basename(path)}: {e}")
@@ -444,9 +496,13 @@ def _load_sessions() -> list:
     # multiple jobs (e.g. Amide, Suzuki, Amide, Suzuki) the tabs map to the wrong
     # jobs after reload and the chart/scores appear swapped.
     sessions.sort(key=lambda s: s.get("launch_idx", 0))
-    debug_log.append(f"_load_sessions: returning {len(sessions)} live sessions "
+    n_live = sum(1 for s in sessions if s.get("_alive"))
+    debug_log.append(f"_load_sessions: returning {len(sessions)} sessions "
+                     f"({n_live} live, {len(sessions) - n_live} finished; "
+                     f"include_finished={include_finished}) "
                      f"(order: {[s.get('launch_idx') for s in sessions]})")
-    logger.info("[TS:_load_sessions] returning %d live sessions", len(sessions))
+    logger.info("[TS:_load_sessions] returning %d sessions (%d live, %d finished)",
+                len(sessions), n_live, len(sessions) - n_live)
     _load_sessions._last_debug = debug_log
     return sessions
 
@@ -1577,9 +1633,27 @@ def _run_ts_job(job_id: str, yml_path: str, extra_env: dict,
                          job_id, rxn_key_val or "?",
                          rc, _sig, _tail)
 
-        # Final history flush to disk, then remove session (job complete)
+        # Final history flush to disk. The session is deliberately KEPT.
+        #
+        # This used to be `_write_session(...)` immediately followed by
+        # `_delete_session(job_id)` — writing the final ranking and then, on the
+        # next line, throwing it away. The two together made a completed run
+        # unreachable from every source at once:
+        #
+        #   • _ts_jobs      — the reaper drops any job whose status is done/
+        #                     error/killed once its pid is gone
+        #   • TS_Session/   — deleted right here, one line after being written
+        #
+        # so /ts_top5 answered jobs=[] the moment a run succeeded, the browser
+        # wiped _ts._activeTopRaw, and the RL tab reported "0 of 0" over a run
+        # that had just produced 486 molecules. The final flush exists precisely
+        # so the result outlives the process; deleting it defeated its purpose.
+        #
+        # Cleanup is _load_sessions()'s job now: it unlinks dead sessions older
+        # than _SESSION_RETENTION_S and returns the recent ones to callers that
+        # pass include_finished=True (i.e. /ts_top5). _delete_session survives
+        # for the kill paths, where discarding the run IS the intent.
         _write_session(job_id, _ts_jobs.get(job_id, {}))
-        _delete_session(job_id)
 
         # ── DEBUG: end-of-run warmup summary ────────────────────────────────
         # Whether this run LOADED an existing checkpoint (warmup skipped) or ran a
@@ -2215,20 +2289,34 @@ def ts_top5():
             })
             seen.add(job_id)
 
-    # Disk sessions not already in memory
+    # Disk sessions not already in memory.
+    #
+    # include_finished=True is load-bearing, not defensive. A clean run ends
+    # with status "done" and the reaper deletes it from _ts_jobs the moment its
+    # pid is gone, so for any COMPLETED run this disk pass is the only place the
+    # final ranking still exists. Without it /ts_top5 answered NO JOBS the
+    # instant a run succeeded, the browser wiped _ts._activeTopRaw, and the RL
+    # tab correctly reported "0 of 0" over a run that had just finished.
     try:
-        for s in _load_sessions():
+        for s in _load_sessions(include_finished=True):
             jid = s.get("job_id")
             if not jid or jid in seen:
                 continue
             seen.add(jid)
             hist = s.get("history", {}) or {}
+            # Report liveness we measured, not what the file claims. A session
+            # written mid-run says "running" forever; saying that about a
+            # process that exited is how a finished ranking gets mistaken for a
+            # stalled one.
+            status = s.get("status") or "running"
+            if s.get("_finished") and status in ("running", "", None):
+                status = "finished"
             out.append({
                 "job_id":     jid,
                 "launch_idx": s.get("launch_idx", 0),
                 "rxn_key":    s.get("rxn_key", ""),
                 "short_name": s.get("short_name", ""),
-                "status":     s.get("status", "running"),
+                "status":     status,
                 "top5":       hist.get("top5", []),
             })
     except Exception as e:
@@ -2245,7 +2333,16 @@ def ts_top5():
     # empty. Without it, "no sessions on disk" and "the run produced nothing"
     # look identical in the browser — and the usual cause of the former is a
     # mis-resolved ELION_CWD making visualizer.output_dir unreadable.
-    return jsonify({"jobs": out, "state_dir": _STATE_DIR, "debug_dir": _DEBUG_DIR})
+    # impl is a build stamp for web/static/js/ts/ts_rl_debug.js. Flask imports
+    # route modules once at startup, so an edited ts_routes.py has NO effect
+    # until the server restarts — and from the browser that is indistinguishable
+    # from the patch not working. If the probe reports impl != "retention-v3",
+    # the old module is still resident. Bump this whenever /ts_top5's contract
+    # changes.
+    return jsonify({"jobs": out, "state_dir": _STATE_DIR, "debug_dir": _DEBUG_DIR,
+                    "impl": "retention-v3",
+                    "n_memory": len(seen) - sum(1 for j in out if j.get("status") == "finished"),
+                    "retention_h": round(_SESSION_RETENTION_S / 3600, 1)})
 
 
 
@@ -3447,3 +3544,698 @@ def ts_smiles_svg():
             pass
     return Response(svg, mimetype="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RL feedback loop  /vina_visualization/ts_rl_*
+# -----------------------------------------------------------------------------
+# Closes the loop the hit-optimisation diagram draws:
+#
+#   TS run → top 30% by ChemBERT score → Vina pose (in-browser) → DeepAtom/GIGN
+#          → ts_rl_feedback → ts_rl_bias → warm-up checkpoint → next TS run
+#
+# WHY THE LOOP IS ROUND-BASED AND NOT LIVE. There is no channel into a running
+# elion.py. _run_ts_job spawns it with stdout=PIPE, stderr=PIPE and no stdin,
+# and never keeps the Popen object — only the pid — so nothing in this process
+# could write to the child even if a protocol existed. The one injection point
+# the engine already honours is TS_WARMUP_CHECKPOINT, read once inside
+# ThompsonSampler.warm_up() at process start. So feedback biases the NEXT run.
+# That is a property of the engine, not a shortcut taken here; making it live
+# needs an IPC channel added on the elion side.
+#
+# All four endpoints live in THIS module on purpose. They need _ts_jobs,
+# _OUTPUT_DIR, _WARMUP_DIR, _REACTION_CATALOGUE and _resolve_rxn — and
+# `_ts_jobs` here is the module-level dict at the top of this file, which
+# SHADOWS the identically-named one exported by shared.py. A separate route
+# module importing `_ts_jobs` from shared would silently get an empty,
+# unrelated registry and report every finished run as unknown.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_RL_DIR = os.path.join(_OUTPUT_DIR, "RL_Feedback")
+
+try:
+    from uiapp.core import rl_bias as _rlb
+except Exception as _rlb_err:                                # pragma: no cover
+    _rlb = None
+    logger.warning("[TS:rl] uiapp.core.rl_bias unavailable (%s) — the RL "
+                   "feedback endpoints will report themselves as disabled "
+                   "rather than half-working", _rlb_err)
+
+
+def _rl_short_name(rxn_key: str) -> str:
+    entry, _ = _resolve_rxn(rxn_key)
+    return (entry or {}).get("short_name") or (rxn_key or "ts")
+
+
+def _rl_find_results_csv(job_id: str = "", rxn_key: str = "",
+                         output_dir: str = "") -> tuple:
+    """Locate a finished run's results CSV. Returns (path, how).
+
+    Three sources, most-specific first. `how` is returned so the UI can say
+    which one answered — a run harvested from "newest on disk" when the caller
+    passed a job_id means that job never recorded a results_path, which is a
+    real condition worth seeing rather than inferring.
+    """
+    if job_id:
+        with _ts_lock:
+            job = _ts_jobs.get(job_id) or {}
+        p = job.get("results_path") or ""
+        if p and os.path.isfile(p):
+            return p, "job.results_path"
+
+    short = _rl_short_name(rxn_key) if rxn_key else ""
+    roots = []
+    if output_dir:
+        roots.append(os.path.expanduser(output_dir))
+    roots.append(_OUTPUT_DIR)
+    try:
+        _r = _abs_results_path(_tscfg.read_yml_value("generator", "TS", "results_filename")
+                               if hasattr(_tscfg, "read_yml_value") else "")
+        if _r:
+            roots.append(os.path.dirname(_r))
+    except Exception:
+        pass
+
+    import glob as _glob
+    best, best_mtime = "", -1.0
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        pats = ["%s_*_mean*_std*.csv" % short] if short else []
+        pats.append("*_mean*_std*.csv")
+        for pat in pats:
+            for p in _glob.glob(os.path.join(root, pat)):
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if mt > best_mtime:
+                    best, best_mtime = p, mt
+            if best and pat.startswith(short) and short:
+                # A short-name match is more trustworthy than a wildcard one;
+                # stop before the wildcard pass can outvote it on mtime.
+                return best, "newest for %s in %s" % (short, root)
+    if best:
+        return best, "newest *_mean*_std*.csv on disk"
+    return "", "not found"
+
+
+@app.route('/vina_visualization/ts_rl_harvest', methods=['GET'])
+def ts_rl_harvest():
+    """Top `frac` of a finished run's products by TS (ChemBERT) score.
+
+    Query: job_id, rxn_key, path, output_dir, frac (default 0.30), cap
+           (default 30, 0 = uncapped), mode (maximize|minimize).
+
+    The selection is done by uiapp.core.rl_bias.select_top_fraction — the same
+    function the elion-side bias_generator calls — so the molecules the browser
+    poses are exactly the molecules the engine would have chosen.
+    """
+    if _rlb is None:
+        return jsonify({"ok": False, "err": "rl_bias module unavailable"}), 200
+
+    rxn_key = (request.args.get("rxn_key") or "").strip()
+    job_id = (request.args.get("job_id") or "").strip()
+    path = (request.args.get("path") or "").strip()
+    out_dir = (request.args.get("output_dir") or "").strip()
+    try:
+        frac = float(request.args.get("frac", _rlb.DEFAULT_FRACTION))
+    except ValueError:
+        frac = _rlb.DEFAULT_FRACTION
+    try:
+        cap = int(request.args.get("cap", 30))
+    except ValueError:
+        cap = 30
+    mode = (request.args.get("mode") or "maximize").strip()
+
+    how = "explicit path"
+    if not path:
+        path, how = _rl_find_results_csv(job_id, rxn_key, out_dir)
+    if not path or not os.path.isfile(path):
+        # Say WHERE we looked. A bare "not found" here is indistinguishable
+        # from "the run produced nothing", and they need different fixes.
+        return jsonify({
+            "ok": False,
+            "err": "no results CSV found (%s). A run only writes one on a "
+                   "clean exit, renamed to <short>_<ts>_mean<X>_std<X>.csv."
+                   % how,
+            "searched": [out_dir or None, _OUTPUT_DIR],
+            "job_id": job_id, "rxn_key": rxn_key,
+        }), 200
+
+    try:
+        rows = _rlb.read_results_csv(path)
+        picked, stats = _rlb.select_top_fraction(rows, frac, cap or None, mode)
+    except Exception as exc:
+        logger.warning("[TS:rl] harvest failed on %s: %s", path, exc)
+        return jsonify({"ok": False, "err": "%s: %s" % (type(exc).__name__, exc),
+                        "source_csv": path}), 200
+
+    cands = []
+    for i, r in enumerate(picked):
+        cands.append({
+            "rank": i + 1,
+            "smiles": r["smiles"],
+            "name": r["name"],
+            "reagents": _rlb.split_product_name(r["name"]),
+            "ts_score": round(r["score"], 6),
+        })
+
+    stats["unparseable_rows"] = getattr(_rlb.read_results_csv, "last_unparseable", 0)
+    return jsonify({
+        "ok": True,
+        "source_csv": path,
+        "source_how": how,
+        "rxn_key": rxn_key,
+        "short_name": _rl_short_name(rxn_key) if rxn_key else "",
+        "selection": stats,
+        "candidates": cands,
+    })
+
+
+@app.route('/vina_visualization/ts_rl_feedback', methods=['POST'])
+def ts_rl_feedback():
+    """Persist one round of measured affinities as an affinity JSON.
+
+    Body: {rxn_key, job_id?, scorer, source_csv?, selection?, records:[...]}
+    where each record is {name, reagents[], smiles, ts_score, ok, pk?, dg?,
+    vina_dg?, scorer?, err?}.
+
+    Writes <output_dir>/RL_Feedback/<short>_<ts>_affinity.json and returns its
+    path. Records that carry no usable score are kept in the file — the loop
+    should be auditable, including its failures — but rl_bias skips them and
+    reports the count.
+    """
+    if _rlb is None:
+        return jsonify({"ok": False, "err": "rl_bias module unavailable"}), 200
+    body = request.get_json(silent=True) or {}
+    records = body.get("records") or []
+    if not isinstance(records, list) or not records:
+        return jsonify({"ok": False, "err": "records[] is required and must be non-empty"}), 200
+
+    rxn_key = str(body.get("rxn_key") or "")
+    short = _rl_short_name(rxn_key)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    os.makedirs(_RL_DIR, exist_ok=True)
+    path = os.path.join(_RL_DIR, "%s_%s_affinity.json" % (short, ts))
+
+    n_scored = sum(1 for r in records if _rlb.record_pk(r) is not None)
+    payload = {
+        "schema": _rlb.SCHEMA,
+        "rxn_key": rxn_key,
+        "short_name": short,
+        "job_id": str(body.get("job_id") or ""),
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "scorer": str(body.get("scorer") or ""),
+        "receptor": str(body.get("receptor") or ""),
+        "source_csv": str(body.get("source_csv") or ""),
+        "selection": body.get("selection") or {},
+        "n_records": len(records),
+        "n_scored": n_scored,
+        "records": records,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(payload, fh, indent=1)
+    os.replace(tmp, path)
+    logger.info("[TS:rl] wrote %d records (%d scored) to %s", len(records), n_scored, path)
+    return jsonify({"ok": True, "path": path, "n_records": len(records),
+                    "n_scored": n_scored, "short_name": short})
+
+
+def _rl_patch_yml_bias(src_yml: str, dst_yml: str) -> None:
+    """Copy src_yml to dst_yml with run_type forced to bias_generator.
+
+    Same regex-on-a-copy approach as _patch_yml_for_reaction, and the same
+    reason: the engine's yml is the user's file and must not be edited in
+    place. If no run_type key exists the key is appended under Control with
+    the indentation of the block's first entry rather than a hardcoded four
+    spaces — a guessed indent silently lands the key in the wrong section.
+    """
+    shutil.copy2(src_yml, dst_yml)
+    with open(dst_yml) as fh:
+        text = fh.read()
+    if re.search(r'^\s*run_type\s*:', text, re.M):
+        text = re.sub(r'^(\s*)run_type\s*:.*$', r'\1run_type: bias_generator',
+                      text, count=1, flags=re.M)
+    else:
+        m = re.search(r'^(?P<head>\s*Control\s*:\s*\n)(?P<indent>[ \t]+)\S', text, re.M)
+        indent = m.group("indent") if m else "    "
+        if m:
+            text = text[:m.end("head")] + "%srun_type: bias_generator\n" % indent + text[m.end("head"):]
+        else:
+            text += "\nControl:\n    run_type: bias_generator\n"
+    with open(dst_yml, "w") as fh:
+        fh.write(text)
+
+
+@app.route('/vina_visualization/ts_rl_bias', methods=['POST'])
+def ts_rl_bias():
+    """Turn an affinity JSON into a warm-up checkpoint the next run will load.
+
+    Body: {affinity_path, mode: "local"|"elion", mapping, strength, std_floor,
+           allow_no_prior, dry_run}
+
+    mode="local"  (default) runs uiapp.core.rl_bias in this process. Seconds,
+                  no conda, no GPU — the mapping is arithmetic, not inference.
+    mode="elion"  patches a copy of input_TS.yml to run_type: bias_generator
+                  and runs `python elion.py -i <copy>` with ELION_RL_AFFINITY
+                  set, so YOUR generators/TS bias_generator does the work.
+                  Use this once the elion side is wired; the shim in
+                  elion_bias_generator_TS.py calls the same rl_bias functions,
+                  so both modes produce an identical checkpoint.
+    """
+    if _rlb is None:
+        return jsonify({"ok": False, "err": "rl_bias module unavailable"}), 200
+    body = request.get_json(silent=True) or {}
+    aff = str(body.get("affinity_path") or "").strip()
+    if not aff or not os.path.isfile(aff):
+        return jsonify({"ok": False, "err": "affinity_path not found: %s" % aff}), 200
+
+    mode = (body.get("mode") or "local").strip()
+    mapping = (body.get("mapping") or "zblend").strip()
+    try:
+        strength = float(body.get("strength", _rlb.DEFAULT_STRENGTH))
+    except (TypeError, ValueError):
+        strength = _rlb.DEFAULT_STRENGTH
+    try:
+        std_floor = float(body.get("std_floor", _rlb.DEFAULT_STD_FLOOR))
+    except (TypeError, ValueError):
+        std_floor = _rlb.DEFAULT_STD_FLOOR
+    allow_no_prior = bool(body.get("allow_no_prior"))
+    dry_run = bool(body.get("dry_run"))
+
+    if mode == "elion":
+        yml = os.path.join(_ELION_CWD, _ELION_YML)
+        if not os.path.isfile(yml):
+            return jsonify({"ok": False, "err": "engine yml not found: %s" % yml}), 200
+        tmpdir = tempfile.mkdtemp(prefix="elion_rlbias_")
+        dst = os.path.join(tmpdir, "input_TS_bias.yml")
+        try:
+            _rl_patch_yml_bias(yml, dst)
+        except Exception as exc:
+            return jsonify({"ok": False, "err": "yml patch failed: %s" % exc}), 200
+        env = dict(os.environ)
+        env["ELION_RL_AFFINITY"] = aff
+        env["ELION_RL_WARMUP_DIR"] = _WARMUP_DIR
+        env["ELION_RL_MAPPING"] = mapping
+        env["ELION_RL_STRENGTH"] = str(strength)
+        env["ELION_RL_STD_FLOOR"] = str(std_floor)
+        env["ELION_RL_ALLOW_NO_PRIOR"] = "1" if allow_no_prior else "0"
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONPATH"] = _ELION_CWD + os.pathsep + env.get("PYTHONPATH", "")
+        py = _ELION_VENV if (_ELION_VENV and os.path.isfile(_ELION_VENV)) else _sys.executable
+        cmd = [py, "elion.py", "-i", dst]
+        try:
+            proc = subprocess.run(cmd, cwd=_ELION_CWD, env=env, capture_output=True,
+                                  text=True, timeout=int(body.get("timeout", 900)))
+        except subprocess.TimeoutExpired:
+            return jsonify({"ok": False, "err": "elion bias_generator timed out",
+                            "cmd": " ".join(cmd)}), 200
+        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        m = re.search(r'RL_BIAS_CHECKPOINT\s+(\S+)', out)
+        ckpt = m.group(1) if m else ""
+        ok = proc.returncode == 0 and bool(ckpt) and ckpt != "(dry"
+        return jsonify({
+            "ok": ok, "mode": "elion", "checkpoint": ckpt,
+            "returncode": proc.returncode, "cmd": " ".join(cmd), "cwd": _ELION_CWD,
+            "yml": dst, "stdout": out[-8000:],
+            "err": "" if ok else ("elion.py exited %d without printing "
+                                  "RL_BIAS_CHECKPOINT — is generators/TS wired to "
+                                  "elion_bias_generator_TS.py?" % proc.returncode),
+        })
+
+    try:
+        rep = _rlb.bias_from_affinity(
+            aff, _WARMUP_DIR, short_name=str(body.get("short_name") or ""),
+            mapping=mapping, strength=strength, std_floor=std_floor,
+            allow_no_prior=allow_no_prior, dry_run=dry_run)
+    except Exception as exc:
+        logger.warning("[TS:rl] bias failed: %s", exc)
+        return jsonify({"ok": False, "mode": "local",
+                        "err": "%s: %s" % (type(exc).__name__, exc)}), 200
+    rep["mode"] = "local"
+    if rep.get("ok"):
+        logger.info("[TS:rl] biased %s: applied=%d added=%d carried=%d -> %s",
+                    rep.get("short_name"), rep["merge"]["n_applied"],
+                    rep["merge"]["n_added"], rep["merge"]["n_carried_unchanged"],
+                    rep.get("checkpoint"))
+    return jsonify(rep)
+
+
+@app.route('/vina_visualization/ts_rl_runs', methods=['GET'])
+def ts_rl_runs():
+    """List past feedback rounds and the checkpoints now in play."""
+    import glob as _glob
+    rounds = []
+    for p in sorted(_glob.glob(os.path.join(_RL_DIR, "*_affinity.json")), reverse=True)[:40]:
+        try:
+            with open(p) as fh:
+                d = json.load(fh)
+            rounds.append({
+                "path": p, "short_name": d.get("short_name", ""),
+                "rxn_key": d.get("rxn_key", ""), "created": d.get("created", ""),
+                "scorer": d.get("scorer", ""), "n_records": d.get("n_records", 0),
+                "n_scored": d.get("n_scored", 0),
+                "selection": d.get("selection", {}),
+            })
+        except Exception:
+            rounds.append({"path": p, "err": "unreadable"})
+
+    ckpts = []
+    for p in sorted(_glob.glob(os.path.join(_WARMUP_DIR, "*_warmup.json")), reverse=True)[:40]:
+        try:
+            with open(p) as fh:
+                d = json.load(fh)
+            ckpts.append({
+                "path": p, "timestamp": d.get("timestamp", ""),
+                "rxn_key": d.get("rxn_key", ""),
+                "n_reagents": d.get("n_reagents", 0),
+                "prior_mean": d.get("prior_mean"), "prior_std": d.get("prior_std"),
+                "rl_biased": bool(d.get("rl_biased")),
+                "active": p == _warmup_cache_path(d.get("rxn_key", "")),
+            })
+        except Exception:
+            ckpts.append({"path": p, "err": "unreadable"})
+
+    return jsonify({"ok": True, "rl_dir": _RL_DIR, "warmup_dir": _WARMUP_DIR,
+                    "rounds": rounds, "checkpoints": ckpts,
+                    "impl_version": getattr(_rlb, "IMPL_VERSION", None)})
+
+@app.route('/vina_visualization/ts_score_dist', methods=['GET'])
+def ts_score_dist():
+    """Pooled score distribution over every TS results CSV under a directory.
+
+    GET ?dir=<path>&bins=60&recursive=1&max_files=500&max_rows=200000
+
+    Returns the HISTOGRAM of the real scores plus the parameters of a fitted
+    normal — not just the fit. The caller draws both, so "is it actually a bell
+    curve?" is answerable by looking rather than assumed. `skew` is returned for
+    the same reason: a filename that says mean/std does not make a distribution
+    Gaussian, and this loop's whole premise is that the score distribution moves.
+
+    Recursive by default, because the natural input is a tree
+    (`pre_train/{suzuki,snar}/*.csv`), not one flat folder. `ts_meta` stays
+    non-recursive and unchanged — it has other callers.
+
+    Every cap that bites is named in the response (`caps.truncated`,
+    `skipped[]`). A silently truncated scan reads as full coverage.
+    """
+    if _rlb is None:
+        return jsonify({"ok": False, "err": "rl_bias module unavailable"}), 200
+
+    d = (request.args.get('dir') or '').strip()
+    d = os.path.expanduser(d)
+    if not d or not os.path.isdir(d):
+        return jsonify({"ok": False, "err": "directory not found: %s" % (d or '(empty)')}), 200
+
+    def _int(name, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(request.args.get(name, default))))
+        except (TypeError, ValueError):
+            return default
+
+    nbins = _int('bins', 60, 10, 200)
+    max_files = _int('max_files', 500, 1, 5000)
+    max_rows = _int('max_rows', 200000, 1000, 5000000)
+    recursive = (request.args.get('recursive', '1') or '1') not in ('0', 'false', 'no')
+
+    import glob as _glob
+    pattern = os.path.join(d, '**', '*.csv') if recursive else os.path.join(d, '*.csv')
+    paths = sorted(_glob.glob(pattern, recursive=recursive))
+    n_found = len(paths)
+    truncated_files = n_found > max_files
+    paths = paths[:max_files]
+
+    pat_named = re.compile(r'^(?P<reaction>.+?)_(?P<ts>\d{8}_\d{6})_'
+                           r'mean(?P<mean>[\d.]+)_std(?P<std>[\d.]+)\.csv$')
+
+    pooled: list = []
+    files: list = []
+    skipped: list = []
+    truncated_rows = False
+
+    for p in paths:
+        fname = os.path.basename(p)
+        if '_tmp.csv' in fname:
+            skipped.append({"filename": fname, "reason": "still writing (_tmp)"})
+            continue
+        try:
+            rows = _rlb.read_results_csv(p)
+        except Exception as exc:
+            skipped.append({"filename": fname, "reason": str(exc)[:120]})
+            continue
+        scores = [r["score"] for r in rows]
+        if not scores:
+            skipped.append({"filename": fname, "reason": "no parseable scores"})
+            continue
+        if len(pooled) + len(scores) > max_rows:
+            room = max_rows - len(pooled)
+            scores = scores[:max(0, room)]
+            truncated_rows = True
+        if not scores:
+            break
+        pooled.extend(scores)
+
+        m = pat_named.match(fname)
+        mean_v = sum(scores) / len(scores)
+        var = sum((s - mean_v) ** 2 for s in scores) / len(scores)
+        std_v = math.sqrt(var)
+        rel = os.path.relpath(p, d).replace(os.sep, '/')
+        entry = {
+            "filename": fname,
+            "rel": rel,
+            "n": len(scores),
+            "mean": round(mean_v, 4),
+            "std": round(std_v, 4),
+            "min": round(min(scores), 4),
+            "max": round(max(scores), 4),
+            "reaction": m.group('reaction') if m else fname.rsplit('.', 1)[0],
+            "timestamp": m.group('ts') if m else "",
+            # Top-level folder under `dir` — the accordion groups on this.
+            # A CSV sitting directly in `dir` has no folder, and is grouped
+            # under a literal "(root)" rather than under its own filename,
+            # which would give one collapsed group per file.
+            "group": rel.split('/')[0] if '/' in rel else '(root)',
+        }
+        entry["_scores"] = scores          # dropped before serialising; see below
+        # The filename carries the engine's own mean/std. Comparing them against
+        # the recomputed values is a free integrity check: a mismatch means the
+        # file was edited, appended to, or renamed after the run wrote it.
+        if m:
+            entry["name_mean"] = float(m.group('mean'))
+            entry["name_std"] = float(m.group('std'))
+            entry["name_drift"] = round(abs(entry["name_mean"] - entry["mean"]), 4)
+        files.append(entry)
+        if truncated_rows:
+            break
+
+    if not pooled:
+        return jsonify({"ok": False, "dir": d,
+                        "err": "no parseable scores in %d CSV(s) under this directory"
+                               % n_found,
+                        "skipped": skipped[:40], "n_files_found": n_found}), 200
+
+    n = len(pooled)
+    mean = sum(pooled) / n
+    var = sum((s - mean) ** 2 for s in pooled) / n
+    std = math.sqrt(var)
+    lo, hi = min(pooled), max(pooled)
+    skew = 0.0
+    if std > 1e-12:
+        skew = sum(((s - mean) / std) ** 3 for s in pooled) / n
+
+    # Histogram over the pooled range. A degenerate range (every score equal)
+    # would give a zero-width bin and a divide-by-zero, so widen it explicitly
+    # rather than letting the client render NaN.
+    span = hi - lo
+    if span < 1e-9:
+        lo, hi, span = lo - 0.5, hi + 0.5, 1.0
+    w = span / nbins
+    counts = [0] * nbins
+    for s in pooled:
+        k = int((s - lo) / w)
+        if k >= nbins:
+            k = nbins - 1
+        elif k < 0:
+            k = 0
+        counts[k] += 1
+
+    # ── Per-file histograms, on the SAME bin grid as the pooled one ────────
+    # This is what makes the UI's folder drill-down and A/B comparison exact:
+    # any subset's histogram is the elementwise SUM of its members' counts, so
+    # no re-read, no re-binning, and — the part that matters — two subsets
+    # being compared always share identical bin edges. Histogramming each
+    # subset on its own range is the classic way to make two distributions
+    # look different when only the binning differs.
+    for f in files:
+        fc = [0] * nbins
+        for sc in f.pop("_scores"):
+            k = int((sc - lo) / w)
+            fc[nbins - 1 if k >= nbins else (0 if k < 0 else k)] += 1
+        f["counts"] = fc
+
+    files.sort(key=lambda f: (f.get("timestamp") or "", f["filename"]))
+
+    return jsonify({
+        "ok": True,
+        "dir": d,
+        "recursive": recursive,
+        "n_files_found": n_found,
+        "n_files_used": len(files),
+        "pooled": {
+            "n": n, "mean": round(mean, 4), "std": round(std, 4),
+            "min": round(lo, 4), "max": round(hi, 4),
+            "skew": round(skew, 4),
+            "bin_width": w, "bin_lo": lo, "counts": counts, "bins": nbins,
+        },
+        "files": files,
+        "skipped": skipped[:40],
+        "caps": {
+            "max_files": max_files, "max_rows": max_rows,
+            "files_truncated": truncated_files, "rows_truncated": truncated_rows,
+        },
+    })
+
+
+@app.route('/vina_visualization/ts_smiles_export', methods=['GET'])
+def ts_smiles_export():
+    """Two-column `SMILES,Name` CSV for the scopes the distribution UI has picked.
+
+    GET ?dir=<path>&scope=<scope>[&scope=<scope>…]&recursive=1&max_rows=2000000
+
+    A scope is one of
+
+        all:                every CSV under `dir`
+        group:<folder>      every CSV under one top-level folder
+        file:<rel>          one CSV, by its path relative to `dir`
+
+    and `scope` REPEATS. The overlay sends the clicked selection and the pinned
+    one together, and both land in a single download — the union taken over
+    file paths, so a file reachable from two scopes is read once and its rows
+    appear once. `all:` short-circuits the rest, because "everything ∪ a subset
+    of everything" is still everything.
+
+    Only two columns come back. The results CSV is `score,SMILES,Name` and the
+    score is what the overlay already draws; what leaves here is the molecule
+    list, which is the thing a generator, a docking run or a reagent picker
+    actually consumes.
+
+    Reading goes through `_rlb.read_results_csv`, the same reader `ts_score_dist`
+    uses, so the row count of this export and the `n` in the tree are the same
+    number by construction rather than by two parsers agreeing. Rows it drops —
+    unparseable or non-finite scores — are dropped here too; rows with a blank
+    SMILES are dropped as well, since a molecule list with holes in it is not a
+    molecule list, and both counts come back in headers rather than silently.
+
+    Success is `text/csv`; every failure is JSON, which is what lets the caller
+    tell them apart before it writes a file to the user's disk.
+    """
+    import csv as _csv
+    import glob as _glob
+    import io as _io
+
+    if _rlb is None:
+        return jsonify({"ok": False, "err": "rl_bias module unavailable"}), 200
+
+    d = os.path.expanduser((request.args.get('dir') or '').strip())
+    if not d or not os.path.isdir(d):
+        return jsonify({"ok": False, "err": "directory not found: %s" % (d or '(empty)')}), 200
+
+    try:
+        max_rows = max(1000, min(5000000, int(request.args.get('max_rows', 2000000))))
+    except (TypeError, ValueError):
+        max_rows = 2000000
+    recursive = (request.args.get('recursive', '1') or '1') not in ('0', 'false', 'no')
+
+    scopes = [s.strip() for s in request.args.getlist('scope') if s.strip()] or ['all:']
+    if any(s == 'all:' or s.startswith('all:') for s in scopes):
+        scopes = ['all:']
+
+    pattern = os.path.join(d, '**', '*.csv') if recursive else os.path.join(d, '*.csv')
+    paths = sorted(_glob.glob(pattern, recursive=recursive))
+
+    # Match in glob order, deduplicated by path: the union of the scopes, read
+    # in one predictable order regardless of which scope pulled a file in.
+    picked, seen = [], set()
+    for p in paths:
+        fname = os.path.basename(p)
+        if '_tmp.csv' in fname:
+            continue                      # a run still writing; ts_score_dist skips it too
+        rel = os.path.relpath(p, d).replace(os.sep, '/')
+        group = rel.split('/')[0] if '/' in rel else '(root)'
+        for s in scopes:
+            kind, _, key = s.partition(':')
+            if (kind == 'all'
+                    or (kind == 'group' and key == group)
+                    or (kind == 'file' and key == rel)):
+                if p not in seen:
+                    seen.add(p)
+                    picked.append(p)
+                break
+
+    if not picked:
+        return jsonify({"ok": False, "dir": d,
+                        "err": "no CSV matched %s" % ', '.join(scopes)}), 200
+
+    buf = _io.StringIO()
+    # QUOTE_MINIMAL through csv.writer rather than ','.join: a Name field is
+    # free text and one comma in it would silently shift every downstream
+    # column by one. SMILES survive unquoted; names may not.
+    wr = _csv.writer(buf, lineterminator='\n')
+    wr.writerow(['SMILES', 'Name'])
+
+    n_rows = n_blank = n_files = 0
+    skipped, truncated = [], False
+    for p in picked:
+        try:
+            rows = _rlb.read_results_csv(p)
+        except Exception as exc:
+            skipped.append(os.path.basename(p))
+            continue
+        n_files += 1
+        for r in rows:
+            smi = (r.get("smiles") or "").strip()
+            if not smi:
+                n_blank += 1
+                continue
+            if n_rows >= max_rows:
+                truncated = True
+                break
+            wr.writerow([smi, (r.get("name") or "").strip()])
+            n_rows += 1
+        if truncated:
+            break
+
+    if not n_rows:
+        return jsonify({"ok": False, "dir": d,
+                        "err": "no SMILES in %d matched file(s)%s" % (
+                            len(picked),
+                            (" — unreadable: %s" % ', '.join(skipped[:4])) if skipped else ""),
+                        }), 200
+
+    # The filename names the scope, so two exports in a Downloads folder are
+    # still tellable apart a week later.
+    def _slug(s):
+        kind, _, key = s.partition(':')
+        raw = 'all' if kind == 'all' else (
+            key if kind == 'group' else os.path.basename(key).rsplit('.', 1)[0])
+        return re.sub(r'[^A-Za-z0-9._-]+', '_', raw)[:60] or 'scope'
+
+    fname = 'ts_smiles_%s.csv' % '+'.join(_slug(s) for s in scopes)
+
+    logger.info("[TS:export] %s -> %d rows from %d/%d file(s)%s",
+                ', '.join(scopes), n_rows, n_files, len(picked),
+                " (CAPPED)" if truncated else "")
+
+    return Response(buf.getvalue(), mimetype='text/csv', headers={
+        'Content-Disposition': 'attachment; filename=%s' % fname,
+        # The caller downloads a blob and cannot look inside it; every number
+        # it needs to report back to the user rides on the response instead.
+        'X-TS-Rows': str(n_rows),
+        'X-TS-Files': str(n_files),
+        'X-TS-Blank': str(n_blank),
+        'X-TS-Skipped': str(len(skipped)),
+        'X-TS-Truncated': '1' if truncated else '0',
+        'Access-Control-Expose-Headers':
+            'X-TS-Rows, X-TS-Files, X-TS-Blank, X-TS-Skipped, X-TS-Truncated',
+    })

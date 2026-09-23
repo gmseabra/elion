@@ -1619,7 +1619,15 @@ function _tsPollTop5() {
             _ts._top5StateDir = d.state_dir || '';
             _ts._top5Polled   = true;
             _tsTop5ByJob = {};
-            if (!_ts._jobBars) _ts._jobBars = {};
+            // _jobBars must be REPLACED, not merely ensured-to-exist. Keeping
+            // the previous poll's entries means a response with no jobs leaves
+            // `_ts._activeBars = _ts._jobBars[idx]` pointing at the LAST run's
+            // bars: #tsTsBars then renders a ranking the server no longer has,
+            // and the clear-on-empty branch in _tsRenderTsBars never fires
+            // because bars.length is 5, not 0. The probe caught exactly this —
+            // _activeTopRaw dropped to 0 (it IS reassigned every poll) while
+            // _activeBars stayed at 5, and only the two disagreeing gave it away.
+            _ts._jobBars = {};
             // Convert each job's top5 ONCE (so _tsPrevRank updates exactly once
             // per job per poll), storing the resulting bars per job.
             jobs.forEach(j => {
@@ -1720,7 +1728,22 @@ function _tsRenderTsBars() {
         // no rows, no message, nothing to distinguish "the run hasn't produced
         // a session yet" from "/ts_top5 is scanning the wrong directory because
         // ELION_CWD is mis-resolved". Say which directory was scanned.
-        if (_ts._top5Polled && !el.querySelector('[data-el="ridLabel"]')) {
+        //
+        // Previously this returned with the OLD ROWS STILL ON SCREEN whenever
+        // the panel had rendered once. That made a stale panel and a live one
+        // pixel-identical: after a run finished and /ts_top5 stopped serving
+        // it, this kept displaying the last good ranking while the RL tab —
+        // which does clear — honestly reported "0 of 0". Two panels reading
+        // _ts._activeTopRaw disagreed, and the one that was right looked broken.
+        // Only the μ/σ figures, patched every poll, gave it away.
+        //
+        // So: drop the rows, then fall through to the placeholder. An empty
+        // ranking must look empty.
+        if (el.querySelector('[data-el="ridLabel"]')) {
+            el.innerHTML = '';
+            el._tsIdSig  = null;      // or the sameSet branch patches dead nodes
+        }
+        if (_ts._top5Polled) {
             const dir = _ts._top5StateDir || '(unknown)';
             el.innerHTML =
                 '<div id="tsTsBarsEmpty" style="padding:18px 6px;font-size:11px;color:#475569;line-height:1.7">' +

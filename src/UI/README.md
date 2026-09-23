@@ -106,6 +106,7 @@ environment variable when your layout differs (see `uiapp/config.py`):
 | `UI_SESSIONS_DB` | chat-history SQLite file | `data/elion_sessions.db` |
 | `UI_POSE_ROOT` / `UI_POSE_UPLOAD_DIR` / `UI_POSE_DEBUG_DIR` | pose scratch + uploads | `data/pose/…` |
 | `UI_POSE_GIGN_SCRIPT` | GIGN pose scorer | unset (scorer disabled) |
+| `UI_POSE_GATORAFFINITY_SCRIPT` | GatorAffinity pose scorer | unset (scorer disabled) |
 | `UI_TS_OUTPUT_DIR` | TS session + warm-up state | `data/ts` |
 | `UI_TS_BB_BASE` / `UI_TS_ENGINE_DIR` | reagent building blocks / TS engine dir | derived from `ELION_CWD` |
 | `UI_MGLTOOLS_DIR` / `MGLTOOLS_PYTHON` | AutoDockTools prep scripts + interpreter | `engines/vina/mgltools`, autodetected |
@@ -148,7 +149,7 @@ banner prints the resolved address and which of the three levels it came from.
 | **ChemBERT** | `/attention_visualization` | per-atom weight view, A/B compare, fine-tuning jobs |
 | **DeepAtom** | `/vina_visualization/deepatom_*` | 3-D CNN screening + per-atom saliency |
 | **Thompson Sampling** | `/vina_visualization/ts_*` | live warm-up / belief monitor, multi-reaction jobs |
-| **Pose Generation** | `/pose/*` | SMILES → 3-D conformer + torsion tree; DeepAtom / GIGN / pure-Python Vina scorers |
+| **Pose Generation** | `/pose/*` | SMILES → 3-D conformer + torsion tree; DeepAtom / GIGN / GatorAffinity / pure-Python Vina scorers |
 | **Sessions** | `/session/*` | SQLite chat history + model registry |
 | **Mini-chat** | `/{vina,attention}_visualization/chat*` | one implementation for all three tools |
 
@@ -157,7 +158,7 @@ server — it opens `UI_REASONING_URL` in a new tab and there is no `/reasoning/
 endpoint. **Get Ligand Center** is not shipped; use the `center_x/y/z` +
 `suggested_size` fields that `POST /tools/pdb_to_pdbqt` already returns.
 
-External resources — the sibling elion engine, DeepAtom, GIGN, MGLTools, the
+External resources — the sibling elion engine, DeepAtom, GIGN, GatorAffinity, MGLTools, the
 sentence-transformer encoder and the ChemBERT weights — are all **optional**.
 Each one is blank-by-default in `config/input_routes.yml` or `uiapp/config.py`;
 a feature whose backend is unconfigured reports that instead of failing.

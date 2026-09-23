@@ -151,22 +151,22 @@ const _TS_RL_BODY = `
 <!-- config bar removed: the REAL pose input bar is adopted into #tsRlPoseHost -->
   <!-- ═══ verdict strip ═══ -->
   <div class="verdict">
-    <div class="v"><div class="t">Search</div><div class="m"><b style="color:var(--good)">Solved</b>
+    <div class="v" data-rlv="search" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">Search</div><div class="m"><b style="color:var(--good)">Solved</b>
       <span class="pill ok">✓ TS</span></div>
       <div class="s">Bandit over reagent posteriors. This is the MCTS slot.</div></div>
-    <div class="v"><div class="t">Synthesizability</div><div class="m"><b style="color:var(--good)">Solved</b>
+    <div class="v" data-rlv="synth" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">Synthesizability</div><div class="m"><b style="color:var(--good)">Solved</b>
       <span class="pill ok">✓ eXplore</span></div>
       <div class="s">Purchasable blocks + validated Suzuki SMARTS.</div></div>
-    <div class="v"><div class="t">DMTA cycle cost</div><div class="m"><b style="color:var(--good)">Improved</b>
+    <div class="v" data-rlv="dmta" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">DMTA cycle cost</div><div class="m"><b style="color:var(--good)">Improved</b>
       <span class="pill ok">✓ orderable</span></div>
       <div class="s">Branching factor no longer 18 compounds / year.</div></div>
-    <div class="v"><div class="t">Critic</div><div class="m"><b style="color:var(--bad)">Blind</b>
+    <div class="v" data-rlv="critic" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">Critic</div><div class="m"><b style="color:var(--bad)">Blind</b>
       <span class="pill no">✕ no losses</span></div>
       <div class="s">Zero non-binders in PDBbind. Cannot emit "this fails".</div></div>
-    <div class="v"><div class="t">Calibration</div><div class="m"><b style="color:var(--bad)">None</b>
+    <div class="v" data-rlv="calibration" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">Calibration</div><div class="m"><b style="color:var(--bad)">None</b>
       <span class="pill no">✕ unfitted</span></div>
       <div class="s">No WDL-style fit against measured outcomes.</div></div>
-    <div class="v"><div class="t">Net risk</div><div class="m"><b style="color:var(--warn)">Amplified</b>
+    <div class="v" data-rlv="netrisk" role="button" tabindex="0" title="Filter the diagnostics below to the ones behind this verdict"><div class="t">Net risk</div><div class="m"><b style="color:var(--warn)">Amplified</b>
       <span class="pill wr">⚠ search×bias</span></div>
       <div class="s">Better search over a biased objective converges to the bias.</div></div>
   </div>
@@ -175,7 +175,7 @@ const _TS_RL_BODY = `
     <div class="grid">
 
       <!-- ═══ LOOP DIAGRAM ═══ -->
-      <div class="card span">
+      <div class="card span" data-rlid="loop" data-rlcat="netrisk dmta">
         <h3>The loop, and where it breaks <span class="tag">overview</span></h3>
         <p class="why">Three components, three break points. <b>None of the breaks are in the generator</b> —
           which is why adding a better generator has not moved the hit rate.</p>
@@ -236,7 +236,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D1 — no losses ═══ -->
-      <div class="card">
+      <div class="card" data-rlid="d1" data-rlcat="critic">
         <h3>1 · The critic has never seen a loss <span class="tag">GIGN · DeepAtom</span></h3>
         <p class="why">Both scorers train on PDBbind <code>train/valid/test2013/2016/2019</code>. Every complex in
           there <b>binds</b>. No decoys, no non-binders. Ask it about a non-binder and it returns the prior mean,
@@ -282,7 +282,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D2 — pose shift ═══ -->
-      <div class="card">
+      <div class="card" data-rlid="d2" data-rlcat="critic">
         <h3>2 · Trained on crystal poses, scored on generated ones <span class="tag">distribution shift</span></h3>
         <p class="why">Training prep carves the pocket with <code>byres &lt;ligand&gt; around 5</code> — using the
           <b>true, experimentally-determined</b> ligand. At inference the pocket is carved with the pose your
@@ -317,7 +317,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D3 — resolution (HERO) ═══ -->
-      <div class="card span">
+      <div class="card span" data-rlid="d3" data-rlcat="critic calibration">
         <h3>3 · Resolution — the noise is larger than the signal <span class="tag">the "0.2 ± 1.3" problem</span></h3>
         <p class="why">An objective consumes the <b>gradient</b>; a constraint consumes only a <b>threshold</b>.
           The chart below is why GIGN can serve as the second and not the first.</p>
@@ -368,7 +368,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D4 — paper is a test set ═══ -->
-      <div class="card">
+      <div class="card" data-rlid="d4" data-rlcat="calibration dmta">
         <h3>4 · The paper is a test set, not a critic <span class="tag">n = 18</span></h3>
         <p class="why">A critic must answer for <b>arbitrary</b> new positions. This answers for exactly 18 molecules
           and can never score #19. What it <i>can</i> do is calibrate.</p>
@@ -418,7 +418,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D5 — TS as reward hacker ═══ -->
-      <div class="card">
+      <div class="card" data-rlid="d5" data-rlcat="search netrisk">
         <h3>5 · TS is the most efficient reward-hacker you could build <span class="tag">live diagnostic</span></h3>
         <p class="why">TS's convergence guarantee is about finding the argmax of the <b>observed</b> reward. It has
           no representation of "the reward might be wrong." Plot the selected reagents' properties against iteration —
@@ -459,7 +459,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D6 — uncertainty in the wrong place ═══ -->
-      <div class="card">
+      <div class="card" data-rlid="d6" data-rlcat="search netrisk">
         <h3>6 · The uncertainty is in the wrong place <span class="tag">subtle</span></h3>
         <p class="why">Your <code>Reagent.current_std</code> is uncertainty about <b>a reagent's contribution to
           the proxy</b>. It is not, in any sense, uncertainty about <b>whether the proxy is right</b>.</p>
@@ -490,7 +490,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ D7 — Suzuki collision ═══ -->
-      <div class="card span">
+      <div class="card span" data-rlid="d7" data-rlcat="synth netrisk">
         <h3>7 · Your reaction makes the chemotype you already measured as failing <span class="tag">rxn110 · Suzuki</span></h3>
         <p class="why">Suzuki makes <b>biaryls</b> — flat, lipophilic, rigid. Ten of your eighteen compounds failed as
           <b>nonspecific</b>, which at a shallow hydrophobic PPI site means promiscuity / aggregation. A lipophilicity-correlated
@@ -533,7 +533,7 @@ const _TS_RL_BODY = `
       </div>
 
       <!-- ═══ RECOMMENDED WIRING ═══ -->
-      <div class="card span">
+      <div class="card span" data-rlid="fix" data-rlcat="search synth dmta critic calibration netrisk">
         <h3>What to change in the objective <span class="tag">constraint, not loss</span></h3>
         <table>
           <thead><tr><th>Component</th><th>Today</th><th>Should be</th><th style="text-align:right">Why</th></tr></thead>

@@ -4443,7 +4443,7 @@ ASH GLH HID HIE HIP HSD HSE HSP CYX CYM LYN MSE SEC PYL ACE NME NMA'
          the pre-edit snapshot, the SAR result, and the undo/redo stacks. The
          plotly click binding is a flag on the graph div, so clear that too or the
          next open would bind a second listener to the same element. */
-      try { if (PG._bldr && PG._bldr.open) PG.builderToggle(false);
+      try { if (PG._bldr && PG._bldr.open) PG.builderToggle(false, true);   // true = closing: no redraw into the purge
             if (PG._bldr) { PG._bldr.base = null; PG._bldr.basePose = null; PG._bldr.lastSar = null;
                             PG._bldr.undo.length = 0; PG._bldr.redo.length = 0; }
             var _gd = $('poseBox3D'); if (_gd) _gd._pgBldrBound = false; } catch (e) {}
@@ -4641,7 +4641,7 @@ ASH GLH HID HIE HIP HSD HSE HSP CYX CYM LYN MSE SEC PYL ACE NME NMA'
 
   /* ---- panel chrome -------------------------------------------------------- */
 
-  PG.builderToggle = function(force){
+  PG.builderToggle = function(force, closing){
     var want = (force==null) ? !PG._bldr.open : !!force;
     if(want && !L){ PG._miniLog('⛭ 3D Builder needs a ligand — build one from SMILES or pick a card first','#fbbf24'); return; }
     PG._builderInject();
@@ -4665,7 +4665,14 @@ ASH GLH HID HIE HIP HSD HSE HSP CYX CYM LYN MSE SEC PYL ACE NME NMA'
     PG._bldrIsolate(want);
     PG._bldrBtnState();
     PG._bldrSync();
-    try{ PG._redraw3D(); }catch(e){}                               // (re)tag the ligand trace for picking
+    /* `closing`: PG.close is tearing the modal down and purges the scene in the
+       same tick. A redraw here would start an async Plotly.react that the purge
+       then pulls the layout out from under (uncaught "Cannot read properties of
+       undefined (reading '_redrawFromAutoMarginCount')"), so skip it and hand the
+       camera _bldrIsolate(false) queued straight to PG._cam — all _draw3D would
+       have done with it — so the next open comes back on the user's own view. */
+    if(closing){ if(PG._camForce) PG._cam = PG._camForce; }
+    else { try{ PG._redraw3D(); }catch(e){} }                      // (re)tag the ligand trace for picking
     PG._camForce = null;   // _draw3D consumes it; clear it here too so a no-op redraw (2D view, no protein) cannot leak it into a later one
   };
   PG.builderClose = function(){ PG.builderToggle(false); };

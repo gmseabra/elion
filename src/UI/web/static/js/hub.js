@@ -63,6 +63,17 @@ function _navRun(key) {
         case 'vina':      _toggleElionSidebar(); _activeTool = 'vina';      _clearAllHighlights(); call('_vinaShow'); break;
         case 'deepatom':  _toggleElionSidebar(); _activeTool = 'deepatom';  _clearAllHighlights(); call('_deepatomShow'); break;
         case 'pose':      _toggleElionSidebar(); if (window.PoseGen && PoseGen.open) PoseGen.open(); break;
+        // 'affinity_batch' — the Predict Affinity Batch card. Deliberately the
+        // same line as 'pose' above: it opens the same workspace, in the same
+        // state, and differs only in mounting the GIGN folder-batch panel under
+        // the GIGN card (pose_affinity_batch.js). Falls back to a plain open if
+        // that module is missing, so removing the file leaves a working button
+        // rather than a dead one.
+        case 'affinity_batch':
+                          _toggleElionSidebar();
+                          if (window.PoseGen && PoseGen.openAffinityBatch) PoseGen.openAffinityBatch();
+                          else if (window.PoseGen && PoseGen.open) PoseGen.open();
+                          break;
         case 'converter': _sidebarOpenConverter(); break;
         // The Reasoning and Get Ligand Center cases are gone. Reasoning is now a
         // plain external link that carries its own onclick and no data-nav, so it
@@ -537,6 +548,25 @@ const _FEATURES = {
             // only resolves if ts_core.js has already executed. _loadSerial is
             // serial, so array order IS execution order. Do not reorder.
             'ts/ts_rl.js',
+            // ts_rl_loop.js — the closed loop inside that tab. AFTER ts_rl.js
+            // (it splices a card into #tsPaneRl, which ts_rl.js creates) and
+            // after ts_run.js (it hooks _tsFinalise to auto-start on a clean
+            // run). Serial loader, so array order is execution order.
+            'ts/ts_rl_loop.js',
+            // ts_rl_focus.js — turns the verdict strip into a filter over the
+            // diagnostic cards. AFTER ts_rl.js (it needs #tsPaneRl and the
+            // data-rlcat markup) and after ts_rl_loop.js, because it inserts
+            // its host immediately before #tsRlLoop and that node must exist.
+            'ts/ts_rl_focus.js',
+            // ts_score_dist.js — 📈 the pooled score-distribution overlay. It
+            // owns the handlers for the button ts_warmup.js renders, so it must
+            // load after it; the button is inert until this file arrives.
+            'ts/ts_score_dist.js',
+            // ts_rl_debug.js — the ranking-chain probe. LAST: it reads the
+            // globals every other ts/*.js writes, so it must run after all of
+            // them. Reports into the pose activity panel; _tsRlDbgOff() to
+            // silence. Remove this line and the file when the RL panel is fixed.
+            'ts/ts_rl_debug.js',
         ],
         loaded: false,
         onload: () => {
