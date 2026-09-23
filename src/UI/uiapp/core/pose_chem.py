@@ -318,6 +318,19 @@ def perceive_orders_charges(atoms, bonds):
     for k, (a, b) in enumerate(bonds):
         if orders[k] != 1 or atoms[a][0] == 'H' or atoms[b][0] == 'H':
             continue
+        # A bond with BOTH ends inside a planar ring was already decided by pass
+        # B, which picked that ring's Kekulé rotation; the bonds it left single
+        # are single because of that choice, not because it missed them. Letting
+        # pass C revisit them re-doubles the other half of every aromatic ring as
+        # soon as the atoms have spare valence — which is the case for a
+        # HYDROGEN-FREE ring, where each carbon is 2-coordinate and so starts
+        # with cap 2 rather than 1. Benzene then comes out with all six bonds
+        # double: an impossible valence, and the same failure the cap exists to
+        # stop. Poses carrying their hydrogens were never affected, which is why
+        # it went unnoticed — docked ligands have H, co-crystal ligands do not.
+        # Mirrors the identical guard in pose.js perceivePdbChemistry, pass C.
+        if a in in_planar_ring and b in in_planar_ring:
+            continue
         pk = pair(a, b)
         if pk not in _REF:
             continue

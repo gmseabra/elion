@@ -69,8 +69,128 @@ def _clean_ligand(lig):
         fl, counter = _fmt_lig(ln, 0, counter)
         if fl:
             out.append(fl)
-    out.append('END')
+    out.append('END   ')                               # padded: see _clean_complex
     return '\n'.join(out) + '\n'
+
+
+def _dedupe_atom_names(lines):
+    """Make atom names unique within each residue. Returns (lines, note).
+
+    WHY THIS IS NOT OPTIONAL. arpeggio reads the complex TWICE — with OpenBabel
+    and with BioPython — and matches the two by PDB serial. BioPython's
+    PDBParser refuses a second atom of the same name in the same residue:
+
+        PDBConstructionException: Atom H defined twice in residue
+        <Residue CYS het=  resseq=80 icode= > at line 1265. Exception ignored.
+
+    In PERMISSIVE mode "exception ignored" means the atom is silently DROPPED
+    from the BioPython structure. OpenBabel keeps it. arpeggio then does
+
+        biopython_atom = serial_to_bio[serial]   -> KeyError: 1265
+        raise OBBioMatchError(serial)
+
+    and every augmented copy dies: "36 failed (0 .atomtypes files)". The driver
+    then reports "arpeggio is likely not on PATH", which is a misdiagnosis — it
+    ran fine; it was handed a file BioPython and OpenBabel disagree about.
+
+    One duplicated hydrogen in an uploaded receptor is enough to lose the whole
+    score, and the two tools' disagreement is invisible from the UI. Since this
+    function is where that file is written, this is where it gets fixed.
+
+    Exact duplicates (same name AND same coordinates) are dropped — they are a
+    record written twice. Otherwise the later atom is renamed within its
+    residue, preferring element+index; the serial is untouched, so arpeggio's
+    OpenBabel/BioPython match still lines up.
+    """
+    # ── first: collapse alternate locations ──────────────────────────────────
+    # A crystal structure with A/B conformers is the SAME trap by another road,
+    # and a nastier one because BioPython issues no warning at all. It builds a
+    # DisorderedAtom and `structure.get_atoms()` yields only the selected child,
+    # so every other conformer's serial is absent from arpeggio's serial_to_bio
+    # while OpenBabel reads all of them. Measured on a real prepared TEAD3
+    # structure: 3640 atoms in the file, 3553 yielded by BioPython, 87 serials
+    # missing — the first being 748, which is exactly the KeyError seen.
+    #
+    # A scorer wants one definite structure, so keep the highest-occupancy
+    # conformer of each atom, blank the altLoc column so nothing downstream can
+    # re-split it, and drop the rest. Ties go to the first, which is altLoc A in
+    # every file that orders them conventionally.
+    def _occ(p):
+        try:
+            return float(p[54:60])
+        except ValueError:
+            return 0.0
+
+    best = {}
+    for idx, ln in enumerate(lines):
+        if ln[:6] not in ('ATOM  ', 'HETATM'):
+            continue
+        p = ln.ljust(80)
+        if p[16] == ' ':
+            continue                                       # not disordered
+        key = (p[20:22], p[22:27], p[17:20], p[12:16])      # chain, resSeq+iCode, resName, name
+        cur = best.get(key)
+        if cur is None or _occ(p) > cur[1]:
+            best[key] = (idx, _occ(p))
+    keep_alt = set(v[0] for v in best.values())
+
+    kept_lines, altlocs = [], 0
+    for idx, ln in enumerate(lines):
+        if ln[:6] not in ('ATOM  ', 'HETATM'):
+            kept_lines.append(ln)
+            continue
+        p = ln.ljust(80)
+        if p[16] == ' ':
+            kept_lines.append(ln)
+            continue
+        if idx not in keep_alt:
+            altlocs += 1
+            continue                                       # a conformer we did not pick
+        kept_lines.append((p[:16] + ' ' + p[17:]).rstrip())  # keep it, blank the altLoc
+    lines = kept_lines
+
+    # ── then: names that clash inside one residue ────────────────────────────
+    seen, coords, out = {}, {}, []
+    renamed = dropped = 0
+    for ln in lines:
+        if ln[:6] not in ('ATOM  ', 'HETATM'):
+            out.append(ln)
+            continue
+        p = ln.ljust(80)
+        name = p[12:16].strip()
+        # altLoc included: BioPython treats different altLocs as a disordered
+        # atom and is happy; only a clash at the SAME altLoc is the error.
+        res = (p[20:22], p[22:27], p[17:20], p[16])       # chain, resSeq+iCode, resName, altLoc
+        key = (res, name)
+        xyz = p[30:54]
+        if key not in seen:
+            seen[key] = 1
+            coords[key] = xyz
+            out.append(ln)
+            continue
+        if coords.get(key) == xyz:                        # the same atom, written twice
+            dropped += 1
+            continue
+        el = (p[76:78].strip() or name[:1] or 'X')
+        n, cand = 1, None
+        while cand is None or (res, cand) in seen:
+            cand = (el + str(n))[:4]
+            n += 1
+            if n > 999:                                   # unreachable in practice
+                cand = (el + str(n))[:4]
+                break
+        seen[(res, cand)] = 1
+        coords[(res, cand)] = xyz
+        renamed += 1
+        out.append(p[:12] + ((' ' + '%-3s' % cand) if len(cand) < 4 else '%4s' % cand) + p[16:].rstrip())
+    bits = []
+    if altlocs:
+        bits.append('%d alternate location(s) collapsed to the highest-occupancy conformer' % altlocs)
+    if renamed:
+        bits.append('%d duplicate atom name(s) renamed' % renamed)
+    if dropped:
+        bits.append('%d exact duplicate record(s) dropped' % dropped)
+    return out, ('receptor repaired: ' + '; '.join(bits)) if bits else ''
 
 
 def _clean_complex(rec, lig):
@@ -83,8 +203,12 @@ def _clean_complex(rec, lig):
     atoms only via atomtypes lines whose chain is 'y' (generate_npz
     create_ligand_file / make_grid); without it the run dies with 'No ligand
     atoms found'. Unique serials also avoid arpeggio's AtomSerialError.
+
+    Returns (text, note); `note` is non-empty when the receptor needed repairing
+    on the way through, so the caller can say so instead of leaving it silent.
     """
     rec_lines = [ln for ln in rec.splitlines() if ln[:6] in ('ATOM  ', 'HETATM', 'TER   ')]
+    rec_lines, note = _dedupe_atom_names(rec_lines)
     last = 0
     for ln in rec_lines:
         if ln[:6] in ('ATOM  ', 'HETATM'):
@@ -93,14 +217,18 @@ def _clean_complex(rec, lig):
             except ValueError:
                 pass
     out = list(rec_lines)
-    out.append('TER')                                  # separate protein from het ligand
+    # Padded to six columns. BioPython compares line[0:6] against 'TER   ' and
+    # 'END   ', so a bare 'TER' produced "Ignoring unrecognized record 'TER'" in
+    # every log — noise we were generating ourselves, in a log people read when
+    # something has gone wrong.
+    out.append('TER   ')                               # separate protein from het ligand
     counter = 0
     for ln in lig.splitlines():
         fl, counter = _fmt_lig(ln, last + 1, counter)  # stage 2: last_prot_serial = last + 1
         if fl:
             out.append(fl)
-    out.append('END')
-    return '\n'.join(out) + '\n'
+    out.append('END   ')
+    return '\n'.join(out) + '\n', note
 
 _ROT_STRICT = ('[!$(*#*)&!D1&!$(C(F)(F)F)&!$(C(Cl)(Cl)Cl)&!$(C(Br)(Br)Br)'
                '&!$(C([CH3])([CH3])[CH3])&!$([CD3](=[N,O,S])-!@[#7,O,S!D1])'
@@ -297,6 +425,14 @@ def pose_deepatom_score():
         # pose.default_script overrides deepatom.script for this endpoint; root is the
         # card's output-dir field if set, else pose.default_dir, else a temp dir.
         script = (pcfg.get('default_script') or '').strip() or cfg.get('script')
+        # Resolved against the UI root rather than the process CWD: deepatom.script
+        # is stored as "../deepatom/bin/...", which otherwise only resolves when
+        # Flask was started in the UI root.
+        script = _abs_repo(script)
+        # Which DeepAtom checkpoint the Model dropdown picked (id, not a path).
+        da_ckpt, da_why = _pose_resolve_model(data.get('model'), 'deepatom')
+        if da_why:
+            return jsonify({'ok': False, 'err': da_why}), 200
         if not script or not Path(script).is_file():
             return jsonify({'ok': False,
                             'err': 'pose scoring script not found (set pose.default_script or deepatom.script in input_TS.yml)'}), 200
@@ -334,20 +470,65 @@ def pose_deepatom_score():
         ds = root / 'Dataset_VS' / name
         ds.mkdir(parents=True, exist_ok=True)
         (ds / (name + '_ligand.pdb')).write_text(_clean_ligand(lig))
-        (ds / (name + '_complex.pdb')).write_text(_clean_complex(rec, lig))
+        complex_pdb, rec_note = _clean_complex(rec, lig)
+        (ds / (name + '_complex.pdb')).write_text(complex_pdb)
+        if rec_note:
+            logger.warning('[pose] deepatom_score: %s (%s)', rec_note, name)
 
-        # the core command shown in the UI, and the directory the subprocess runs in
-        core_cmd = '%s -t %s -d %s' % (script, test_type, str(root))
+        # How many compounds this call will actually process.
+        #
+        # The script is a virtual-screening driver: `-d <root>` means "atom-type,
+        # voxelise and predict EVERYTHING under <root>/Dataset_VS", not "the one
+        # I just wrote". Reusing one root therefore makes call N redo calls
+        # 1..N-1 — 78 complexes over a 12-pose trajectory instead of 12, and the
+        # only visible symptom is that each score takes longer than the last.
+        # Report it rather than let it look like the model got slower.
+        try:
+            n_ds = sum(1 for p in (root / 'Dataset_VS').iterdir() if p.is_dir())
+        except Exception:
+            n_ds = 1
+        if n_ds > 1:
+            logger.warning('[pose] deepatom_score: %s holds %d compounds; this run '
+                           're-processes all of them. Use one root per pose.',
+                           root / 'Dataset_VS', n_ds)
+
+        # the command shown in the UI, and the directory the subprocess runs in.
+        # This used to be the BARE script; the conda wrapper was stripped before
+        # display, so "run the command below" reproduced a different thing than
+        # the server ran and a failure inside `conda activate` was invisible.
+        # cmd_core is kept for anyone who wants the script on its own.
+        # Extra flags go ONLY to a python scorer (deepatom_pose.py). The shell
+        # pipeline takes -t and -d and nothing else -- its getopts would choke on
+        # anything more -- so it keeps the invocation it has always had.
+        _py = str(script).lower().endswith('.py')
+        _m = (' --model "%s"' % da_ckpt) if (da_ckpt and _py) else ''
+        if _py:
+            for _key, _flag in (('deepatom_arpeggio', '--arpeggio'),
+                                ('deepatom_repo_dir', '--repo-dir'),
+                                ('deepatom_model_py', '--model-py')):
+                _v = (pcfg.get(_key) or '').strip()
+                if _v:
+                    _m += ' %s "%s"' % (_flag, _v)
+        core_cmd = '%s -t %s -d %s%s' % (script, test_type, str(root), _m)
         run_cwd = str(root)
-        shell_cmd = (
-            'source "$(conda info --base)/etc/profile.d/conda.sh" && '
-            'conda activate elion_backend && '
-            '"%s" -t %s -d "%s" && conda deactivate' % (script, test_type, str(root))
-        )
+        # pose.deepatom_conda_env, falling back to the historical hard-coded
+        # name so an existing deployment keeps working. Blank disables activation.
+        da_env = pcfg.get('deepatom_conda_env')
+        da_env = 'elion_backend' if da_env is None else str(da_env).strip()
+        shell_cmd = _conda_wrap('"%s" -t %s -d "%s"%s'
+                                % (script, test_type, str(root), _m), da_env)
         logger.info('[pose] deepatom_score cwd=%s cmd: %s', run_cwd, shell_cmd)
         timeout = int(cfg.get('timeout_seconds', 600) or 600)
-        env = dict(os.environ)
-        env['AUGMENT'] = '1'    # build + average augmented grids (matches the batch methodology / avg_test)
+        # AUGMENT=1 builds + averages augmented grids (matches the batch
+        # methodology / avg_test). It is the default rather than a constant so
+        # pose.deepatom_env can override it, and can unset whatever else the
+        # host needs removed — see _subproc_env.
+        da_over = pcfg.get('deepatom_env')
+        if not isinstance(da_over, dict):
+            da_over = {}
+        da_over = dict({'AUGMENT': '1'}, **da_over)
+        env, env_note = _subproc_env(da_over)
+        logger.info('[pose] deepatom_score env overrides: %s', env_note)
         proc = subprocess.run(shell_cmd, shell=True, executable='/bin/bash',
                               cwd=run_cwd, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -390,14 +571,20 @@ def pose_deepatom_score():
                 'err': ('script exited %d but no pK was parsed — looked in stdout and %d CSV under the output dir '
                         '(%d .atomtypes, %d .npz produced). If these counts are 0 the pipeline never wrote there; '
                         'run the command below in the cwd below to see the real error (commonly arpeggio not on PATH '
-                        'inside the elion_backend env).'
-                        % (proc.returncode, len(produced['csv']), len(produced['atomtypes']), len(produced['npz']))),
-                'cmd': core_cmd,
+                        'inside the scoring env).'
+                        % (proc.returncode, len(produced['csv']), len(produced['atomtypes']), len(produced['npz']))
+                        + _conda_diagnose(out, da_env) + _link_diagnose(out)),
+                'cmd': shell_cmd,
+                'cmd_core': core_cmd,
+                'conda_env': da_env or '(none — running the script directly)',
+                'env_overrides': env_note,
                 'cwd': run_cwd,
                 'log': (str(log_path) if log_path else None),
                 'returncode': proc.returncode,
                 'out_dir': str(root),
                 'produced': produced,
+                'compounds': n_ds,
+                'receptor_note': rec_note,
                 'stdout': out[-200000:],
             }), 200
 
@@ -405,11 +592,15 @@ def pose_deepatom_score():
                         'pred_pk': round(float(pred), 4),
                         'deltaG': round(-float(pred) * 1.36, 4),
                         'elapsed': '%.1fs' % (time.time() - t0),
-                        'cmd': core_cmd,
+                        'cmd': shell_cmd,
+                        'cmd_core': core_cmd,
+                        'conda_env': da_env or '(none — running the script directly)',
                         'cwd': run_cwd,
                         'log': (str(log_path) if log_path else None),
                         'out_dir': str(root),
                         'produced': produced,
+                        'compounds': n_ds,
+                        'receptor_note': rec_note,
                         'source': 'deepatom'}), 200
     except subprocess.TimeoutExpired:
         return jsonify({'ok': False, 'err': 'DeepAtom timed out'}), 200
@@ -451,6 +642,115 @@ def pose_deepatom_score():
 #
 # This endpoint could not be executed in the build sandbox -- verify on the host.
 # =============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# conda wrapping, shared by the two scorer endpoints
+# -----------------------------------------------------------------------------
+# Both scorers shell out to something that must run in a specific environment.
+# The env NAME is configuration, not a constant: /pose/deepatom_score hard-coded
+# "elion_backend" and produced a one-line log —
+#
+#     Could not find conda environment: elion_backend
+#
+# — with no way to tell from the UI whether the name was wrong, the env lived in
+# a conda installation `conda info --base` does not point at, or the script was
+# meant to activate its own env all along. All three are common and all three
+# looked identical.
+#
+# A blank env means "run the command as-is", which is the right answer when the
+# script activates its own environment or when the server already runs inside the
+# right one — previously impossible to express.
+# ─────────────────────────────────────────────────────────────────────────────
+def _subproc_env(overrides, base=None) -> tuple:   # noqa: C901
+    """(env, note) for a scorer subprocess.
+
+    `overrides` is a mapping from config. A null/blank value UNSETS the
+    variable, which is the point: the common way a working conda env still
+    fails to import torch is a stray LD_LIBRARY_PATH pointing at a system NCCL
+    or CUDA that shadows the ones bundled in torch/lib. You cannot express
+    "remove this" by setting it to something, so a null has to mean delete.
+
+    Everything here used to be a hard-coded `env['AUGMENT'] = '1'` — same class
+    of problem the conda env name had: a value only the source could change.
+    """
+    import os                    # imported per-route in this module, not at top level
+    env = dict(base if base is not None else os.environ)
+    applied = []
+    if isinstance(overrides, dict):
+        for k, v in overrides.items():
+            k = str(k)
+            if v is None or (isinstance(v, str) and not v.strip()):
+                if env.pop(k, None) is not None:
+                    applied.append('-' + k)
+            else:
+                env[k] = str(v)
+                applied.append('%s=%s' % (k, v))
+    return env, (', '.join(applied) if applied else '(none)')
+
+
+def _link_diagnose(out: str) -> str:
+    """Hint for the dynamic-linker failures that look like a broken env."""
+    if not out or 'undefined symbol' not in out:
+        return ''
+    lib = 'a shared library'
+    for token in ('libtorch_cuda', 'libtorch', 'libcudart', 'libnccl'):
+        if token in out:
+            lib = token
+            break
+    return ('\n\nThis is a LINKER failure inside %s, not a missing package: the '
+            'interpreter found the module and the module found a library of the '
+            'right NAME but the wrong build. Almost always LD_LIBRARY_PATH (or a '
+            'conda-installed nccl/cudatoolkit) shadowing the copies bundled in '
+            'torch/lib.\n'
+            'Check whether it imports on its own first:\n'
+            '    conda run -n <env> python -c "import torch; print(torch.__version__)"\n'
+            'If that works and this does not, the SCRIPT is changing the '
+            'environment. Unset the offending variable for the subprocess with, '
+            'in input_routes.yml:\n'
+            '    pose:\n'
+            '      deepatom_env:\n'
+            '        LD_LIBRARY_PATH: null      # null = unset it\n'
+            % lib)
+
+
+def _conda_wrap(cmd: str, env_name: str) -> str:
+    """`cmd` wrapped in `conda activate <env_name>`, or `cmd` unchanged if blank."""
+    env_name = (env_name or '').strip()
+    if not env_name:
+        return cmd
+    return ('source "$(conda info --base)/etc/profile.d/conda.sh" && '
+            'conda activate %s && %s && conda deactivate' % (env_name, cmd))
+
+
+def _conda_diagnose(out: str, env_name: str) -> str:
+    """When activation is what failed, say which envs actually exist.
+
+    Returns '' unless the output carries conda's not-found message, so the happy
+    path costs nothing and an unrelated failure is not buried under env noise.
+    """
+    if not env_name or not out:
+        return ''
+    if ('Could not find conda environment' not in out
+            and 'EnvironmentNameNotFound' not in out
+            and 'CondaEnvironmentError' not in out):
+        return ''
+    import subprocess          # imported per-route in this module, not at top level
+    listing = ''
+    try:
+        pr = subprocess.run(
+            'source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null; conda env list',
+            shell=True, executable='/bin/bash', stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, timeout=30)
+        listing = (pr.stdout or '').strip()
+    except Exception as e:                                        # noqa: BLE001
+        listing = 'could not run `conda env list`: %s' % e
+    return ('\n\nconda could not activate %r. Environments visible to the server '
+            '(note this is the conda that `conda info --base` resolves to — an env '
+            'created under a different installation will not appear here):\n%s\n\n'
+            'Fix by pointing the config at a name from that list, or set it blank '
+            'to run the command without activating anything.'
+            % (env_name, listing or '(none)'))
+
+
 @app.route('/pose/gign_score', methods=['POST'])
 def pose_gign_score():
     import os, time, json, tempfile, subprocess
@@ -471,8 +771,20 @@ def pose_gign_score():
     if not script or not Path(script).expanduser().is_file():
         return jsonify({'ok': False,
                         'err': 'GIGN predict script not found (set pose.gign_script in input_TS.yml): %s' % script}), 200
-    env_name = (pcfg.get('gign_conda_env') or 'elion_backend').strip()
+    # Blank is now meaningful: run yupu_GIGN_pose.py without activating anything,
+    # for a server already inside the right env. `or` would swallow that, so read
+    # the key explicitly and only default when it is absent.
+    env_name = pcfg.get('gign_conda_env')
+    env_name = 'elion_backend' if env_name is None else str(env_name).strip()
     model_ckpt = (pcfg.get('gign_model') or '').strip()        # blank -> script default
+    # An explicit pick from the 3D Builder's Model dropdown overrides the config
+    # for this one call. Resolved through the published allow-list, so the body
+    # carries an id and never a filesystem path.
+    _picked, _why = _pose_resolve_model(data.get('model'), 'gign')
+    if _why:
+        return jsonify({'ok': False, 'err': _why}), 200
+    if _picked:
+        model_ckpt = _picked
     try:
         cutoff = float(pcfg.get('gign_pocket_cutoff', 5) or 5)
     except (TypeError, ValueError):
@@ -511,20 +823,18 @@ def pose_gign_score():
     except Exception as e:
         return jsonify({'ok': False, 'err': 'cannot write staging files: %s' % e}), 200
 
-    core_cmd = 'python %s --stage %s --name %s' % (script, str(stage), name)
-    if env_name:
-        shell_cmd = ('source "$(conda info --base)/etc/profile.d/conda.sh" && '
-                     'conda activate %s && '
-                     'python "%s" --stage "%s" --name "%s" && conda deactivate'
-                     % (env_name, script, str(stage), name))
-    else:
-        shell_cmd = 'python "%s" --stage "%s" --name "%s"' % (script, str(stage), name)
+    core_cmd = 'python %s --stage %s --name %s' % (script, str(stage), name)   # see the note in deepatom_score
+    shell_cmd = _conda_wrap('python "%s" --stage "%s" --name "%s"'
+                            % (script, str(stage), name), env_name)
     logger.info('[pose] gign_score cwd=%s cmd: %s', run_cwd, shell_cmd)
 
     try:
         timeout = int(pcfg.get('gign_timeout_seconds', 1200) or 1200)
+        gi_over = pcfg.get('gign_env')
+        genv, genv_note = _subproc_env(gi_over if isinstance(gi_over, dict) else {})
+        logger.info('[pose] gign_score env overrides: %s', genv_note)
         proc = subprocess.run(shell_cmd, shell=True, executable='/bin/bash',
-                              cwd=run_cwd, env=dict(os.environ),
+                              cwd=run_cwd, env=genv,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=timeout)
         out = proc.stdout or ''
@@ -562,8 +872,10 @@ def pose_gign_score():
                         'Run the command below in the cwd below to see the real error '
                         '(common causes: wrong conda env, missing torch/CUDA, the model '
                         'checkpoint not found, or RDKit failing to parse the pose/pocket).'
-                        % proc.returncode),
-                'cmd': core_cmd, 'cwd': run_cwd, 'stage': str(stage),
+                        % proc.returncode) + _conda_diagnose(out, env_name) + _link_diagnose(out),
+                'cmd': shell_cmd, 'cmd_core': core_cmd,
+                'conda_env': env_name or '(none — running python directly)',
+                'cwd': run_cwd, 'stage': str(stage),
                 'log': (str(log_path) if log_path else None),
                 'returncode': proc.returncode,
                 'stdout': out[-200000:],
@@ -573,14 +885,226 @@ def pose_gign_score():
                         'pred_pk': round(pk, 4),
                         'deltaG': round(-pk * 1.36, 4),
                         'elapsed': '%.1fs' % (time.time() - t0),
-                        'cmd': core_cmd, 'cwd': run_cwd, 'stage': str(stage),
+                        'cmd': shell_cmd, 'cmd_core': core_cmd,
+                        'conda_env': env_name or '(none — running python directly)',
+                        'cwd': run_cwd, 'stage': str(stage),
                         'log': (str(log_path) if log_path else None),
                         'source': 'yupu_gign'}), 200
     except subprocess.TimeoutExpired:
-        return jsonify({'ok': False, 'err': 'GIGN timed out', 'cmd': core_cmd, 'cwd': run_cwd}), 200
+        return jsonify({'ok': False, 'err': 'GIGN timed out', 'cmd': shell_cmd, 'cwd': run_cwd}), 200
     except Exception as e:
         logger.warning('[pose] gign_score error: %s', e)
         return jsonify({'ok': False, 'err': 'server error: %s' % e, 'cmd': core_cmd, 'cwd': run_cwd}), 200
+
+
+# =============================================================================
+# POST /pose/gatoraffinity_score
+# Score the live pose with GatorAffinity: the uploaded receptor + the final
+# posed ligand — the same two inputs DeepAtom and GIGN receive. Backs the
+# "GatorAffinity ΔG (server)" option in the (3) Monte-Carlo "Scorer" dropdown.
+#
+# Body: { "ligand_pdb": "<posed ligand HETATM>", "receptor_pdb": "<full .pdb>",
+#         "name": "<id>", "smiles": "<optional>", "out_dir": "<optional>" }
+# Returns: { ok, pred_pk, deltaG, elapsed, cmd, cwd, stage, log,
+#            source:"gatoraffinity" } | { ok:false, err, cmd, cwd, stage, stdout }
+#
+# DELIBERATELY THE SAME SHAPE AS /pose/gign_score, byte for byte where it can
+# be. The client treats the three scorers as one interface: pose_affinity_batch.js
+# and pose_affinity_trajectory.js are single implementations parameterised by a
+# URL, so a response that differs in shape does not fail loudly — it produces a
+# batch column of nulls or a trajectory curve that never rises. If you change a
+# key here, change it in all three.
+#
+# It stages <stage>/<name>_{ligand,protein}.pdb + <name>_meta.json, then runs
+#     python <gatoraffinity_script> --stage <stage> --name <name>
+# (cwd = the script's own dir, inside <gatoraffinity_conda_env>).
+# gatoraffinity_pose.py cuts the pocket, fragments the ligand, builds the ATOMICA
+# blocks and runs the checkpoint, printing GATOR_PRED_PK which we parse here.
+#
+# ON THE UNITS, because this is the one place the three scorers genuinely differ
+# and getting it wrong is invisible. GatorAffinity is trained on the LP-PDBbind
+# label, which is pKd/pKi — a pK, the same quantity GIGN's GIGN_PRED_PK carries.
+# So dG = -1.36 * pK here exactly as it is there, and the numbers are directly
+# comparable in the trajectory floats. A model that emitted kcal/mol instead
+# would need the conversion dropped, not flipped.
+#
+# By DEFAULT a 5 A binding pocket is cut (gatoraffinity_pocket_cutoff = 5,
+# waters dropped), because that is what the model was FINE-TUNED on: the repo's
+# own example data is `1a4h_pocket_5A.pdb`, not a whole receptor, and
+# data/process_pdbs.py feeds whatever PDB it is handed straight into
+# pdb_to_list_blocks with no cutting of its own. Set the cutoff to 0 to pass the
+# full receptor and accept the train/inference mismatch.
+#
+# Config (config/input_routes.yml -> pose:):
+#     gatoraffinity_script:      ".../GatorAffinity/gatoraffinity_pose.py"  (required)
+#     gatoraffinity_model:       ".../Kd+Ki+IC50_experimental_fine_tuning.ckpt"
+#     gatoraffinity_conda_env:   "GatorAffinity"   # "" -> plain `python`
+#     gatoraffinity_pocket_cutoff: 5    # A; 5 = the fine-tuning pocket. 0 = full receptor
+#     gatoraffinity_drop_water:  true
+#     gatoraffinity_device:      "cuda"            # or "cpu"
+#     gatoraffinity_fragmentation: "PS_300"        # the vocab the ckpt was built with
+#     gatoraffinity_scratch:     ""     # persistent staging root; "" -> temp
+#     gatoraffinity_timeout_seconds: 1200
+#
+# Blank gatoraffinity_script disables the "gatoraffinity" option: the route
+# answers 200 {ok:false} before it stages anything, which is why a blank here
+# produces no debug log to look at.
+#
+# This endpoint could not be executed in the build sandbox -- verify on the host.
+# =============================================================================
+@app.route('/pose/gatoraffinity_score', methods=['POST'])
+def pose_gatoraffinity_score():
+    import os, time, json, tempfile, subprocess
+    from pathlib import Path
+    t0 = time.time()
+    data = request.get_json(silent=True) or {}
+    lig = (data.get('ligand_pdb') or '').strip()
+    rec = (data.get('receptor_pdb') or '').strip()
+    smiles = (data.get('smiles') or '').strip()
+    name = (re.sub(r'[^A-Za-z0-9_\-]', '_', (data.get('name') or 'pose'))[:40]) or 'pose'
+    out_dir_req = (data.get('out_dir') or '').strip()
+    if not lig or not rec:
+        return jsonify({'ok': False, 'err': 'ligand_pdb and receptor_pdb are required'}), 200
+
+    pcfg = _pose_cfg()
+    script = (pcfg.get('gatoraffinity_script') or
+              _pcfg.POSE_GATORAFFINITY_SCRIPT).strip()
+    if not script or not Path(script).expanduser().is_file():
+        return jsonify({'ok': False,
+                        'err': ('GatorAffinity predict script not found (set '
+                                'pose.gatoraffinity_script in config/input_routes.yml): %s' % script)}), 200
+    # Blank is meaningful — run the script without activating anything, for a
+    # server already inside the right env. `or` would swallow that, so read the
+    # key explicitly and only default when it is absent. (See
+    # tests/test_pose_scorer_env.py, which asserts exactly this for every scorer.)
+    env_name = pcfg.get('gatoraffinity_conda_env')
+    env_name = 'GatorAffinity' if env_name is None else str(env_name).strip()
+    model_ckpt = (pcfg.get('gatoraffinity_model') or '').strip()   # blank -> script default
+    # Same allow-list as every other scorer. An entry whose path is '' means the
+    # script's own default checkpoint, which is what a blank config value means
+    # too -- so selecting it is a no-op rather than an error.
+    _picked, _why = _pose_resolve_model(data.get('model'), 'gatoraffinity')
+    if _why:
+        return jsonify({'ok': False, 'err': _why}), 200
+    if _picked:
+        model_ckpt = _picked
+    try:
+        cutoff = float(pcfg.get('gatoraffinity_pocket_cutoff', 5) or 5)
+    except (TypeError, ValueError):
+        cutoff = 5.0
+    drop_water = bool(pcfg.get('gatoraffinity_drop_water', True))
+    device = (pcfg.get('gatoraffinity_device') or 'cuda').strip() or 'cuda'
+    frag = (pcfg.get('gatoraffinity_fragmentation') or 'PS_300').strip() or 'PS_300'
+    run_cwd = str(Path(script).expanduser().resolve().parent)
+
+    # staging dir: explicit out_dir -> pose.gatoraffinity_scratch -> temp
+    scratch_cfg = (pcfg.get('gatoraffinity_scratch') or '').strip()
+    try:
+        if out_dir_req:
+            stage = Path(out_dir_req).expanduser() / ('gator_' + name)
+        elif scratch_cfg:
+            stage = Path(scratch_cfg).expanduser() / ('gator_' + name)
+        else:
+            stage = Path(tempfile.mkdtemp(prefix='elion_gator_'))
+        stage.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return jsonify({'ok': False, 'err': 'cannot create staging dir: %s' % e}), 200
+
+    lig_path = stage / (name + '_ligand.pdb')
+    prot_path = stage / (name + '_protein.pdb')
+    meta_path = stage / (name + '_meta.json')
+    try:
+        lig_path.write_text(lig if lig.endswith('\n') else lig + '\n')
+        prot_path.write_text(rec if rec.endswith('\n') else rec + '\n')
+        meta_path.write_text(json.dumps({
+            'name': name,
+            'ligand_pdb': str(lig_path),
+            'protein_pdb': str(prot_path),
+            'smiles': smiles,
+            'pocket_cutoff': cutoff,
+            'drop_water': drop_water,
+            'model': model_ckpt,       # '' -> gatoraffinity_pose.py picks its default
+            'device': device,
+            'fragmentation_method': frag,
+        }))
+    except Exception as e:
+        return jsonify({'ok': False, 'err': 'cannot write staging files: %s' % e}), 200
+
+    core_cmd = 'python %s --stage %s --name %s' % (script, str(stage), name)   # see the note in deepatom_score
+    shell_cmd = _conda_wrap('python "%s" --stage "%s" --name "%s"'
+                            % (script, str(stage), name), env_name)
+    logger.info('[pose] gatoraffinity_score cwd=%s cmd: %s', run_cwd, shell_cmd)
+
+    try:
+        timeout = int(pcfg.get('gatoraffinity_timeout_seconds', 1200) or 1200)
+        ga_over = pcfg.get('gatoraffinity_env')
+        genv, genv_note = _subproc_env(ga_over if isinstance(ga_over, dict) else {})
+        logger.info('[pose] gatoraffinity_score env overrides: %s', genv_note)
+        proc = subprocess.run(shell_cmd, shell=True, executable='/bin/bash',
+                              cwd=run_cwd, env=genv,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=timeout)
+        out = proc.stdout or ''
+
+        log_path = None
+        try:
+            log_path = stage / (name + '_gatoraffinity.log')
+            log_path.write_text(
+                ('# pose GatorAffinity score\n# when : %s\n# cmd  : %s\n# cwd  : %s\n# exit : %d\n'
+                 % (time.strftime('%Y-%m-%d %H:%M:%S'), core_cmd, run_cwd, proc.returncode))
+                + ('-' * 70) + '\n' + out)
+        except Exception as _e:
+            logger.warning('[pose] could not write gatoraffinity debug log: %s', _e)
+            log_path = None
+
+        # parse the explicit marker first, then fall back to a 'pred:' decimal
+        pk = None
+        for ln in out.splitlines():
+            if 'GATOR_PRED_PK' in ln:
+                m = re.findall(r'[-+]?\d+\.\d+(?:[eE][-+]?\d+)?', ln.split('GATOR_PRED_PK', 1)[1])
+                if m:
+                    pk = float(m[0]); break
+        if pk is None:
+            for ln in out.splitlines():
+                i = ln.find('pred:')
+                if i >= 0:
+                    m = re.findall(r'[-+]?\d+\.\d+(?:[eE][-+]?\d+)?', ln[i + 5:])
+                    if m:
+                        pk = float(m[0]); break
+
+        if pk is None:
+            return jsonify({
+                'ok': False,
+                'err': ('script exited %d but no GATOR_PRED_PK was parsed from stdout. '
+                        'Run the command below in the cwd below to see the real error '
+                        '(common causes: wrong conda env, missing torch/torch_scatter/CUDA, '
+                        'the checkpoint or its args.json not found, the PS_300 vocab missing, '
+                        'or RDKit failing to fragment the ligand SMILES).'
+                        % proc.returncode) + _conda_diagnose(out, env_name) + _link_diagnose(out),
+                'cmd': shell_cmd, 'cmd_core': core_cmd,
+                'conda_env': env_name or '(none — running python directly)',
+                'cwd': run_cwd, 'stage': str(stage),
+                'log': (str(log_path) if log_path else None),
+                'returncode': proc.returncode,
+                'stdout': out[-200000:],
+            }), 200
+
+        return jsonify({'ok': True,
+                        'pred_pk': round(pk, 4),
+                        'deltaG': round(-pk * 1.36, 4),
+                        'elapsed': '%.1fs' % (time.time() - t0),
+                        'cmd': shell_cmd, 'cmd_core': core_cmd,
+                        'conda_env': env_name or '(none — running python directly)',
+                        'cwd': run_cwd, 'stage': str(stage),
+                        'log': (str(log_path) if log_path else None),
+                        'source': 'gatoraffinity'}), 200
+    except subprocess.TimeoutExpired:
+        return jsonify({'ok': False, 'err': 'GatorAffinity timed out',
+                        'cmd': shell_cmd, 'cwd': run_cwd}), 200
+    except Exception as e:
+        logger.warning('[pose] gatoraffinity_score error: %s', e)
+        return jsonify({'ok': False, 'err': 'server error: %s' % e,
+                        'cmd': core_cmd, 'cwd': run_cwd}), 200
 
 
 # =============================================================================
@@ -658,6 +1182,21 @@ def pose_default_receptor():
     if od:
         resp['out_dir'] = od
 
+    # Where the trajectory scorers stage every new-minimum pose.
+    #
+    # Separate from default_dir on purpose. default_dir is "the box the user can
+    # type in", one directory reused by every hand-clicked score; the trajectory
+    # writes a dozen poses per run plus, for DeepAtom, a per-record subtree of
+    # atomtypes and voxel grids. Pointing both at one directory is what made
+    # /pose/deepatom_score re-atom-type every earlier complex on each call —
+    # its pipeline processes everything under <root>/Dataset_VS by design.
+    #
+    # Blank falls back client-side to the panel's output-dir box, so an existing
+    # deployment that has not set this key behaves as it did before.
+    td = (pcfg.get('trajectory_dir') or '').strip()
+    if td:
+        resp['traj_dir'] = td
+
     # default ligand SMILES (optional) -- pre-fills the #poseSmiles box on open
     sm = (pcfg.get('default_smile') or '').strip()
     if sm:
@@ -681,6 +1220,58 @@ def pose_default_receptor():
         resp['err'] = str(e)
 
     return jsonify(resp), 200
+
+
+# =============================================================================
+# GET /pose/results_dir
+# Where the "Vina Poses" sidebar card points the Import box.
+#
+# Returns: { ok, path, exists, source } | { ok:false, err }
+#
+# Deliberately NOT folded into /pose/default_receptor, which is the other
+# on-open defaults endpoint. That route reads and returns the whole receptor
+# .pdb — ~180 KB of text on the configured target — because its caller needs
+# the structure. The card only needs one string, and it asks on every click, so
+# piggybacking would re-download the receptor each time to learn a path the
+# server could have answered in a few bytes.
+#
+# `source` says which key answered, so a wrong folder is diagnosable from the
+# response alone rather than by guessing which of the two keys is set.
+#
+# `exists` is reported but never fatal: a configured-but-missing folder still
+# comes back ok:true so the client can pre-fill the box and let /pose/scan_pdbqt
+# produce the real error. Failing here instead would leave the user with an
+# empty Folder path and nothing to correct.
+# =============================================================================
+@app.route('/pose/results_dir', methods=['GET'])
+def pose_results_dir():
+    from pathlib import Path
+    pcfg = _pose_cfg()
+
+    raw = (pcfg.get('results_dir') or '').strip()
+    source = 'pose.results_dir'
+    if not raw:
+        # Fall back to <trajectory_dir>/results — the layout a Vina run leaves
+        # when results_dir has not been set explicitly.
+        td = (pcfg.get('trajectory_dir') or '').strip()
+        if td:
+            try:
+                raw = str(Path(td).expanduser() / 'results')
+                source = 'pose.trajectory_dir + /results'
+            except Exception:
+                raw = ''
+    if not raw:
+        return jsonify({'ok': False,
+                        'err': 'no results folder configured '
+                               '(set pose.results_dir in input_routes.yml)'}), 200
+
+    try:
+        fp = Path(raw).expanduser()
+    except Exception as e:
+        return jsonify({'ok': False, 'err': 'bad results_dir: %s' % e}), 200
+
+    return jsonify({'ok': True, 'path': str(fp),
+                    'exists': fp.is_dir(), 'source': source}), 200
 
 
 # =============================================================================
@@ -1581,35 +2172,207 @@ def _pdbqt_probe(p):
 _POSE_IMPORT_SUFFIXES = ('.pdbqt', '.pdb', '.ent')
 
 
-@app.route('/pose/scan_pdbqt', methods=['POST'])
-def pose_scan_pdbqt():
+def _pose_scan_batch_result(p):
+    """A batch run's own output, read back as an importable pose list.
+
+    Accepts either artefact the folder batch produces:
+
+      <run>.res.jsonl   the live journal — one {i, path, name, vina, pk, dg, err}
+                        per finished pose, appended as the run goes
+      <scorer>_batch.csv the ⬇ .csv export
+
+    and returns the same dict /pose/scan_pdbqt returns for a folder, so the
+    Import button steps through them exactly as it steps through a scan. The
+    order is the one that is useful here — **strongest pK first**, failures
+    last — rather than path order, because a finished run is something you read
+    top-down.
+
+    Older journals (written before results carried their own path) are still
+    readable: the sibling <run>.rows.jsonl is consulted to turn `i` into a path.
+    Files that have since moved or been deleted are dropped and counted rather
+    than left to fail one at a time in the stepper.
+    """
+    import csv as _csv
+    import json as _json
     from pathlib import Path
-    data = request.get_json(silent=True) or {}
-    raw = (data.get('path') or '').strip()
+
+    rows, missing, bad = [], 0, 0
+    suffix = ''.join(p.suffixes[-2:]).lower() or p.suffix.lower()
+
+    if p.suffix.lower() == '.csv':
+        try:
+            with p.open('r', encoding='utf-8', newline='') as fh:
+                rd = _csv.DictReader(fh)
+                pk_col = next((c for c in (rd.fieldnames or []) if c.endswith('_pk')), None)
+                for rec in rd:
+                    path = (rec.get('path') or '').strip()
+                    if not path:
+                        bad += 1
+                        continue
+                    try:
+                        pk = float(rec[pk_col]) if pk_col and rec.get(pk_col) else None
+                    except ValueError:
+                        pk = None
+                    try:
+                        vina = float(rec['vina_kcal_mol']) if rec.get('vina_kcal_mol') else None
+                    except (ValueError, KeyError):
+                        vina = None
+                    rows.append({'path': path, 'pk': pk, 'vina': vina,
+                                 'name': (rec.get('file') or Path(path).name)})
+        except Exception as e:
+            return {'ok': False, 'err': 'could not read %s: %s' % (str(p), e)}
+
+    elif suffix.endswith('.jsonl'):
+        # Fallback map for pre-`path` journals: i -> row from the sibling scan.
+        by_index = {}
+        rows_p = p.parent / (p.name[:-len('.res.jsonl')] + '.rows.jsonl') \
+            if p.name.endswith('.res.jsonl') else None
+        if rows_p is not None and rows_p.is_file():
+            try:
+                with rows_p.open('r', encoding='utf-8') as fh:
+                    for ln in fh:
+                        ln = ln.strip()
+                        if ln:
+                            d = _json.loads(ln)
+                            by_index[d.get('i')] = d
+            except Exception:
+                by_index = {}
+        try:
+            seen = set()
+            with p.open('r', encoding='utf-8') as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        d = _json.loads(ln)
+                    except ValueError:
+                        bad += 1                       # torn last line: expected
+                        continue
+                    i = d.get('i')
+                    if i in seen:
+                        continue                       # replayed row: first wins
+                    seen.add(i)
+                    base = by_index.get(i, {})
+                    path = (d.get('path') or base.get('path') or '').strip()
+                    if not path:
+                        bad += 1
+                        continue
+                    rows.append({'path': path, 'pk': d.get('pk'),
+                                 'vina': d.get('vina', base.get('vina')),
+                                 'name': d.get('name') or base.get('name') or Path(path).name})
+        except Exception as e:
+            return {'ok': False, 'err': 'could not read %s: %s' % (str(p), e)}
+    else:
+        return {'ok': False,
+                'err': 'not a pose folder or a batch result: %s (expected a folder, '
+                       'a <run>.res.jsonl journal, or an exported batch .csv)' % str(p)}
+
+    if not rows:
+        return {'ok': False, 'err': 'no scored poses in %s' % str(p)}
+
+    keep = []
+    for r in rows:
+        try:
+            if not Path(r['path']).is_file():
+                missing += 1
+                continue
+        except Exception:
+            missing += 1
+            continue
+        keep.append(r)
+    if not keep:
+        return {'ok': False,
+                'err': '%d pose(s) listed in %s, but none of the files are still on disk '
+                       '(was the folder moved?)' % (len(rows), str(p))}
+
+    # Strongest first; unscored/failed rows keep their order at the end.
+    keep.sort(key=lambda r: (0, -r['pk']) if isinstance(r['pk'], (int, float)) else (1, 0))
+
+    files = [{'path': r['path'], 'score': r['vina'], 'atoms': None,
+              'kind': 'ligand', 'pk': r['pk'], 'name': r['name']} for r in keep]
+    n_scored = sum(1 for r in keep if isinstance(r['pk'], (int, float)))
+    return {'ok': True, 'dir': str(p), 'files': files, 'count': len(files),
+            'truncated': False, 'n_ligands': len(files), 'n_receptors': 0,
+            'n_scored': n_scored, 'source': 'batch',
+            'missing': missing, 'unreadable': bad}
+
+
+def _pose_scan_dir(raw, max_files=_POSE_SCAN_MAX_FILES):
+    """Shared folder scan: the body of /pose/scan_pdbqt, callable in-process.
+
+    Returns the same dict that route returns, so both the importer and the
+    folder batches see one implementation of "what counts as a pose file here" —
+    the suffix set, the >300-atom receptor heuristic and the per-file Vina probe.
+    Two copies of that would drift, and a batch that disagreed with the importer
+    about which files it was looking at is exactly the kind of difference nobody
+    notices until the counts do not add up.
+
+    `max_files=None` means no ceiling. The two callers want different answers:
+
+    · /pose/scan_pdbqt serialises every row to the browser and hands the list to
+      a 3-D stepper, so it keeps _POSE_SCAN_MAX_FILES. Lifting it there would
+      trade a truncated list for a 40 MB JSON response.
+    · /pose/batch_start keeps the list on the server and streams the client ten
+      rows at a time, so a cap there is pure loss — it silently scored 5000 of a
+      larger folder and called it done. It passes None.
+    """
+    from pathlib import Path
+    raw = (raw or '').strip()
     if not raw:
-        return jsonify({'ok': False, 'err': 'no folder path given'}), 200
+        return {'ok': False, 'err': 'no folder path given'}
     try:
         root = Path(raw).expanduser()
     except Exception as e:
-        return jsonify({'ok': False, 'err': 'bad path: %s' % e}), 200
+        return {'ok': False, 'err': 'bad path: %s' % e}
+
+    # A batch result — a run journal or an exported .csv — names the poses it
+    # scored, so Import can open one directly instead of re-scanning a folder
+    # of 67,000 files to look at the 195 that have scores. Same response shape,
+    # so the client needs no idea this happened.
+    if root.is_file():
+        if root.suffix.lower() in _POSE_IMPORT_SUFFIXES:
+            # A single pose file. Refusing this was pointless pedantry: the
+            # stepper handles a list of one perfectly well.
+            meta = _pdbqt_probe(root) or {'score': None, 'atoms': 0}
+            kind = 'ligand' if meta['atoms'] <= _POSE_LIGAND_MAX_ATOMS else 'receptor'
+            return {'ok': True, 'dir': str(root.parent),
+                    'files': [{'path': str(root), 'score': meta['score'],
+                               'atoms': meta['atoms'], 'kind': kind}],
+                    'count': 1, 'truncated': False,
+                    'n_ligands': int(kind == 'ligand'), 'n_receptors': int(kind == 'receptor'),
+                    'n_scored': int(meta['score'] is not None), 'source': 'file'}
+        return _pose_scan_batch_result(root)
+
     if not root.is_dir():
-        return jsonify({'ok': False, 'err': 'not a folder: %s' % str(root)}), 200
+        return {'ok': False, 'err': 'not a folder or a batch result file: %s' % str(root)}
+
+    # Pointed at the journal directory itself: say what is in it rather than
+    # "no .pdbqt files found", which is true and useless.
+    try:
+        journals = sorted(root.glob('gb*.res.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        journals = []
+    if journals:
+        return {'ok': False,
+                'err': '%s holds %d batch run(s), not pose files. Point at one of them, '
+                       'e.g. %s' % (str(root), len(journals), str(journals[0]))}
 
     paths, truncated = [], False
     try:
         for p in root.rglob('*'):
             if p.is_file() and p.suffix.lower() in _POSE_IMPORT_SUFFIXES:
                 paths.append(p)
-                if len(paths) >= _POSE_SCAN_MAX_FILES:
+                if max_files is not None and len(paths) >= max_files:
                     truncated = True
                     break
     except Exception as e:
         logger.warning('[pose] scan_pdbqt error: %s', e)
-        return jsonify({'ok': False, 'err': str(e)}), 200
+        return {'ok': False, 'err': str(e)}
 
     if not paths:
-        return jsonify({'ok': False, 'err': 'no %s files found under %s'
-                        % ('/'.join(_POSE_IMPORT_SUFFIXES), str(root))}), 200
+        return {'ok': False, 'err': 'no %s files found under %s'
+                % ('/'.join(_POSE_IMPORT_SUFFIXES), str(root))}
 
     paths.sort()
     files, n_lig, n_rec, n_scored = [], 0, 0, 0
@@ -1625,10 +2388,15 @@ def pose_scan_pdbqt():
         files.append({'path': str(p), 'score': meta['score'],
                       'atoms': meta['atoms'], 'kind': kind})
 
-    return jsonify({'ok': True, 'dir': str(root), 'files': files,
-                    'count': len(files), 'truncated': truncated,
-                    'n_ligands': n_lig, 'n_receptors': n_rec,
-                    'n_scored': n_scored}), 200
+    return {'ok': True, 'dir': str(root), 'files': files,
+            'count': len(files), 'truncated': truncated,
+            'n_ligands': n_lig, 'n_receptors': n_rec, 'n_scored': n_scored}
+
+
+@app.route('/pose/scan_pdbqt', methods=['POST'])
+def pose_scan_pdbqt():
+    data = request.get_json(silent=True) or {}
+    return jsonify(_pose_scan_dir(data.get('path'))), 200
 
 
 # =============================================================================
@@ -2135,64 +2903,20 @@ def pose_read_pdbqt():
 # ── Download the filtered batch ──────────────────────────────────────────────
 _POSE_ZIP_MAX_BYTES = 1 << 29     # 512 MB uncompressed budget for one download
 
-_POSE_ZIP_README = """\
-Docked poses exported from the Pose Generation tool
-===================================================
 
-files/*.sdf   ← OPEN THESE IN MAESTRO
-files/*.pdb      same pose, same coordinates, same atom order
-_best_poses.sdf  every ligand in one file, best score first
-_best_poses.pdb  the same, as a multi-model PDB
-_manifest.csv    score / atom count / chemistry source / SMILES per ligand
-
-Why the .sdf?
--------------
-A PDB file cannot express a formal charge except in two columns most readers
-ignore, and a PDBQT (what Vina writes) carries no bond orders at all. Anything
-reading those files has to GUESS the chemistry back from the 3D coordinates,
-and the guess goes wrong in predictable places: a ring oxygen picks up a double
-bond it cannot have, so a chromen-4-one is "repaired" into a 4-hydroxychromene;
-an N-oxide loses its N+/O- pair, so the viewer caps the oxygen with a hydrogen
-and shows N-OH. H-bond donors and acceptors then swap, and the net charge is
-wrong.
-
-An SDF states bond orders and formal charges outright. There is nothing left to
-perceive, so Maestro shows exactly the molecule that was docked.
-
-The .pdb files here are still worth having (they are what most tools expect) and
-they now carry symmetric order-duplicated CONECT records plus the formal charge
-in columns 79-80 — but the .sdf is the one to trust when the drawing matters.
-
-Chemistry source, per the manifest's `chemistry` column
-------------------------------------------------------
-  template   rebuilt from the ligand's own SMILES — exact by construction
-  perceived  no SMILES available; RDKit's valence-consistent perception
-  geometry   last-resort geometric heuristic (RDKit unavailable)
-
-This batch: %d ligand(s) — %d template, %d perceived, %d geometry.
-Docking is unaffected either way: Vina reads AutoDock atom types and
-coordinates, neither of which this touches. Scores and poses stand as they are.
-"""
 
 
 # =============================================================================
 # POST /pose/download_pdbqt
-# Body: {"paths": ["/abs/a.pdbqt", ...], "name": "results_p100",
-#        "smiles_csv": ["/abs/table.csv", ...]   (optional, see below)}
-# Returns: a .zip attachment of the requested poses converted to PDB *and* SDF —
+# Body: {"paths": ["/abs/a.pdbqt", ...], "name": "results_p100"}
+# Returns: a .zip attachment of PDB files converted from the requested .pdbqt —
 #          the best pose only (Vina's MODEL 1), AutoDock atom types mapped back
-#          to real elements, bond orders and formal charges rebuilt from the
-#          ligand's SMILES where one can be found, plus _manifest.csv (score /
-#          atoms / chemistry source / SMILES per file, best first),
-#          _best_poses.pdb and _best_poses.sdf (all of them in one file).
+#          to real elements, plus _manifest.csv (score / atoms / source pose
+#          count per file, best first) and _best_poses.pdb (all of them
+#          concatenated as one multi-model PDB that loads as a single batch).
 #          Counts ride back on X-Pose-Zip-* headers; errors return JSON.
 # Paths come from the client's current filter, so the download always matches
 # exactly what the stepper is showing.
-#
-# SMILES lookup order, per file: <stem>.smi sidecar → a REMARK SMILES line in
-# the file itself → any CSV/SMI table found beside the batch or in its parent
-# directories (Name/ligand_id + SMILES columns), or one named explicitly in
-# "smiles_csv". Nothing found → RDKit perception, which is still valence-correct.
 # =============================================================================
 @app.route('/pose/download_pdbqt', methods=['POST'])
 def pose_download_pdbqt():
@@ -2239,26 +2963,8 @@ def pose_download_pdbqt():
             pass
         return resp
 
-    # ── the ligands' own SMILES, if they can be found ────────────────────────
-    # Bond orders and formal charges cannot be recovered reliably from docked
-    # coordinates alone (that is the whole bug: chromen-4-one came back as
-    # 4-hydroxychromene, quinoline N-oxide as N-hydroxy). Where the batch's
-    # SMILES table is reachable, the export is exact instead of perceived.
-    pc = _pose_chem()
-    smi_index, extra = {}, data.get('smiles_csv') or []
-    if isinstance(extra, str):
-        extra = [extra]
-    if pc is not None:
-        try:
-            smi_index = pc.build_smiles_index([str(f) for f in files], extra)
-        except Exception as e:
-            logger.warning('[pose] SMILES index scan failed: %s', e)
-    logger.info('[pose] download: %d file(s), %d SMILES in the index',
-                len(files), len(smi_index))
-
-    rows, best_poses, best_sdf = [], [], []
+    rows, best_poses = [], []
     used, added, skipped, total = set(), 0, 0, 0
-    chem_counts = {'template': 0, 'perceived': 0, 'geometry': 0, 'none': 0}
     truncated = False
     try:
         with zipfile.ZipFile(tmp.name, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -2277,17 +2983,9 @@ def pose_download_pdbqt():
                 if not models:                 # nothing convertible in this file
                     skipped += 1
                     continue
-
-                smiles, smi_where = (None, '')
-                if pc is not None:
-                    try:
-                        smiles, smi_where = pc.resolve_smiles(str(fp), raw, smi_index)
-                    except Exception:
-                        smiles, smi_where = (None, '')
-
                 # Vina sorts poses best-first, so MODEL 1 is the top hit — keep
                 # only that. One pose per file means no MODEL wrapper is needed.
-                best_block, pose = _pose_block(models[0], smiles)
+                best_block = _pdb_block_with_conect(models[0])     # add Maestro-readable bond orders
                 pdb = _pdb_text([best_block], False)
                 total += len(pdb)
 
@@ -2314,71 +3012,25 @@ def pose_download_pdbqt():
 
                 score = scores[0] if scores else None
                 atoms = sum(1 for l in models[0] if l[:6].rstrip() in ('ATOM', 'HETATM'))
-                chem = pose.source if pose is not None else 'none'
-                chem_counts[chem] = chem_counts.get(chem, 0) + 1
-
-                # The .sdf beside it is the lossless one: bond orders and formal
-                # charges are first-class fields in an MDL molfile, so Maestro
-                # has nothing left to perceive and nothing to perceive wrongly.
-                sdf = ''
-                if pose is not None and pc is not None:
-                    sdf = pc.pose_sdf_block(
-                        pose, name=re.sub(r'\.pdb$', '', arc, flags=re.I),
-                        props={'VINA_SCORE_KCAL_MOL': ('' if score is None else score),
-                               'SMILES': pose.smiles, 'CHEMISTRY_SOURCE': pose.source,
-                               'SOURCE_FILE': str(fp)})
-                    if sdf:
-                        zf.writestr('files/' + re.sub(r'\.pdb$', '.sdf', arc, flags=re.I), sdf)
-                        total += len(sdf)
-
                 rows.append({'file': arc, 'score_kcal_mol': ('' if score is None else score),
-                             'atoms': atoms, 'source_poses': len(models),
-                             'chemistry': chem,
-                             'net_charge': (sum(pose.charges) if pose is not None else ''),
-                             'smiles': (pose.smiles if pose is not None else ''),
-                             'smiles_from': smi_where,
-                             'note': (pose.note if pose is not None else ''),
-                             'source': str(fp)})
+                             'atoms': atoms, 'source_poses': len(models), 'source': str(fp)})
                 if had_models:
-                    best_poses.append((score, arc, models[0], smiles, pose))
-                if sdf:
-                    best_sdf.append((score, sdf))
+                    best_poses.append((score, arc, models[0]))
 
             # manifest, best score first (unscored last)
             buf = io.StringIO()
-            w = csv.DictWriter(buf, fieldnames=[
-                'file', 'score_kcal_mol', 'atoms', 'source_poses', 'chemistry',
-                'net_charge', 'smiles', 'smiles_from', 'note', 'source'])
+            w = csv.DictWriter(buf, fieldnames=['file', 'score_kcal_mol', 'atoms', 'source_poses', 'source'])
             w.writeheader()
             for r in sorted(rows, key=lambda r: (r['score_kcal_mol'] == '', r['score_kcal_mol'])):
                 w.writerow(r)
             zf.writestr('_manifest.csv', buf.getvalue())
 
-            # best score first, unscored last. The second key must not be a raw
-            # None: two unscored files would compare None < None and blow up the
-            # whole download.
-            by_score = lambda t: (t[0] is None, t[0] if t[0] is not None else 0.0)
-
             if best_poses:
-                best_poses.sort(key=by_score)
-                # each MODEL gets its own CONECT block (per-model bond orders),
-                # reusing the molecule already built for this file
-                blocks = []
-                for _s, arc, blk, smi, pose in best_poses:
-                    remarks = ['REMARK 999 SOURCE %s' % arc] + [
-                        l for l in blk if l[:6].rstrip() not in ('ATOM', 'HETATM')]
-                    if pose is not None and pc is not None:
-                        blocks.append(pc.pose_pdb_lines(pose, blk, remarks=remarks))
-                    else:
-                        blocks.append(_pdb_block_with_conect(
-                            ['REMARK 999 SOURCE %s' % arc] + blk, smi))
+                best_poses.sort(key=lambda t: (t[0] is None, t[0]))
+                # each MODEL gets its own CONECT block (per-model bond orders)
+                blocks = [_pdb_block_with_conect(['REMARK 999 SOURCE %s' % arc] + blk)
+                          for _s, arc, blk in best_poses]
                 zf.writestr('_best_poses.pdb', _pdb_text(blocks, True))
-            if best_sdf:
-                best_sdf.sort(key=by_score)
-                zf.writestr('_best_poses.sdf', ''.join(s for _sc, s in best_sdf))
-            zf.writestr('_README.txt', _POSE_ZIP_README % (
-                added, chem_counts.get('template', 0), chem_counts.get('perceived', 0),
-                chem_counts.get('geometry', 0) + chem_counts.get('none', 0)))
     except Exception as e:
         logger.warning('[pose] download_pdbqt zip error: %s', e)
         return jsonify({'ok': False, 'err': str(e)}), 200
@@ -2394,13 +3046,6 @@ def pose_download_pdbqt():
     resp.headers['X-Pose-Zip-Skipped'] = str(skipped)
     resp.headers['X-Pose-Zip-Poses'] = str(len(best_poses))
     resp.headers['X-Pose-Zip-Truncated'] = '1' if truncated else '0'
-    # How the chemistry was rebuilt, so the UI can say so out loud rather than
-    # leaving the user to discover a perceived structure in Maestro.
-    resp.headers['X-Pose-Zip-Exact'] = str(chem_counts.get('template', 0))
-    resp.headers['X-Pose-Zip-Perceived'] = str(chem_counts.get('perceived', 0))
-    resp.headers['X-Pose-Zip-Geometry'] = str(chem_counts.get('geometry', 0) +
-                                              chem_counts.get('none', 0))
-    resp.headers['X-Pose-Zip-Sdf'] = str(len(best_sdf))
     return resp
 
 
@@ -2442,3 +3087,849 @@ def pose_debug_log():
     except Exception as e:
         logger.warning('[pose] debug_log error: %s', e)
         return jsonify({'ok': False, 'err': str(e)}), 200
+
+# =============================================================================
+# The folder batches — server-side run store, journalled to disk
+# -----------------------------------------------------------------------------
+#   POST /pose/batch_start   {path, scorer}             -> {ok, run_id, total, …, next, view}
+#   POST /pose/batch_result  {run_id, i, pk, dg, err}   -> {ok, counts, best, next, view}
+#   POST /pose/batch_stop    {run_id}                   -> {ok, counts, best, view}
+#   POST /pose/batch_resume  {run_id}                   -> {ok, counts, best, next, view}
+#   GET  /pose/batch_runs    ?dir=&scorer=              -> {ok, runs:[…]}
+#   GET  /pose/batch_state   ?run_id=…[&rows=1]         -> {ok, counts, best, view[, rows]}
+#   GET  /pose/batch_csv     ?run_id=…                  -> text/csv attachment
+#
+# WHY THIS EXISTS AT ALL
+# ----------------------
+# The batch used to live entirely in the browser: the client held every scanned
+# file, every result, and re-rendered the whole ranked list after each score.
+# On a folder of ~5000 poses that is O(n²) DOM work — 5000 rows rebuilt 5000
+# times — and the tab spends more wall-clock laying out a list nobody can read
+# than the GPU spends scoring. Measured on the user's run: ~12 s per pose, with
+# the model itself accounting for a fraction of it.
+#
+# So the full run lives here instead, and the browser is handed a ten-row
+# window: the last five finished and the next five queued. Same shape as the
+# TS tool's live view (static/js/ts/ts_worker_bridge.js), which keeps the
+# authoritative history server-side, trims processed events out of client
+# memory and caps the log at 200 nodes — for the same reason.
+#
+# The client stays the thing that *calls* the model, because both scoring
+# endpoints need the receptor .pdb that is loaded in the browser and nowhere
+# else. This store only remembers; it never scores. One extra round-trip per
+# pose, against a model subprocess that takes seconds, is not measurable.
+#
+# SURVIVING INTERRUPTION
+# ----------------------
+# A run of 20,000 poses is hours of GPU time. Losing it to a closed tab, a
+# reload, a dropped connection or a server restart is not acceptable, so the
+# run is journalled to disk as it goes:
+#
+#   <batch_dir>/<run_id>.meta.json   {id, dir, scorer, total, created}   once
+#   <batch_dir>/<run_id>.rows.jsonl  one {i,path,name,vina} per file     once
+#   <batch_dir>/<run_id>.res.jsonl   one {i,pk,dg,err} per finished row  appended
+#
+# Three files rather than one document because the write pattern differs: the
+# scan is written once and never changes, and results arrive one at a time.
+# Rewriting a 20,000-row document after every score would put the O(n²) we just
+# removed from the DOM back on the disk. Appending one line is O(1), and
+# replaying the journal reconstructs the run exactly.
+#
+# Recovery is therefore just: read the rows, replay the results, and continue
+# from the first row with no result. Any row left `running` when the world
+# stopped goes back to `queued` — nothing is invented, and nothing is skipped.
+# Loading is lazy: any endpoint that is handed an unknown run_id looks on disk
+# before answering "unknown", so a server restart mid-run is invisible to a
+# client that is still holding its id.
+#
+# The batch dir is `pose.batch_dir` if set, else <temp>/elion_pose_batches. The
+# default deliberately does not write into the user's results folder, which may
+# be read-only and is not ours; it survives the failure that actually happens (a
+# restart or crash), not a reboot. `⬇ .csv` is still what makes a run permanent.
+# =============================================================================
+import threading as _pose_threading
+from collections import OrderedDict as _PoseOrderedDict
+
+_POSE_BATCH_RUNS     = _PoseOrderedDict()    # run_id -> run record, oldest first
+_POSE_BATCH_LOCK     = _pose_threading.Lock()
+_POSE_BATCH_KEEP     = 3     # runs held in memory; more are reloaded from disk on demand
+_POSE_BATCH_KEEP_FS  = 20    # runs kept on disk before the oldest are pruned
+_POSE_BATCH_WINDOW   = 5     # rows either side of the cursor the client is sent
+_POSE_BATCH_SEQ      = [0]
+
+
+def _pose_batch_dir():
+    """Where runs are journalled: `pose.batch_dir`, else beside the results.
+
+    The default used to be <tempfile.gettempdir()>/elion_pose_batches, and that
+    was a bad answer to "where is my run". gettempdir() resolves through TMPDIR,
+    TEMP, TMP, /tmp, /var/tmp, /usr/tmp and finally the process's cwd, so the
+    same blank config lands in a different place on a workstation, a cluster
+    node with TMPDIR set to scratch, and a systemd unit with PrivateTmp — none
+    of which the user can see from a shell. On top of that it is the one
+    directory on the machine that something else is entitled to delete.
+
+    So: <results_dir>/../.elion_batches — beside the folder being scored, not
+    inside it (the scan only looks for .pdbqt/.pdb/.ent, but keeping bookkeeping
+    out of a data folder is worth the one extra path segment). Temp remains the
+    last resort when nothing is configured or the chosen directory cannot be
+    created, and that fallback is logged as a warning rather than taken quietly.
+    """
+    from pathlib import Path
+    import tempfile
+    temp = Path(tempfile.gettempdir()) / 'elion_pose_batches'
+    pcfg = _pose_cfg()
+
+    raw = (pcfg.get('batch_dir') or '').strip()
+    if raw:
+        d = Path(raw).expanduser()
+    else:
+        base = (pcfg.get('results_dir') or '').strip() or (pcfg.get('trajectory_dir') or '').strip()
+        try:
+            d = (Path(base).expanduser().parent / '.elion_batches') if base else temp
+        except Exception:
+            d = temp
+
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception as e:
+        logger.warning('[pose] batch dir %s unusable (%s) — falling back to %s. '
+                       'Runs journalled there may be removed by a temp cleaner; '
+                       'set pose.batch_dir to somewhere writable and persistent.', d, e, temp)
+    temp.mkdir(parents=True, exist_ok=True)
+    return temp
+
+
+def _pose_batch_paths(rid):
+    d = _pose_batch_dir()
+    return d / ('%s.meta.json' % rid), d / ('%s.rows.jsonl' % rid), d / ('%s.res.jsonl' % rid)
+
+
+def _pose_batch_done_marker(rid):
+    """Written when the last row gets a result. Its only job is to make
+    "is this run finished?" answerable by stat() instead of by counting a
+    20,000-line journal — which is what pruning has to ask about every run,
+    every time a batch starts."""
+    return _pose_batch_dir() / ('%s.done' % rid)
+
+
+def _pose_batch_write_head(run):
+    """The half of a run that never changes: written once, at start."""
+    import json as _json
+    meta_p, rows_p, res_p = _pose_batch_paths(run['id'])
+    try:
+        with rows_p.open('w', encoding='utf-8') as fh:
+            for r in run['rows']:
+                fh.write(_json.dumps({'i': r['i'], 'path': r['path'],
+                                      'name': r['name'], 'vina': r['vina']}) + '\n')
+        res_p.open('a', encoding='utf-8').close()          # exist, even when empty
+        meta_p.write_text(_json.dumps({
+            'id': run['id'], 'dir': run['dir'], 'scorer': run['scorer'],
+            'total': len(run['rows']), 'created': run['created'],
+        }), encoding='utf-8')
+        run['persisted'] = True
+    except Exception as e:
+        # A batch that cannot journal is still a batch. Say so once and carry on
+        # in memory rather than refusing to run.
+        logger.warning('[pose] batch %s not journalled (%s) — run will not survive a restart',
+                       run['id'], e)
+        run['persisted'] = False
+
+
+def _pose_batch_append(run, r):
+    """One finished row -> one line. O(1), which is the whole point."""
+    if not run.get('persisted'):
+        return
+    import json as _json
+    try:
+        _, _, res_p = _pose_batch_paths(run['id'])
+        with res_p.open('a', encoding='utf-8') as fh:
+            # `path` and `name` are written alongside `i` on purpose. An index
+            # is only meaningful next to the rows file it indexes into, which
+            # made the journal unreadable on its own — you could not grep it,
+            # sort it, hand it to another tool, or point the Import button at
+            # it. Carrying the path costs ~90 bytes a line (7 MB on a 67k run)
+            # and makes the file self-describing. `i` stays, because replay
+            # keys on it and it is what makes a re-appended line idempotent.
+            fh.write(_json.dumps({'i': r['i'], 'path': r['path'], 'name': r['name'],
+                                  'vina': r['vina'], 'pk': r['pk'], 'dg': r['dg'],
+                                  'err': r['err'] if r['state'] == 'fail' else ''}) + '\n')
+    except Exception as e:
+        logger.warning('[pose] batch %s journal append failed: %s', run['id'], e)
+        run['persisted'] = False
+
+
+def _pose_batch_load(rid):
+    """Rebuild a run from disk. Returns the record or None."""
+    import json as _json
+    if not re.fullmatch(r'gb[0-9a-z_]{1,40}', str(rid or '')):
+        return None                                        # not our id shape; never a path
+    meta_p, rows_p, res_p = _pose_batch_paths(rid)
+    if not (meta_p.is_file() and rows_p.is_file()):
+        return None
+    try:
+        meta = _json.loads(meta_p.read_text(encoding='utf-8'))
+        rows = []
+        with rows_p.open('r', encoding='utf-8') as fh:
+            for ln in fh:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                d = _json.loads(ln)
+                rows.append({'i': d['i'], 'path': d['path'], 'name': d['name'],
+                             'vina': d.get('vina'), 'pk': None, 'dg': None,
+                             'state': 'queued', 'err': ''})
+        run = {'id': meta['id'], 'dir': meta.get('dir', ''), 'rows': rows, 'finished': [],
+               'cursor': 0, 'ok': 0, 'fail': 0, 'stopped': False, 'best': None,
+               'scorer': meta.get('scorer', 'gign'), 'created': meta.get('created', 0),
+               'persisted': True}
+        if res_p.is_file():
+            with res_p.open('r', encoding='utf-8') as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        d = _json.loads(ln)
+                    except ValueError:
+                        continue                           # a torn last line: drop it, redo that pose
+                    i = d.get('i')
+                    if not isinstance(i, int) or not (0 <= i < len(rows)):
+                        continue
+                    r = rows[i]
+                    if r['state'] in ('ok', 'fail'):
+                        continue                           # replayed twice; first wins
+                    _pose_batch_apply(run, r, d.get('pk'), d.get('dg'), d.get('err') or '')
+        return run
+    except Exception as e:
+        logger.warning('[pose] could not load batch %s: %s', rid, e)
+        return None
+
+
+def _pose_batch_activity(rid):
+    """When a run last did anything: the newest mtime of its three files.
+
+    This has to be the RESULTS journal, not the meta file. Meta is written once
+    at scan time and never touched again, so ranking by it means a long run gets
+    older and older while short runs come and go — and a 20,000-pose batch that
+    has been scoring happily for six hours sorts last and gets its journal
+    deleted out from under it. That is not a hypothetical: it was reproduced
+    (one live run + 20 later starts -> the live run answered `unknown run`).
+    """
+    newest = 0.0
+    for q in _pose_batch_paths(rid):
+        try:
+            newest = max(newest, q.stat().st_mtime)
+        except OSError:
+            pass
+    return newest
+
+
+def _pose_batch_prune_fs(keep=_POSE_BATCH_KEEP_FS):
+    """Keep the `keep` most recently active journalled runs; delete older ones —
+    but ONLY if they are finished.
+
+    Two guards, because getting this wrong destroys hours of GPU time:
+
+    · An UNFINISHED run is never deleted automatically, however old. It is the
+      thing ▶ Resume exists for, it is a few MB, and a batch that has been
+      running for six hours is exactly the one whose meta file is oldest.
+    · A run held in memory is never deleted either — this process is driving it,
+      and pulling the journal would turn it into "unknown run" at the next
+      result.
+
+    Ranking is by last ACTIVITY (newest mtime across the run's files), not by
+    the meta file, which is written once at scan time and then never touched.
+    """
+    try:
+        d = _pose_batch_dir()
+        rids = [p.name[:-len('.meta.json')] for p in d.glob('gb*.meta.json')]
+        rids.sort(key=_pose_batch_activity, reverse=True)
+        spared = 0
+        for rid in rids[keep:]:
+            if rid in _POSE_BATCH_RUNS:
+                continue
+            if not _pose_batch_done_marker(rid).is_file():
+                spared += 1
+                continue
+            for q in list(_pose_batch_paths(rid)) + [_pose_batch_done_marker(rid)]:
+                try:
+                    q.unlink()
+                except OSError:
+                    pass
+            logger.info('[pose] pruned finished batch journal %s (keeping the %d most recent)', rid, keep)
+        if spared:
+            logger.info('[pose] %d unfinished batch journal(s) kept past the %d-run cap — '
+                        'they are still resumable; finish them, export the .csv, or delete '
+                        'them from %s by hand', spared, keep, d)
+    except Exception as e:
+        logger.warning('[pose] batch prune failed: %s', e)
+
+
+def _pose_batch_pub(r):
+    """A row as the client sees it. Ten of these go over the wire per score."""
+    return {'i': r['i'], 'name': r['name'], 'path': r['path'], 'vina': r['vina'],
+            'pk': r['pk'], 'dg': r['dg'], 'state': r['state'], 'err': r['err']}
+
+
+def _pose_batch_view(run):
+    """The ten-row window: last finished, next queued, and what is hidden.
+
+    `recent` is in completion order (oldest of the five first) so the list reads
+    top-to-bottom like a run log; `queued` leads with the row being scored right
+    now. The hidden counts are reported rather than dropped — a window that
+    silently implies it is the whole list is a worse lie than a long one.
+    """
+    rows, n = run['rows'], len(run['rows'])
+    fin = run['finished']
+    recent = [_pose_batch_pub(rows[i]) for i in fin[-_POSE_BATCH_WINDOW:]]
+    q, i = [], run['cursor']
+    while i < n and len(q) < _POSE_BATCH_WINDOW:
+        if rows[i]['state'] in ('queued', 'running'):
+            q.append(_pose_batch_pub(rows[i]))
+        i += 1
+    return {'recent': recent, 'queued': q,
+            'hidden_done': max(0, len(fin) - len(recent)),
+            'hidden_queued': max(0, (n - len(fin)) - len(q))}
+
+
+def _pose_batch_counts(run):
+    return {'total': len(run['rows']), 'done': run['ok'] + run['fail'],
+            'ok': run['ok'], 'fail': run['fail'],
+            'not_run': len(run['rows']) - (run['ok'] + run['fail']),
+            'stopped': bool(run['stopped'])}
+
+
+def _pose_batch_apply(run, r, pk, dg, err):
+    """Record one result into the run. The ONE place a row becomes ok/fail.
+
+    Shared by the live POST and by journal replay on load, so a recovered run is
+    identical to the one that was interrupted — including which row is `best`
+    and the order `finished` is in. Two implementations of this would be two
+    definitions of what the .csv means.
+    """
+    err = (err or '').strip()
+    if err:
+        r['state'], r['err'] = 'fail', err[:400]
+        run['fail'] += 1
+    else:
+        try:
+            r['pk'] = float(pk) if pk is not None else None
+            r['dg'] = float(dg) if dg is not None else None
+        except (TypeError, ValueError):
+            r['pk'] = r['dg'] = None
+        if r['pk'] is None and r['dg'] is None:
+            r['state'], r['err'] = 'fail', 'no prediction in the model output'
+            run['fail'] += 1
+        else:
+            r['state'] = 'ok'
+            run['ok'] += 1
+            if r['pk'] is not None and (run['best'] is None or
+                                        run['best']['pk'] is None or
+                                        r['pk'] > run['best']['pk']):
+                run['best'] = _pose_batch_pub(r)
+    run['finished'].append(r['i'])
+    return r
+
+
+def _pose_batch_take(run):
+    """Hand out the next file to score, marking it running. None when finished."""
+    rows, n = run['rows'], len(run['rows'])
+    i = run['cursor']
+    while i < n and rows[i]['state'] in ('ok', 'fail'):
+        i += 1
+    run['cursor'] = i
+    if run['stopped'] or i >= n:
+        return None
+    rows[i]['state'] = 'running'
+    return _pose_batch_pub(rows[i])
+
+
+def _pose_batch_reply(run, with_next=True):
+    nxt = _pose_batch_take(run) if with_next else None
+    return {'ok': True, 'run_id': run['id'], 'scorer': run['scorer'],
+            'counts': _pose_batch_counts(run), 'best': run['best'],
+            'view': _pose_batch_view(run), 'next': nxt}
+
+
+def _pose_batch_remember(run):
+    """Put a run in the in-memory cache, evicting the oldest. Caller holds the lock."""
+    _POSE_BATCH_RUNS[run['id']] = run
+    while len(_POSE_BATCH_RUNS) > _POSE_BATCH_KEEP:
+        _POSE_BATCH_RUNS.popitem(last=False)
+    return run
+
+
+def _pose_batch_get(rid):
+    """The run, from memory or — if this process never saw it — from disk.
+
+    The fallback is what makes a restart survivable: a client still holding a
+    run_id from before the restart gets its run back instead of "unknown run".
+    Caller holds the lock.
+    """
+    rid = rid or ''
+    run = _POSE_BATCH_RUNS.get(rid)
+    if run:
+        _POSE_BATCH_RUNS.move_to_end(rid)
+        return run
+    run = _pose_batch_load(rid)
+    if run:
+        logger.info('[pose] batch %s recovered from disk (%d/%d done)',
+                    rid, run['ok'] + run['fail'], len(run['rows']))
+        _pose_batch_remember(run)
+    return run
+
+
+@app.route('/pose/batch_start', methods=['POST'])
+def pose_batch_start():
+    import time as _time
+    data = request.get_json(silent=True) or {}
+    # No file ceiling here — see _pose_scan_dir. The list stays on the server and
+    # reaches the client ten rows at a time, so the only cost of a big folder is
+    # the scan itself.
+    scan = _pose_scan_dir(data.get('path'), max_files=None)
+    if not scan.get('ok'):
+        return jsonify(scan), 200
+
+    # "Ligands only": the scan classifies anything over _POSE_LIGAND_MAX_ATOMS
+    # as a receptor, and handing GIGN a prepared receptor as its ligand is never
+    # what was meant. Filtered here rather than in the client so the run record,
+    # the window, the counters and the .csv all agree on what N is.
+    files = [f for f in scan['files'] if f.get('kind') != 'receptor']
+    skipped = len(scan['files']) - len(files)
+    if not files:
+        return jsonify({'ok': False, 'err': 'no ligand poses under %s' % scan['dir']}), 200
+
+    rows = [{'i': i, 'path': f['path'], 'name': str(f['path']).rsplit('/', 1)[-1],
+             'vina': f.get('score'), 'pk': None, 'dg': None,
+             'state': 'queued', 'err': ''} for i, f in enumerate(files)]
+
+    # Which model produced these numbers. Recorded because the .csv is the run's
+    # only durable form, and "pk" with no scorer named is a column nobody can
+    # check later. Sanitised: it becomes a filename and two column headers.
+    scorer = re.sub(r'[^a-z0-9_]+', '', str(data.get('scorer') or 'gign').lower())[:24] or 'gign'
+
+    with _POSE_BATCH_LOCK:
+        _POSE_BATCH_SEQ[0] += 1
+        # The id has to be unique across restarts, not just within a process —
+        # a run counter reset to 1 would collide with a journalled run and the
+        # recovered rows would be the wrong folder's.
+        rid = 'gb%d_%d' % (int(_time.time()), _POSE_BATCH_SEQ[0])
+        run = {'id': rid, 'dir': scan['dir'], 'rows': rows, 'finished': [],
+               'cursor': 0, 'ok': 0, 'fail': 0, 'stopped': False, 'best': None,
+               'scorer': scorer, 'created': int(_time.time()), 'persisted': False}
+        _pose_batch_write_head(run)
+        _pose_batch_remember(run)
+        out = _pose_batch_reply(run)
+        persisted = run['persisted']
+    _pose_batch_prune_fs()
+
+    out.update({'dir': scan['dir'], 'total': len(rows), 'skipped': skipped,
+                'truncated': bool(scan.get('truncated')), 'resumable': persisted})
+    return jsonify(out), 200
+
+
+@app.route('/pose/batch_result', methods=['POST'])
+def pose_batch_result():
+    data = request.get_json(silent=True) or {}
+    with _POSE_BATCH_LOCK:
+        run = _pose_batch_get(data.get('run_id'))
+        if not run:
+            return jsonify({'ok': False, 'err': 'unknown run (the server was restarted?)'}), 200
+        try:
+            i = int(data.get('i'))
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'err': 'no row index'}), 200
+        if not (0 <= i < len(run['rows'])):
+            return jsonify({'ok': False, 'err': 'row %s out of range' % i}), 200
+
+        r = run['rows'][i]
+        if r['state'] in ('ok', 'fail'):          # replayed result — ignore, stay idempotent
+            return jsonify(_pose_batch_reply(run)), 200
+
+        _pose_batch_apply(run, r, data.get('pk'), data.get('dg'), data.get('err'))
+        _pose_batch_append(run, r)                # journal BEFORE answering: a crash
+        if run['ok'] + run['fail'] >= len(run['rows']) and run.get('persisted'):
+            try:                                  # between the two must not lose the row
+                _pose_batch_done_marker(run['id']).write_text('', encoding='utf-8')
+            except Exception:
+                pass                              # only affects pruning, never the run
+        return jsonify(_pose_batch_reply(run)), 200
+
+
+def _pose_batch_requeue(run):
+    """Any row left mid-flight goes back in the queue.
+
+    A row is 'running' only because it was handed out; if the client stopped,
+    reloaded or died, nothing is coming for it. Stopping and resuming must not
+    invent a result, and must not leave a row stuck either.
+    """
+    n = 0
+    for r in run['rows']:
+        if r['state'] == 'running':
+            r['state'] = 'queued'
+            n += 1
+    return n
+
+
+@app.route('/pose/batch_stop', methods=['POST'])
+def pose_batch_stop():
+    data = request.get_json(silent=True) or {}
+    with _POSE_BATCH_LOCK:
+        run = _pose_batch_get(data.get('run_id'))
+        if not run:
+            return jsonify({'ok': False, 'err': 'unknown run'}), 200
+        run['stopped'] = True
+        _pose_batch_requeue(run)
+        return jsonify(_pose_batch_reply(run, with_next=False)), 200
+
+
+# =============================================================================
+# POST /pose/batch_resume  {run_id}
+# Pick an interrupted run back up. The run is whatever the journal says it is,
+# so this is the same call whether the tab was closed for ten seconds or the
+# server was restarted in between: requeue anything left mid-flight, clear the
+# stop flag, and hand back the first unfinished row.
+# =============================================================================
+@app.route('/pose/batch_resume', methods=['POST'])
+def pose_batch_resume():
+    data = request.get_json(silent=True) or {}
+    with _POSE_BATCH_LOCK:
+        run = _pose_batch_get(data.get('run_id'))
+        if not run:
+            return jsonify({'ok': False, 'err': 'that run is no longer on the server'}), 200
+        requeued = _pose_batch_requeue(run)
+        run['stopped'] = False
+        run['cursor'] = 0
+        out = _pose_batch_reply(run)
+        out.update({'dir': run['dir'], 'total': len(run['rows']),
+                    'requeued': requeued, 'resumed': True})
+        return jsonify(out), 200
+
+
+# =============================================================================
+# GET /pose/batch_runs ?dir=&scorer=&all=
+# What is on disk, newest first. The panel asks with its own folder and scorer
+# so it can offer "▶ Resume 2431/5000" for exactly the run the button would
+# continue, rather than a list the user has to choose from.
+# =============================================================================
+@app.route('/pose/batch_runs', methods=['GET'])
+def pose_batch_runs():
+    import json as _json
+    from pathlib import Path
+    want_dir = (request.args.get('dir') or '').strip()
+    want_sc  = (request.args.get('scorer') or '').strip()
+    show_all = bool(request.args.get('all'))
+    try:
+        want_dir = str(Path(want_dir).expanduser()) if want_dir else ''
+    except Exception:
+        pass
+
+    out = []
+    try:
+        d = _pose_batch_dir()
+        metas = sorted(d.glob('gb*.meta.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception as e:
+        return jsonify({'ok': False, 'err': str(e)}), 200
+
+    for p in metas:
+        try:
+            m = _json.loads(p.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        if want_dir and m.get('dir') != want_dir:
+            continue
+        if want_sc and m.get('scorer') != want_sc:
+            continue
+        rid = m.get('id') or p.name[:-len('.meta.json')]
+        # Counting journal lines beats trusting a running total: the count is
+        # then whatever actually survived the interruption, torn last line and
+        # all. It is one sequential read of a few MB at worst, on a click.
+        done = ok = fail = 0
+        _, _, res_p = _pose_batch_paths(rid)
+        try:
+            if res_p.is_file():
+                seen = set()
+                with res_p.open('r', encoding='utf-8') as fh:
+                    for ln in fh:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            rec = _json.loads(ln)
+                        except ValueError:
+                            continue
+                        i = rec.get('i')
+                        if i in seen:
+                            continue
+                        seen.add(i)
+                        done += 1
+                        if (rec.get('err') or '').strip():
+                            fail += 1
+                        else:
+                            ok += 1
+        except Exception:
+            pass
+        total = int(m.get('total') or 0)
+        live = _POSE_BATCH_RUNS.get(rid)
+        out.append({'run_id': rid, 'dir': m.get('dir', ''), 'scorer': m.get('scorer', 'gign'),
+                    'total': total, 'done': done, 'ok': ok, 'fail': fail,
+                    'not_run': max(0, total - done),
+                    'resumable': done < total,
+                    'in_memory': live is not None,
+                    'created': m.get('created', 0),
+                    'updated': int(p.stat().st_mtime)})
+        if not show_all and len(out) >= 20:
+            break
+    return jsonify({'ok': True, 'dir': str(_pose_batch_dir()), 'runs': out}), 200
+
+
+@app.route('/pose/batch_state', methods=['GET'])
+def pose_batch_state():
+    with _POSE_BATCH_LOCK:
+        run = _pose_batch_get(request.args.get('run_id'))
+        if not run:
+            return jsonify({'ok': False, 'err': 'unknown run'}), 200
+        out = _pose_batch_reply(run, with_next=False)
+        # ?rows=1 returns the whole run. Deliberately opt-in: it is the thing
+        # this endpoint exists to avoid sending, and it is here for the console
+        # and for tests, not for the panel.
+        if request.args.get('rows'):
+            out['rows'] = [_pose_batch_pub(r) for r in run['rows']]
+        return jsonify(out), 200
+
+
+def _pose_batch_rank(run):
+    """Every row, ranked by pK highest-first; unscored rows keep scan order, last."""
+    return sorted(run['rows'],
+                  key=lambda r: (0, -r['pk'], r['i']) if r['pk'] is not None else (1, 0, r['i']))
+
+
+@app.route('/pose/batch_csv', methods=['GET'])
+def pose_batch_csv():
+    from flask import Response
+    with _POSE_BATCH_LOCK:
+        run = _pose_batch_get(request.args.get('run_id'))
+        if not run:
+            return jsonify({'ok': False, 'err': 'unknown run'}), 404
+        rows = _pose_batch_rank(run)
+        scorer = run['scorer']
+
+    def q(v):
+        return '"%s"' % str('' if v is None else v).replace('"', '""')
+
+    out = ['rank,file,vina_kcal_mol,%s_pk,%s_dg_kcal_mol,status,path' % (scorer, scorer)]
+    rank = 0
+    for r in rows:
+        if r['state'] == 'ok':
+            rank += 1
+        out.append(','.join([
+            str(rank) if r['state'] == 'ok' else '',
+            q(r['name']),
+            ('%.2f' % r['vina']) if isinstance(r['vina'], (int, float)) else '',
+            ('%.3f' % r['pk']) if r['pk'] is not None else '',
+            ('%.3f' % r['dg']) if r['dg'] is not None else '',
+            q(('failed: ' + r['err']) if r['state'] == 'fail' else r['state']),
+            q(r['path']),
+        ]))
+    return Response('\n'.join(out) + '\n', mimetype='text/csv',
+                    headers={'Content-Disposition':
+                             'attachment; filename=%s_batch.csv' % scorer})
+
+
+# =============================================================================
+# GET /pose/score_models
+# Enumerate the trained models this server is willing to run on a pose, for the
+# 3D Builder's Model dropdown.
+#
+# Returns: { ok, models: [ {id, label, engine, path, ok, why, note}, ... ] }
+#
+# Three engines, three endpoints, three sets of config keys. They are NOT
+# interchangeable -- a GIGN checkpoint is a graph network, a DeepAtom one a
+# 24-channel voxel CNN, a GatorAffinity one an ATOMICA encoder stack -- so the
+# picker chooses the engine and the checkpoint together, and each entry names
+# the route that will run it:
+#
+#   gign          POST /pose/gign_score            pose.gign_script / gign_model
+#   gatoraffinity POST /pose/gatoraffinity_score   pose.gatoraffinity_script / _model
+#   deepatom      POST /pose/deepatom_score        pose.default_script (+ deepatom_ckpt_dir)
+#
+# An entry whose scorer is missing is reported with ok=false and a `why` rather
+# than hidden: a checkpoint that silently vanishes from the menu is
+# indistinguishable from one that was never put in the directory.
+# =============================================================================
+@app.route('/pose/score_models', methods=['GET'])
+def pose_score_models():
+    return jsonify({'ok': True, 'models': _pose_score_models()}), 200
+
+
+def _abs_repo(path_str):
+    """Absolute path for a value out of input_routes.yml.
+
+    Absolute input is returned unchanged; a relative one resolves against the UI
+    root, not the process CWD -- the rule uiapp.config.resolve() applies to every
+    other path in that file. deepatom.script is stored as "../deepatom/bin/...",
+    which only resolves from the CWD if the app happened to be started in the UI
+    root. The CWD is still tried second, so a setup that relied on it keeps
+    working.
+    """
+    from pathlib import Path
+    if not path_str:
+        return path_str
+    p = Path(str(path_str)).expanduser()
+    if p.is_absolute():
+        return str(p)
+    try:
+        root = Path(_pcfg.REPO_ROOT)
+    except Exception:
+        root = Path(__file__).resolve().parent.parent.parent
+    cand = root / p
+    if cand.exists():
+        return str(cand.resolve())
+    if p.exists():
+        return str(p.resolve())
+    return str(cand)          # report the repo-relative guess, not the CWD one
+
+
+def _deepatom_cfg():
+    """The `deepatom:` section, for its `script` key -- what /pose/deepatom_score
+    falls back to when pose.default_script is blank."""
+    from pathlib import Path
+    try:
+        import yaml
+        try:
+            from uiapp.routes.shared import _INPUT_ROUTES_YML as _YML
+        except Exception:
+            _YML = str(Path(__file__).resolve().parent.parent / "input_TS.yml")
+        return (yaml.safe_load(open(_YML, "r", encoding="utf-8")) or {}).get("deepatom") or {}
+    except Exception as e:
+        logger.warning("[pose] could not read deepatom config: %s", e)
+        return {}
+
+
+def _scorer_status(script_val, key_name, fallback=None, fallback_key=None):
+    """(runnable?, why-not) for one scorer script, with the key named correctly.
+
+    Saying "pose.default_script is not set" for a path that came from
+    deepatom.script sends people to edit a line that is already blank, so the
+    key that supplied the value is tracked and reported.
+    """
+    from pathlib import Path
+    val = (script_val or '').strip()
+    key = key_name
+    if not val and fallback:
+        val = (fallback or '').strip()
+        key = fallback_key or key_name
+    if not val:
+        return False, ('%s is blank in config/input_routes.yml' % key), ''
+    p = _abs_repo(val)
+    if Path(p).is_file():
+        return True, '', p
+    return False, ('%s points at %s, which does not exist' % (key, p)), p
+
+
+def _pose_score_models():
+    """The allow-list. Shared by /pose/score_models and every scorer route."""
+    from pathlib import Path
+    pcfg = _pose_cfg()
+    out = []
+
+    # ---- GIGN -------------------------------------------------------------
+    gign_ok, gign_why, _ = _scorer_status(pcfg.get('gign_script'), 'pose.gign_script')
+    gm = (pcfg.get('gign_model') or '').strip()
+    # Listed whenever the engine is CONFIGURED AT ALL -- either key non-blank --
+    # not only when it is runnable. An entry that disappears because its script
+    # is missing is indistinguishable from an engine nobody set up, which is the
+    # one failure mode this menu exists to avoid.
+    if gm or (pcfg.get('gign_script') or '').strip():
+        p = Path(_abs_repo(gm)) if gm else None
+        exists = bool(p and p.is_file())
+        out.append({
+            'id': 'gign:' + (p.name if p else 'default'),
+            'label': 'GIGN · ' + (p.name if p else '(script default)'),
+            'engine': 'gign',
+            'path': str(p) if p else '',
+            'ok': bool(gign_ok and (exists or not gm)),
+            'why': '' if (gign_ok and (exists or not gm)) else
+                   (gign_why or 'gign_model points at %s, which does not exist' % p),
+            'note': 'default' if (gign_ok and (exists or not gm)) else '',
+        })
+
+    # ---- GatorAffinity ----------------------------------------------------
+    # gatoraffinity_model is routinely blank, meaning "the checkpoint
+    # gatoraffinity_pose.py picks for itself". That is a real, selectable
+    # choice, so it is offered rather than suppressed.
+    ga_ok, ga_why, _ = _scorer_status(pcfg.get('gatoraffinity_script'),
+                                      'pose.gatoraffinity_script')
+    gam = (pcfg.get('gatoraffinity_model') or '').strip()
+    # gatoraffinity_model is routinely BLANK (the script picks its own
+    # checkpoint), so keying off the model alone hid this engine entirely
+    # whenever its script was missing -- the blank model made the guard false.
+    # Key off the script as well.
+    if gam or (pcfg.get('gatoraffinity_script') or '').strip():
+        p = Path(_abs_repo(gam)) if gam else None
+        exists = bool(p and p.is_file())
+        out.append({
+            'id': 'gatoraffinity:' + (p.name if p else 'default'),
+            'label': 'GatorAffinity · ' + (p.name if p else '(script default)'),
+            'engine': 'gatoraffinity',
+            'path': str(p) if p else '',
+            'ok': bool(ga_ok and (exists or not gam)),
+            'why': '' if (ga_ok and (exists or not gam)) else
+                   (ga_why or 'gatoraffinity_model points at %s, which does not exist' % p),
+            'note': '',
+        })
+
+    # ---- DeepAtom ---------------------------------------------------------
+    # /pose/deepatom_score runs pose.default_script, falling back to
+    # deepatom.script -- the shell pipeline. Either makes the engine runnable.
+    da_ok, da_why, _ = _scorer_status(pcfg.get('default_script'), 'pose.default_script',
+                                      fallback=_deepatom_cfg().get('script'),
+                                      fallback_key='deepatom.script')
+    ckpt_dir = (pcfg.get('deepatom_ckpt_dir') or '').strip()
+    if ckpt_dir:
+        d = Path(_abs_repo(ckpt_dir))
+        if d.is_dir():
+            names = []
+            for pat in ('*.pt', '*.pth', '*.pth.tar', '*.ckpt'):
+                names.extend(d.glob(pat))
+            for p in sorted(set(names), key=lambda q: q.name):
+                try:
+                    mb = p.stat().st_size / (1024.0 * 1024.0)
+                except OSError:
+                    mb = 0.0
+                out.append({
+                    'id': 'deepatom:' + p.name,
+                    'label': 'DeepAtom · ' + p.name,
+                    'engine': 'deepatom',
+                    'path': str(p),
+                    'ok': da_ok,
+                    'why': da_why,
+                    'note': '%.0f MB' % mb if mb else '',
+                })
+        else:
+            logger.warning('[pose] deepatom_ckpt_dir does not exist: %s', d)
+    return out
+
+
+def _pose_resolve_model(model_id, engine):
+    """A client-supplied id -> an absolute checkpoint path, or ('', reason).
+
+    Never trusts a path from the browser: the id must match an entry this server
+    already published, and its engine must be the one the endpoint runs. '' means
+    "use whatever the config says", which is the pre-picker behaviour and the
+    right answer when the browser sends nothing.
+    """
+    model_id = (model_id or '').strip()
+    if not model_id:
+        return '', ''
+    for m in _pose_score_models():
+        if m['id'] == model_id:
+            if m['engine'] != engine:
+                return '', ('%s is a %s checkpoint; it cannot be run by the %s scorer'
+                            % (m['label'], m['engine'], engine))
+            if not m['ok']:
+                return '', (m['why'] or ('%s is not runnable on this server' % m['label']))
+            return m['path'], ''          # '' path = the script's own default
+    return '', 'unknown model id: %s' % model_id

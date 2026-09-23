@@ -539,6 +539,18 @@
     bonds.forEach((b,k)=>{
       if(order[k]!==1)return;
       const ea=P(b[0]).el, eb=P(b[1]).el; if(ea==='H'||eb==='H')return;
+      /* A bond with BOTH ends inside a planar ring has already been decided by
+         pass B: that pass chose the ring's Kekulé rotation, and the bonds it
+         left single are single *because of that choice*, not because they were
+         missed. Letting pass C revisit them re-doubles the other half of every
+         aromatic ring the moment the atoms have spare valence — which is exactly
+         what happens for a HYDROGEN-FREE ring, where each carbon is 2-coordinate
+         and so starts with cap 2 instead of 1. A benzene straight out of a
+         crystal structure came out with all six bonds double: an impossible
+         valence, and the same class of bug the valence cap was added to kill.
+         Molecules that carry their hydrogens were never affected, which is why
+         this survived — docked poses have H, co-crystallised ligands do not. */
+      if(inRing.has(b[0])&&inRing.has(b[1]))return;
       const key=pk(b[0],b[1]); if(_PC_REF[key]==null)return;
       left.push([D(b[0],b[1])-_PC_REF[key],k,D(b[0],b[1]),key]);
     });
@@ -582,6 +594,130 @@
     return {order:order, charge:charge};
   }
   function perceivePdbBondOrders(atoms, bonds){ return perceivePdbChemistry(atoms,bonds).order; }
+
+  /* ==========================================================================
+     PROTEIN BOND ORDERS — why the pocket used to have no aromatic rings
+     --------------------------------------------------------------------------
+     PG.init.site() built its sticks from `inferBonds(draw)`, which returns bare
+     [i, j] pairs. stickTraces() reads an ARRAY bond as `order = 1` (see the
+     `Array.isArray(pr) ? 1 : (pr.order || 1)` line), so every protein bond —
+     the PHE/TYR/TRP/HIS rings, every backbone C=O, every Asp/Glu carboxylate,
+     every Arg guanidinium — drew as a single stick. The uploaded-LIGAND path
+     never had that problem because ligandFromPDB() runs perceivePdbBondOrders()
+     and hands stickTraces {a, b, order} objects, which is what puts the inner
+     parallel line inside a ring. Same renderer, two different bond shapes: the
+     receptor was simply never told what its bond orders were.
+
+     Templates first, geometry second, and the order matters:
+
+       · A protein pocket is a TRUNCATED selection. `draw` is sliced by distance
+         to 1400 atoms, which cuts residues in half, and a severed side chain
+         has free valence that geometry perception will happily spend on a
+         double bond that does not exist. Standard residues are a closed set
+         with known Kekule structures, so look them up instead of guessing.
+       · PDB coordinates are 3 dp and often refined against a restraint library,
+         so C-N and C-O bond lengths inside a ring sit close to the single/double
+         midpoint _PC_REF/_PC_DBL discriminate on. Guessing is worst exactly
+         where it matters most.
+       · Anything the table does NOT know — a co-crystallised ligand, a cofactor,
+         a modified residue — falls through to perceivePdbChemistry(), i.e. the
+         identical code path the ligand gallery uses. That is the "display it
+         like the ligand" half, and it is why a HETATM ligand sitting in the
+         pocket now shows the same rings whether it is loaded as the receptor's
+         HETATM or picked as a ligand card.
+
+     Only ONE bond per aromatic ring pair is marked, i.e. a Kekule structure, not
+     a 1.5-order flag — stickTraces draws order 2 as a second parallel line, so a
+     benzene ring reads as the alternating-double picture people expect from the
+     ligand view. Inter-residue bonds (peptide C-N, phosphodiester P-O) stay
+     single, which is correct and also keeps a cut chain end from inventing one.
+     ========================================================================== */
+
+  /* Double bonds by residue, keyed on PDB atom names. Backbone C=O is added for
+     every amino acid separately (it is universal, so it does not belong here). */
+  const _RES_DBL = {
+    /* --- amino acids ---------------------------------------------------- */
+    ASP:[['CG','OD1']],  ASH:[['CG','OD1']],  ASN:[['CG','OD1']],
+    GLU:[['CD','OE1']],  GLH:[['CD','OE1']],  GLN:[['CD','OE1']],
+    ARG:[['CZ','NH1']],
+    /* HIS: both neutral tautomers put two doubles in the ring; which two depends
+       on where the proton sits. HID/HSD carry it on ND1, so their double is
+       CE1=NE2; everything else (HIS/HIE/HSE/HIP/HSP) is drawn ND1=CE1. */
+    HIS:[['ND1','CE1'],['CG','CD2']],  HIE:[['ND1','CE1'],['CG','CD2']],
+    HSE:[['ND1','CE1'],['CG','CD2']],  HIP:[['ND1','CE1'],['CG','CD2']],
+    HSP:[['ND1','CE1'],['CG','CD2']],
+    HID:[['CE1','NE2'],['CG','CD2']],  HSD:[['CE1','NE2'],['CG','CD2']],
+    /* PHE/TYR benzene: ring is CG-CD1-CE1-CZ-CE2-CD2-CG, so alternate on it. */
+    PHE:[['CG','CD1'],['CE1','CZ'],['CE2','CD2']],
+    TYR:[['CG','CD1'],['CE1','CZ'],['CE2','CD2']],
+    /* TRP indole: CG=CD1 in the pyrrole, then alternate round the benzo ring
+       CD2-CE2-CZ2-CH2-CZ3-CE3 (CD2/CE2 are the fusion atoms). */
+    TRP:[['CG','CD1'],['CE2','CZ2'],['CH2','CZ3'],['CE3','CD2']],
+    /* --- nucleotides (bases + phosphate); both PDB v2 and v3 O-P names ---- */
+    A:[['N1','C6'],['C2','N3'],['C4','C5'],['N7','C8']],
+    G:[['C6','O6'],['C2','N3'],['C4','C5'],['N7','C8']],
+    C:[['C2','O2'],['N3','C4'],['C5','C6']],
+    U:[['C2','O2'],['C4','O4'],['C5','C6']],
+    T:[['C2','O2'],['C4','O4'],['C5','C6']],
+  };
+  ['DA','DG','DC','DT','DU'].forEach(function(d){ _RES_DBL[d]=_RES_DBL[d.slice(1)]; });
+  /* phosphate P=O, appended to every nucleotide entry */
+  Object.keys(_RES_DBL).forEach(function(r){
+    if(r.length<=2) _RES_DBL[r]=_RES_DBL[r].concat([['P','OP1'],['P','O1P']]);
+  });
+
+  /* Residues whose bonds the table above fully describes. Anything NOT in here
+     goes to geometry perception. Metals and simple ions are listed so a distance
+     -inferred contact to one can never be promoted to a double bond, and HOH is
+     listed for the same reason (the parser drops waters, but a .pdb that names
+     them WAT inside a HETATM group can still reach here). */
+  const _RES_AA = {};
+  'ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL \
+ASH GLH HID HIE HIP HSD HSE HSP CYX CYM LYN MSE SEC PYL ACE NME NMA'
+    .split(/\s+/).forEach(function(r){ if(r) _RES_AA[r]=1; });
+  const _RES_STD = Object.assign({}, _RES_AA);
+  'A G C U T DA DG DC DT DU HOH WAT ZN MG NA CA K FE MN CU NI CO CL BR IOD SO4 PO4'
+    .split(/\s+/).forEach(function(r){ if(r) _RES_STD[r]=1; });
+
+  /* [i,j] pairs -> {a,b,order} objects, so stickTraces draws the pocket with the
+     same multiple-bond geometry it draws a ligand with. */
+  function protBondOrders(atoms, bonds){
+    const out = bonds.map(function(pr){ return {a:pr[0], b:pr[1], order:1, type:'prot', ti:-1}; });
+    const nm = function(a){ return String((a&&a.name)||'').trim().toUpperCase(); };
+    const rn = function(a){ return String((a&&a.resn)||'').trim().toUpperCase(); };
+    const rk = function(a){ return (a.het?'H':'')+a.chain+'|'+a.resseq; };
+    const std = atoms.map(function(a){ return !!_RES_STD[rn(a)]; });
+    const rest = [];                                     // bonds the table cannot answer
+    for(let k=0;k<bonds.length;k++){
+      const i=bonds[k][0], j=bonds[k][1], A=atoms[i], B=atoms[j];
+      if(!A||!B) continue;
+      if(!std[i]||!std[j]){ rest.push(k); continue; }     // HETATM / modified residue -> geometry
+      if(rk(A)!==rk(B)) continue;                         // peptide C-N, phosphodiester P-O -> single
+      const r=rn(A), a1=nm(A), a2=nm(B);
+      if(_RES_AA[r] && ((a1==='C'&&a2==='O')||(a1==='O'&&a2==='C'))){ out[k].order=2; continue; }   // backbone carbonyl
+      const t=_RES_DBL[r]; if(!t) continue;
+      for(let q=0;q<t.length;q++){
+        if((t[q][0]===a1&&t[q][1]===a2)||(t[q][0]===a2&&t[q][1]===a1)){ out[k].order=2; break; }
+      }
+    }
+    /* Everything the table did not cover goes through the LIGAND path verbatim.
+       Perceive on a compact sub-molecule of just those atoms, so ring finding and
+       the valence cap see the HETATM's own connectivity and nothing else. */
+    if(rest.length){
+      const map={}, sub=[], subBonds=[];
+      rest.forEach(function(k){
+        [bonds[k][0],bonds[k][1]].forEach(function(i){
+          if(map[i]===undefined){ map[i]=sub.length; sub.push(atoms[i]); }
+        });
+      });
+      rest.forEach(function(k){ subBonds.push([map[bonds[k][0]], map[bonds[k][1]]]); });
+      try{
+        const ord=perceivePdbBondOrders(sub, subBonds);
+        rest.forEach(function(k,q){ out[k].order = ord[q] || 1; });
+      }catch(e){ /* perception is a nicety; single sticks are still correct-ish */ }
+    }
+    return out;
+  }
   /* ---- build a rigid ligand model straight from PDB atoms (for the uploaded-ligand
      gallery): real 3D coordinates, distance-inferred bonds, no torsion tree. It is
      rendered green by the shared pose path exactly like a SMILES-built ligand. ---- */
@@ -669,9 +805,19 @@
       else { seg(a,c,px*off,py*off,pz*off); seg(a,c,-px*off,-py*off,-pz*off); }   // triple: both sides
     });
     const traces=Object.keys(byCol).map(col=>({type:'scatter3d',mode:'lines',x:byCol[col].x,y:byCol[col].y,z:byCol[col].z,line:{color:col,width:width},hoverinfo:'skip',showlegend:false}));
+    /* ⛭ 3D Builder picking. An atom carrying `_i` is one the builder can select,
+       and `_i` is its index in the UNSTRIPPED array — so a pick still resolves to
+       the right atom after stripH() has renumbered everything for the H toggle.
+       hoverinfo MUST NOT be 'skip' on such a trace: Plotly's 'skip' suppresses
+       plotly_click as well as the hover label, so the picker would silently never
+       fire. Only _draw3D sets `_i`, and only while the panel is open, so nothing
+       changes for any other caller. */
+    const pick=atoms.some(a=>a&&a._i!=null);
     traces.push({type:'scatter3d',mode:'markers',x:atoms.map(a=>a.x),y:atoms.map(a=>a.y),z:atoms.map(a=>a.z),
       marker:{color:atoms.map(a=>elcol(a.el,ligC,cCol)),size:atoms.map(a=>a.el==='H'?mksz*0.55:(a.el==='C'?mksz:mksz*1.3)),line:{width:0}},
-      text:atoms.map(a=>(a.name||a.el)+(a.resn?(' · '+a.resn+a.resseq):'')),hoverinfo:ligC?'skip':'text',showlegend:false});
+      text:atoms.map(a=>(a.name||a.el)+(a.resn?(' · '+a.resn+a.resseq):'')),
+      customdata:pick?atoms.map(a=>(a&&a._i!=null)?a._i:null):undefined,
+      hoverinfo:pick?'text':(ligC?'skip':'text'),showlegend:false});
     return traces;
   }
   // dashed 3D line → on/off sub-segments
@@ -726,7 +872,7 @@
       res=res||{};
       try{
         if(res.box)cfgBox=res.box;
-        if(res.out_dir){var od=$('poseDaOutDir');if(od&&!od.value.trim())od.value=res.out_dir;var og=$('poseGignOutDir');if(og&&!og.value.trim())og.value=res.out_dir;}
+        if(res.out_dir){var od=$('poseDaOutDir');if(od&&!od.value.trim())od.value=res.out_dir;var og=$('poseGignOutDir');if(og&&!og.value.trim())og.value=res.out_dir;var oa=$('poseGatorOutDir');if(oa&&!oa.value.trim())oa.value=res.out_dir;}
         if(res.default_smile&&!L){var e=$('poseSmiles');if(e)e.value=res.default_smile;}
         if(!protein&&res.ok&&res.pdb){PG._applyProtein(PE.parsePDB(res.pdb),res.name||'receptor',res.pdb);}
       }catch(e){PG._miniLog('default config error: '+e.message,'#fb7185');}
@@ -815,7 +961,13 @@
                 '· only the new one survives this redraw (single `L` slot)');
         PG._prevLig=L;
       }
-      const ligAtoms=world.map((p,i)=>({x:p[0],y:p[1],z:p[2],el:L.atoms[i]}));
+      /* ⛭ While the 3D Builder is open the ligand's atoms carry their own index
+         (`_i`) and a label, which is what makes them clickable in the scene —
+         see stickTraces. Closed, this is exactly the object it always was. */
+      const _bldOn=!!(PG._bldr&&PG._bldr.open);
+      const ligAtoms=world.map((p,i)=>_bldOn
+        ? {x:p[0],y:p[1],z:p[2],el:L.atoms[i],_i:i,name:L.atoms[i]+(i+1)+(((L.CHG||[])[i])?((L.CHG[i]>0?'+':'')+L.CHG[i]):'')}
+        : {x:p[0],y:p[1],z:p[2],el:L.atoms[i]});
       let data=[];
       if(site&&!PG._hideProtein){
         if(opt.proteinAtoms){
@@ -823,10 +975,38 @@
           data=data.concat(stickTraces(pf.atoms,pf.bonds,false,5,2));
         }else data=data.concat(PG._siteTraces(site));
       }
-      data.push(boxTrace3D(box.center,box.size));
+      if(!_bldOn)data.push(boxTrace3D(box.center,box.size));                                   // ⛭ isolate: no docking box while editing
       const _nBefore=data.length;                                                              // DEBUG: mark where ligand traces start
       const _lf=PG._hideH?stripH(ligAtoms,L.BONDS):{atoms:ligAtoms,bonds:L.BONDS};
-      data=data.concat(stickTraces(_lf.atoms,_lf.bonds,true,7,3.2));
+      /* ⛭ Ball-and-stick while the builder is open. Not decoration: the ligand is
+         the only thing on screen, and a 3.2 px marker is a small click target in
+         a rotating 3D scene — bigger spheres are a picker that hits what you aim
+         at. Note Plotly sizes scatter3d markers in PIXELS, not data units, so
+         zooming far out makes any fixed size look bloated; that is why the value
+         only applies while the view is auto-framed on this one molecule. */
+      data=data.concat(_bldOn?stickTraces(_lf.atoms,_lf.bonds,true,7,14):stickTraces(_lf.atoms,_lf.bonds,true,7,3.2));
+
+      /* ⛭ SELECTION AND HOVER ARE DRAWN ON THE ATOMS THEMSELVES — no overlay.
+         They used to be two translucent halo traces sitting on top of the picked
+         atom. That looked right and broke picking: gl3d resolves a pick to the
+         TOPMOST object, and a trace marked hoverinfo:'skip' does not fall through
+         to whatever is behind it — it just suppresses the hover. So a selected
+         atom's own halo made that atom unclickable, and with clicks now toggling,
+         "click it again to deselect" could never fire. A big hover halo shadowed
+         its neighbours the same way.
+         Recolouring and enlarging the marker in the ligand's OWN trace has the
+         same read, adds no geometry to occlude anything, and makes both states a
+         single restyle of two arrays (see _bldrMarkPaint). */
+      if(_bldOn){
+        PG._bldr.ligIdx = data.length-1;                      // stickTraces puts its marker trace last
+        var _mk = data[PG._bldr.ligIdx] && data[PG._bldr.ligIdx].marker;
+        if(_mk && _mk.color && _mk.color.slice){
+          PG._bldr.baseCol  = _mk.color.slice();
+          PG._bldr.baseSize = _mk.size.slice();
+          var _st = PG._bldrMarkStyle();
+          if(_st){ _mk.color = _st.color; _mk.size = _st.size; }
+        }
+      } else if(PG._bldr){ PG._bldr.ligIdx=null; PG._bldr.baseCol=null; PG._bldr.baseSize=null; }
 
       /* ---- pinned ligands ------------------------------------------------
          The active ligand above lives in the single `L` slot and is drawn at
@@ -866,12 +1046,19 @@
       // CAMERA. Snapshot a *copy* of the live camera — never a live reference: Plotly owns and mutates
       // its own camera object during react, so holding the reference meant our "saved" camera turned
       // into the reset one, and writing it back is what snapped the view to its pre-rotation state.
-      if(!PG._styling){const c0=PG._camGet();if(c0){PG._cam=c0;PG._log('draw3D captured live cam ->',JSON.stringify(c0.eye));}}
+      /* The 3D Builder sets PG._camForce to re-frame on the lone ligand when it
+         opens, and to put the user's own view back when it closes. It has to go
+         through PG._cam rather than lay.scene.camera because `uirevision` is
+         unchanged between those draws, so Plotly keeps the user's camera and
+         ignores the layout value. One-shot: consumed here. */
+      if(PG._camForce){PG._cam=PG._camForce;PG._camForce=null;PG._log('draw3D: one-shot camera override ->',JSON.stringify(PG._cam.eye));}
+      else if(!PG._styling){const c0=PG._camGet();if(c0){PG._cam=c0;PG._log('draw3D captured live cam ->',JSON.stringify(c0.eye));}}
       if(PG._cam)lay.scene.camera=PG._camClone(PG._cam);
       PG._log('draw3D react: traces=',data.length,' savedCam=',PG._cam?JSON.stringify(PG._cam.eye):'null');
       PG._lastRev=rev;
       try{const pr=PG._safe(Plotly.react('poseBox3D',data,lay,{responsive:true,displayModeBar:false,displaylogo:false}),'react');
         PG._camBind();                                                                              // track the user's camera from now on
+        try{PG._bldrBind();}catch(e){}                                                              // ⛭ builder atom picking (idempotent, same shape as _camBind)
         if(pr&&pr.then)pr.then(function(){PG._camRestore();PG._dumpTraces('after-draw');});
         else {PG._camRestore();PG._dumpTraces('after-draw');}
       }catch(e){}
@@ -972,7 +1159,7 @@
     },
 
     /* ---- stage ③: Monte-Carlo + BFGS (illustrative) ---- */
-    mc:{sw:{clash:0.6,d0:2.5,center:0.4},best:null,bestScore:1e9,score:0,nstep:0,acc:0,T:1.2,steps:150,mutAmp:0.3,localIter:8,localAmp:0.12,intraW:0,intraCap:1000,scorer:'surrogate',searchScore:'surrogate',daPk:null,_daBusy:false,gignPk:null,_gignBusy:false,_running:false,_hist:[],_bhist:[],_ver:-1,_work:null,_srcLabel:'random',
+    mc:{sw:{clash:0.6,d0:2.5,center:0.4},best:null,bestScore:1e9,score:0,nstep:0,acc:0,T:1.2,steps:150,mutAmp:0.3,localIter:8,localAmp:0.12,intraW:0,intraCap:1000,scorer:'surrogate',searchScore:'surrogate',daPk:null,_daBusy:false,gignPk:null,_gignBusy:false,gatorPk:null,_gatorBusy:false,_running:false,_hist:[],_bhist:[],_ver:-1,_work:null,_srcLabel:'random',
       enter(){if(PG.mc._ver===PG._poseVer&&PG.mc._work)PG.mc._restore();else PG.mc.reset();},
       _restore(){var isV=PG.mc.searchScore==='vina';var pt=$('poseProcTitle');if(pt)pt.textContent=isV?'Vina ΔG (lower = better)':'Score (lower = better)';var ss=$('poseSearchScore');if(ss)ss.value=PG.mc.searchScore;var sc=$('poseSurrCard');if(sc)sc.style.display=isV?'none':'block';var vn=$('poseVinaSearchNote');if(vn)vn.style.display=isV?'flex':'none';var sel=$('poseMcScorer');if(sel)sel.value=PG.mc.scorer;PG.mc.setScorer(PG.mc.scorer);PG.mc.setT(PG.mc.T);PG.mc._reflectSW();var rb=$('poseMcRunBtn');if(rb)rb.textContent=(PG.mc.nstep>=PG.mc.steps?'✓ Done':(PG.mc.nstep>0?'▶ Continue':'▶ Run search'));PG.mc._draw();PG.mc._stats();},
       _reflectSW(){const set=(id,v)=>{var e=$(id);if(e&&document.activeElement!==e)e.value=v;};set('poseScwClash',PG.mc.sw.clash);set('poseScd0',PG.mc.sw.d0);set('poseScwCenter',PG.mc.sw.center);},
@@ -983,11 +1170,40 @@
       setT(t){PG.mc.T=t;document.querySelectorAll('#poseMcTempToggles [data-t]').forEach(b=>{const on=Math.abs(+b.dataset.t-t)<1e-6;b.style.borderColor=on?'#22d3ee':'#1e293b';b.style.background=on?'rgba(34,211,238,.1)':'#0b1120';b.style.color=on?'#22d3ee':'#94a3b8';});var v=$('poseMcTempVal');if(v)v.textContent=t.toFixed(1);},
       /* scorer selector: live search always uses the fast surrogate; DeepAtom evaluates the best pose on demand (server CNN) */
       setScorer(v){PG.mc.scorer=v;const da=(v==='deepatom');var b=$('poseDaScoreBtn');if(b)b.style.display=da?'inline-block':'none';var c=$('poseDaCard');if(c)c.style.display=da?'flex':'none';const gi=(v==='yupu_gign');var gb=$('poseGignScoreBtn');if(gb)gb.style.display=gi?'inline-block':'none';var gc=$('poseGignCard');if(gc)gc.style.display=gi?'flex':'none';if(gi&&PG.mc.gignPk==null)PG.mc._gignSet('idle - run the search, then score with GIGN',null,null);
+        const ga=(v==='gatoraffinity');var ab=$('poseGatorScoreBtn');if(ab)ab.style.display=ga?'inline-block':'none';var ac=$('poseGatorCard');if(ac)ac.style.display=ga?'flex':'none';if(ga&&PG.mc.gatorPk==null)PG.mc._gatorSet('idle — run the search, then score with GatorAffinity',null,null);
         if(da&&!PG.mc.daPk)PG.mc._daSet('idle — run the search, then score the best pose',null,null);},
       _daSet(status,pk,dg){var e;e=$('poseDaPk');if(e)e.textContent=(pk!=null?pk.toFixed(2):'—');e=$('poseDaDg');if(e)e.textContent=(dg!=null?dg.toFixed(2):'—');PG.mc.daPk=pk;if(status)PG._miniLog(status,pk!=null?'#34d399':'#94a3b8');},
-      _ligandPdb(coords){const R=(s,n)=>String(s).padStart(n);let out='';
-        for(let i=0;i<L.atoms.length;i++){const el=L.atoms[i],p=coords[i];const name=((el.length===1?' '+el:el)+'  ').slice(0,4);
+      /* `els` defaults to the live ligand's elements. The 3D Builder's SAR
+         comparison passes its own array so it can write a PDB for a ligand that
+         is NOT in the `L` slot (the pre-edit snapshot) without swapping the
+         global out from under everything else that reads it. */
+      _ligandPdb(coords,els,bonds){const R=(s,n)=>String(s).padStart(n);let out='';const A=els||L.atoms;
+        for(let i=0;i<A.length;i++){const el=A[i],p=coords[i];const name=((el.length===1?' '+el:el)+'  ').slice(0,4);
           out+='HETATM'+R(i+1,5)+' '+name+' LIG A'+R(1,4)+'    '+R(p[0].toFixed(3),8)+R(p[1].toFixed(3),8)+R(p[2].toFixed(3),8)+'  1.00  0.00          '+R(el.toUpperCase(),2)+'\n';}
+        /* CONECT records. A HETATM-only PDB carries NO connectivity, so anything
+           downstream that reads it with RDKit has to re-derive bonds from
+           distance — which is the step most likely to fail on a docked pose, and
+           the one the GIGN route's own error text calls out ("RDKit failing to
+           parse the pose"). We know the bonds exactly; write them.
+           Order is duplicated the standard way (a double bond lists the partner
+           twice) so bond ORDER survives too, which is what pose_chem.py's export
+           does for the same reason. Serials are 1-based to match the atom lines.
+           Omitted when no bond list is passed, so every existing caller is
+           byte-identical to before. */
+        const B=bonds||[];
+        if(B.length){
+          const nb=A.map(()=>[]);
+          B.forEach(function(b){
+            const a=(b.a!=null?b.a:b[0]), c=(b.b!=null?b.b:b[1]), o=Math.max(1,Math.min(3,(b.order||1)));
+            if(!(a>=0&&a<A.length&&c>=0&&c<A.length))return;
+            for(let k=0;k<o;k++){ nb[a].push(c+1); nb[c].push(a+1); }
+          });
+          for(let i=0;i<A.length;i++){
+            for(let k=0;k<nb[i].length;k+=4){                      // PDB allows 4 partners per CONECT line
+              out+='CONECT'+R(i+1,5)+nb[i].slice(k,k+4).map(v=>R(v,5)).join('')+'\n';
+            }
+          }
+        }
         return out+'END\n';},
       /* build + download the .pdb for the current ligand pose (the same pose DeepAtom scores) */
       /* compact creation timestamp used as the pose file name (no underscore), e.g. 20260623233859 */
@@ -1027,7 +1243,7 @@
         var od=$('poseDaOutDir');var outDir=od?od.value.trim():'';
         fetch('/pose/deepatom_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:PG.mc._ts(),smiles:(L.smiles||''),out_dir:outDir})})
           .then(r=>r.ok?r.json():null).then(res=>{PG.mc._daBusy=false;var b=$('poseDaScoreBtn');if(b)b.textContent='⚛ Score best pose';
-            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);
+            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);if(res&&res.conda_env)PG._miniLog('🅒 conda env:  '+res.conda_env,'#7dd3fc',true);
             if(res&&res.cwd)PG._miniLog('📂 cwd:  '+res.cwd,'#7dd3fc',true);
             if(res&&res.log)PG._miniLog('📝 debug log → '+res.log,'#a78bfa',true);
             if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
@@ -1044,13 +1260,31 @@
         var od=$('poseGignOutDir')||$('poseDaOutDir');var outDir=od?od.value.trim():'';
         fetch('/pose/gign_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:PG.mc._ts(),smiles:(L.smiles||''),out_dir:outDir})})
           .then(r=>r.ok?r.json():null).then(res=>{PG.mc._gignBusy=false;var b=$('poseGignScoreBtn');if(b)b.textContent='⚛ Score (GIGN)';
-            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);
+            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);if(res&&res.conda_env)PG._miniLog('🅒 conda env:  '+res.conda_env,'#7dd3fc',true);
             if(res&&res.cwd)PG._miniLog('📂 cwd:  '+res.cwd,'#7dd3fc',true);
             if(res&&res.log)PG._miniLog('📝 debug log → '+res.log,'#a78bfa',true);
             if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
               PG.mc._gignSet('scored ✓ '+(res.elapsed?('('+res.elapsed+')'):''),pk,dg);}
             else{PG.mc._gignSet((res&&res.err)||'GIGN unavailable on server',null,null);if(res&&res.stdout)PG._miniLog('── script output ──\n'+res.stdout,'#94a3b8',true);}})
           .catch(()=>{PG.mc._gignBusy=false;var b=$('poseGignScoreBtn');if(b)b.textContent='⚛ Score (GIGN)';PG.mc._gignSet('request failed (is the endpoint deployed?)',null,null);});},
+      _gatorSet(status,pk,dg){var e;e=$('poseGatorPk');if(e)e.textContent=(pk!=null?pk.toFixed(2):'—');e=$('poseGatorDg');if(e)e.textContent=(dg!=null?dg.toFixed(2):'—');PG.mc.gatorPk=pk;if(status)PG._miniLog(status,pk!=null?'#34d399':'#94a3b8');},
+      /* score the live pose with GatorAffinity: same two inputs GIGN and DeepAtom get — the posed ligand + the loaded
+         receptor. The server cuts the pocket, runs the ATOMICA block pipeline and the fine-tuned checkpoint. The model
+         predicts pK directly (pKd/pKi, the LP-PDBbind label), so ΔG is the same -1.36*pK the other two report. */
+      scoreGator(){if(!L){PG.mc._gatorSet('build a ligand first',null,null);return;}
+        if(!protein||!protein.raw){PG.mc._gatorSet('load a target protein (.pdb) first',null,null);return;}
+        if(PG.mc._gatorBusy)return;PG.mc._gatorBusy=true;var b=$('poseGatorScoreBtn');if(b)b.textContent='⏳ scoring…';PG.mc._gatorSet('scoring best pose with GatorAffinity (server)…',null,null);
+        const lig=PG.mc._ligandPdb(PG.mc._world(PG.mc.best||PG.mc._work));
+        var od=$('poseGatorOutDir')||$('poseGignOutDir')||$('poseDaOutDir');var outDir=od?od.value.trim():'';
+        fetch('/pose/gatoraffinity_score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ligand_pdb:lig,receptor_pdb:protein.raw,name:PG.mc._ts(),smiles:(L.smiles||''),out_dir:outDir})})
+          .then(r=>r.ok?r.json():null).then(res=>{PG.mc._gatorBusy=false;var b=$('poseGatorScoreBtn');if(b)b.textContent='⚛ Score (GatorAffinity)';
+            if(res&&res.cmd)PG._miniLog('▶ command:  '+res.cmd,'#7dd3fc',true);if(res&&res.conda_env)PG._miniLog('🅒 conda env:  '+res.conda_env,'#7dd3fc',true);
+            if(res&&res.cwd)PG._miniLog('📂 cwd:  '+res.cwd,'#7dd3fc',true);
+            if(res&&res.log)PG._miniLog('📝 debug log → '+res.log,'#a78bfa',true);
+            if(res&&res.ok){const pk=(res.pred_pk!=null?res.pred_pk:null);const dg=(res.deltaG!=null?res.deltaG:(pk!=null?-pk*1.36:null));
+              PG.mc._gatorSet('scored ✓ '+(res.elapsed?('('+res.elapsed+')'):''),pk,dg);}
+            else{PG.mc._gatorSet((res&&res.err)||'GatorAffinity unavailable on server',null,null);if(res&&res.stdout)PG._miniLog('── script output ──\n'+res.stdout,'#94a3b8',true);}})
+          .catch(()=>{PG.mc._gatorBusy=false;var b=$('poseGatorScoreBtn');if(b)b.textContent='⚛ Score (GatorAffinity)';PG.mc._gatorSet('request failed (is the endpoint deployed?)',null,null);});},
       _randPose(){const q=PE.randomQuat();return {off:[Math.random()*2-1,Math.random()*2-1,Math.random()*2-1],e:PE.q2e(q),tors:L.TORS.map(()=>(Math.random()*2-1)*Math.PI)};},
       _quat(p){return PE.eulerToQuat(p.e[0],p.e[1],p.e[2]);},
       _world(p){const base=PE.computePose(L,PG.mc._quat(p),[0,0,0],p.tors);const lc=[box.center[0]+p.off[0]*box.size*0.32,box.center[1]+p.off[1]*box.size*0.32,box.center[2]+p.off[2]*box.size*0.32];return base.map(q=>[q[0]+lc[0],q[1]+lc[1],q[2]+lc[2]]);},
@@ -1110,7 +1344,7 @@
         if(dS<0||Math.random()<Math.exp(-dS/PG.mc.T)){PG.mc._work=opt.pose;PG.mc.score=opt.score;PG.mc.acc++;if(opt.score<PG.mc.bestScore){PG.mc.bestScore=opt.score;PG.mc.best=PG.mc._copy(opt.pose);}}
         PG.mc._sync();PG.mc._hist.push(PG.mc.score);PG.mc._bhist.push(PG.mc.bestScore);if(PG.mc._hist.length>140){PG.mc._hist.shift();PG.mc._bhist.shift();}PG.mc._draw();PG.mc._stats();},
       run(){if(PG.mc._running){PG.mc._running=false;PG._stopAnim();var b=$('poseMcRunBtn');if(b)b.textContent='▶ Run search';return;}PG.mc._running=true;var b=$('poseMcRunBtn');if(b)b.textContent='⏸ Pause';PG.mc._loop();},
-      _loop(){if(!PG.mc._running)return;PG.mc.step();if(PG.mc.nstep>=PG.mc.steps){PG.mc._running=false;var b=$('poseMcRunBtn');if(b)b.textContent='✓ Done';PG.mc._work=PG.mc._copy(PG.mc.best);PG.mc.score=PG.mc.bestScore;PG.mc._sync();PG._poseSrc='searched';PG._bump();PG.mc._ver=PG._poseVer;PG.mc._draw();PG.mc._stats();PG.mc._autoSavePose();if(PG.mc.scorer==='deepatom')PG.mc.scoreDeepAtom();else if(PG.mc.scorer==='yupu_gign')PG.mc.scoreGign();return;}PG._raf=requestAnimationFrame(PG.mc._loop);},
+      _loop(){if(!PG.mc._running)return;PG.mc.step();if(PG.mc.nstep>=PG.mc.steps){PG.mc._running=false;var b=$('poseMcRunBtn');if(b)b.textContent='✓ Done';PG.mc._work=PG.mc._copy(PG.mc.best);PG.mc.score=PG.mc.bestScore;PG.mc._sync();PG._poseSrc='searched';PG._bump();PG.mc._ver=PG._poseVer;PG.mc._draw();PG.mc._stats();PG.mc._autoSavePose();if(PG.mc.scorer==='deepatom')PG.mc.scoreDeepAtom();else if(PG.mc.scorer==='yupu_gign')PG.mc.scoreGign();else if(PG.mc.scorer==='gatoraffinity')PG.mc.scoreGator();return;}PG._raf=requestAnimationFrame(PG.mc._loop);},
     },
 
     /* ---- stage: Vina — full AutoDock Vina empirical score on the current pose (weights editable) ----
@@ -1310,7 +1544,7 @@
           }catch(e){return null;}},
         _procReset(){
           const EG=PG.vina.eng;
-          EG._best=Infinity;EG._dg=null;EG._bestHist=[];EG._nImp=0;EG._liveAt=0;
+          EG._best=Infinity;EG._dg=null;EG._bestDg=null;EG._bestHist=[];EG._nImp=0;EG._liveAt=0;
           const p=$('poseProcPanel');if(p)p.style.display='block';
           const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
           const v=$('poseProcVal');if(v){v.textContent='—';v.style.color='#64748b';v.style.textShadow='none';}
@@ -1323,8 +1557,19 @@
           if(best==null||!isFinite(best)||!(best<EG._best-1e-9))return false;     // not a new minimum → leave it alone
           EG._best=best;EG._nImp++;
           const dg=EG._scoreConf(conf);                                           // the reportable ΔG
-          if(dg!=null){
-            EG._dg=dg;EG._bestHist.push(dg);
+          /* The improvement test above is on `best` — the search's own internal
+             score. What gets PLOTTED is `dg`, which _scoreConf recomputes for the
+             same conformation. They are different functions, so a step that
+             strictly improves `best` can report a WORSE ΔG, and a curve that
+             every label calls best-so-far ended up rising mid-run (…-7.0657 at
+             step 4, then -6.9711 at step 5).
+             A best-so-far series must be monotone in the quantity it displays,
+             so the plot and the headline are gated on `dg` improving. `best` and
+             `_nImp` keep tracking the search, which is what drives _procPose and
+             the sub-line — a step can still move the ligand without redrawing a
+             staircase that did not actually descend. */
+          if(dg!=null&&(EG._bestDg==null||dg<EG._bestDg-1e-9)){
+            EG._bestDg=dg;EG._dg=dg;EG._bestHist.push(dg);
             if(EG._bestHist.length>240)EG._bestHist.shift();                      // the sparkline is 184 px wide
             const t=$('poseProcTitle');if(t)t.textContent='Vina ΔG · live';
             const v=$('poseProcVal');
@@ -1652,7 +1897,10 @@
         let sel=[];Object.keys(byRes).forEach(k=>{const g=byRes[k];if(g.some(a=>dc(a)<R))sel=sel.concat(g);});
         let draw=sel;
         if(draw.length>1400){draw=sel.slice().sort((a,b)=>dc(a)-dc(b)).slice(0,1400);}
-        const bonds=inferBonds(draw);const traces=stickTraces(draw,bonds,false,5,2);const aromatics=protAromatics(draw);
+        // inferBonds returns bare [i,j] pairs, which stickTraces reads as order 1 —
+        // that is why the pocket had no aromatic rings while the ligand did.
+        // protBondOrders upgrades them to {a,b,order} the same way ligandFromPDB does.
+        const bonds=protBondOrders(draw,inferBonds(draw));const traces=stickTraces(draw,bonds,false,5,2);const aromatics=protAromatics(draw);
         const nres=Object.keys(byRes).filter(k=>byRes[k].some(a=>dc(a)<R)).length;
         const nhet=sel.filter(a=>a.het).length;
         protein._site={atoms:sel,drawAtoms:draw,bonds,traces,aromatics,nres,nhet};
@@ -3072,17 +3320,50 @@
             '</label>' +
           '</div>' +
 
-          '<button id="poseImportBtn" onclick="PoseGen.importConfirm()" title="Recursively scans the folder above (including subfolders) for .pdbqt / .pdb / .ent files and steps through them in the box, one at a time. Unzipped batches from the download button below are readable straight back in." style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Import &#8594; scan folder for poses</button>' +
+          '<button id="poseImportBtn" onclick="PoseGen.importConfirm()" title="Point it at a FOLDER and it scans recursively (including subfolders) for .pdbqt / .pdb / .ent and steps through them one at a time. Point it at a single pose file and it opens that one. Point it at a batch result &#8212; a run journal &lt;run&gt;.res.jsonl from pose.batch_dir, or a &#8595; .csv exported from the GIGN / DeepAtom batch &#8212; and it steps through exactly the poses that run scored, strongest pK first. Unzipped batches from the download button below are readable straight back in." style="width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Import &#8594; scan folder, file or batch result</button>' +
 
           '<div id="poseImpSummary" style="display:none;margin-top:7px;font-size:9.5px;color:#64748b;font-family:ui-monospace,monospace;line-height:1.55;"></div>' +
 
-          '<button id="poseImpDownload" onclick="PoseGen.importDownload()" title="Zip every file currently passing the filter, best pose only, as both .sdf and .pdb. Open the .sdf in Maestro: bond orders and formal charges are written out explicitly (rebuilt from the ligand SMILES where one can be found), so nothing has to be guessed from the coordinates. Also includes _manifest.csv ranked by score, _best_poses.sdf and _best_poses.pdb holding them all in one file." style="display:none;width:100%;margin-top:7px;padding:7px;border-radius:9px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;cursor:pointer;">&#11015; Download filtered batch (.pdb .zip)</button>' +
+          '<button id="poseImpDownload" onclick="PoseGen.importDownload()" title="Zip every file currently passing the filter, converted to PDB with only its best pose kept, plus a _manifest.csv ranked by score and _best_poses.pdb holding them all as one multi-model file." style="display:none;width:100%;margin-top:7px;padding:7px;border-radius:9px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;cursor:pointer;">&#11015; Download filtered batch (.pdb .zip)</button>' +
 
           '<div id="poseImpResult" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid #1e293b;">' +
             '<div style="display:flex;align-items:center;gap:6px;">' +
               '<button onclick="PoseGen.importStep(-1)" title="previous file" style="' + step + '">&#9664;</button>' +
               '<span id="poseImpCount" style="font-family:ui-monospace,monospace;font-size:11px;color:#67e8f9;min-width:54px;text-align:center;">0 / 0</span>' +
               '<button onclick="PoseGen.importStep(1)" title="next file" style="' + step + '">&#9654;</button>' +
+              /* ⛭ BUILD — opens the 3D Builder panel. This slot used to hold
+                 "▶ Play" (PoseGen.importPlay). That function is still defined and
+                 still works from the console; only its button is gone, so nothing
+                 that scripts it breaks. _importPlayLabel() no-ops safely because
+                 it starts with `var b = $('poseImpPlay'); if (!b) return;`.
+
+                 The id is poseBldrBtn, NOT poseBuildBtn: hub.html already owns
+                 #poseBuildBtn for "⌬ Build" (build a ligand from SMILES). Two
+                 elements sharing an id would make getElementById return whichever
+                 comes first in the document, so PoseGen.build()'s button and this
+                 one would silently fight over every lookup. */
+              '<button id="poseBldrBtn" onclick="PoseGen.builderToggle()" ' +
+                'title="3D Builder — edit the ligand in the box: element, bond order, bonds, hydrogens, formal charge" ' +
+                'style="margin-left:auto;position:relative;width:54px;height:46px;display:flex;flex-direction:column;' +
+                'align-items:center;justify-content:center;gap:2px;padding:3px 0 2px;border-radius:7px;border:1px solid #2a2f3a;' +
+                'background:#161a22;color:#e2e8f0;font-family:ui-monospace,monospace;cursor:pointer;">' +
+                /* crossed hammer + wrench, drawn axis-aligned inside rotated groups
+                   so the two heads stay square to their own handles */
+                '<svg viewBox="0 0 32 32" width="21" height="21" style="display:block;">' +
+                  '<g transform="rotate(-45 16 16)">' +                      /* hammer */
+                    '<rect x="14.6" y="12" width="2.8" height="16" rx="1.4" fill="#b98a3e"/>' +
+                    '<path d="M8.6 5.4h14.8v4.4a2 2 0 0 1-2 2H10.6a2 2 0 0 1-2-2z" fill="#e8b45c"/>' +
+                    '<rect x="8.6" y="3.2" width="14.8" height="2.6" rx="1.1" fill="#f2cd8b"/>' +
+                  '</g>' +
+                  '<g transform="rotate(45 16 16)">' +                       /* wrench */
+                    '<rect x="14.6" y="12" width="2.8" height="16" rx="1.4" fill="#8fa3bb"/>' +
+                    '<path d="M11.5 5.4a5 5 0 1 0 9 0l-2.6 2.9h-3.8z" fill="#b8c6d6"/>' +
+                    '<circle cx="16" cy="9.4" r="2" fill="#161a22"/>' +
+                  '</g>' +
+                '</svg>' +
+                '<span style="font-size:8px;font-weight:700;letter-spacing:.06em;line-height:1;">BUILD</span>' +
+                '<span style="position:absolute;bottom:3px;right:4px;font-size:6px;color:#5a6472;line-height:1;">&#9660;</span>' +
+              '</button>' +
               '<button id="poseImpPlay" onclick="PoseGen.importPlay()" title="play through every imported file, first &#8594; last" ' +
                 'style="margin-left:auto;padding:3px 11px;border-radius:7px;border:1px solid #14532d;background:rgba(11,17,32,.7);color:#34d399;font-family:ui-monospace,monospace;font-size:10px;font-weight:700;cursor:pointer;">&#9654; Play</button>' +
             '</div>' +
@@ -3819,7 +4100,7 @@
     var n = PG._imp.files.length;
     b.style.display = n ? 'block' : 'none';
     if (n && !PG._imp.zipping) {
-      b.innerHTML = '\u2B07 Download ' + n + ' filtered file' + (n === 1 ? '' : 's') + ' (.sdf .pdb .zip)';
+      b.innerHTML = '\u2B07 Download ' + n + ' filtered file' + (n === 1 ? '' : 's') + ' (.pdb .zip)';
     }
   };
 
@@ -3859,10 +4140,7 @@
           n: r.headers.get('X-Pose-Zip-Count'),
           skipped: r.headers.get('X-Pose-Zip-Skipped'),
           poses: r.headers.get('X-Pose-Zip-Poses'),
-          trunc: r.headers.get('X-Pose-Zip-Truncated') === '1',
-          exact: +(r.headers.get('X-Pose-Zip-Exact') || 0),
-          perceived: +(r.headers.get('X-Pose-Zip-Perceived') || 0),
-          geometry: +(r.headers.get('X-Pose-Zip-Geometry') || 0)
+          trunc: r.headers.get('X-Pose-Zip-Truncated') === '1'
         };
         return r.blob().then(function (blob) { return { blob: blob, meta: meta }; });
       })
@@ -3878,17 +4156,6 @@
         if (o.meta.poses && +o.meta.poses) msg += ' \u00b7 ' + o.meta.poses + ' best poses combined';
         if (o.meta.skipped && +o.meta.skipped) msg += ' \u00b7 ' + o.meta.skipped + ' unreadable, skipped';
         if (o.meta.trunc) msg += ' \u00b7 stopped at the size cap';
-        /* Say where the chemistry came from. "exact" means bond orders and
-           formal charges were rebuilt from the ligand's own SMILES; anything
-           else was perceived from the coordinates and is worth a look before
-           it is trusted in a figure. */
-        var chem = [];
-        if (o.meta.exact) chem.push(o.meta.exact + ' exact (from SMILES)');
-        if (o.meta.perceived) chem.push(o.meta.perceived + ' perceived');
-        if (o.meta.geometry) chem.push(o.meta.geometry + ' geometry-only');
-        /* _importStatus writes textContent, so this stays plain text. */
-        if (chem.length) msg += ' \u00b7 chemistry: ' + chem.join(' \u00b7 ') +
-                                ' \u2014 open the .sdf in Maestro for exact bond orders and charges';
         done(msg, o.meta.trunc ? '#fbbf24' : '#34d399');
       })
       .catch(function (e) { done('\u2717 download failed: ' + e.message, '#fb7185'); });
@@ -4167,9 +4434,21 @@
   /* mount on open (idempotent); stop playback on close */
   (function () {
     var _open = PG.open.bind(PG);
-    PG.open = function () { PG.init._uploadsLoaded = false; _open(); try { PG._reactInject(); } catch (e) {} };   // re-sync the gallery once per open
+    PG.open = function () { PG.init._uploadsLoaded = false; _open(); try { PG._reactInject(); } catch (e) {} try { PG._bldrBtnState(); } catch (e) {} };   // re-sync the gallery once per open
     var _close = PG.close.bind(PG);
-    PG.close = function () { try { PG._reactStop(); } catch (e) {} try { PG._importStop(); } catch (e) {} _close(); };
+    PG.close = function () {
+      try { PG._reactStop(); } catch (e) {}
+      try { PG._importStop(); } catch (e) {}
+      /* ⛭ Closing the modal must also close the builder and drop what it held:
+         the pre-edit snapshot, the SAR result, and the undo/redo stacks. The
+         plotly click binding is a flag on the graph div, so clear that too or the
+         next open would bind a second listener to the same element. */
+      try { if (PG._bldr && PG._bldr.open) PG.builderToggle(false);
+            if (PG._bldr) { PG._bldr.base = null; PG._bldr.basePose = null; PG._bldr.lastSar = null;
+                            PG._bldr.undo.length = 0; PG._bldr.redo.length = 0; }
+            var _gd = $('poseBox3D'); if (_gd) _gd._pgBldrBound = false; } catch (e) {}
+      _close();
+    };
   })();
 
   /* ======================================================================
@@ -4290,6 +4569,1173 @@
       }catch(e){PG._log('opacity update threw',e&&e.message);PG._styling=false;}
     }
     PG._redraw3D();
+  };
+
+  /* ==========================================================================
+     ⛭ 3D BUILDER — edit the active ligand in place
+     --------------------------------------------------------------------------
+     Replaces the old "▶ Play" button in the import stepper. PoseGen.importPlay()
+     is deliberately LEFT IN PLACE (and still works from the console) — only its
+     button is gone, so nothing that scripts it breaks.
+
+     WHAT IT EDITS. The single active ligand `L`, which is the same object the
+     pose path, the scorers and the exporters all read:
+
+         L.atoms[i]   element symbol          L.REF[i]   coordinates, relative
+         L.BONDS[k]   {a, b, order, …}                   to the molecule's own centre
+         L.CHG[i]     formal charge (added here; absent on ligands built elsewhere)
+         L.ROOT/TORS  torsion tree            L.N        rotatable-bond count
+
+     THE ONE RULE THAT MATTERS: a STRUCTURAL edit collapses the torsion tree.
+     ----------------------------------------------------------------------
+     TORS/TINFO/ROOT are index-based: every torsion carries a `moves` list of
+     atom indices. Delete an atom and every index after it shifts, so a tree that
+     is not rebuilt now rotates the WRONG atoms — silently, and only visibly once
+     someone drags a torsion. Rebuilding a correct tree needs the rotatable-bond
+     perception that lives on the server (§21: strict SMARTS, excludes amides,
+     t-Bu, terminal atoms), and this panel deliberately does not guess at it.
+
+     So anything that changes the atom or bond LIST makes the ligand rigid —
+     ROOT = every atom, TORS = [], N = 0, source = 'builder' — which is exactly
+     the shape ligandFromPDB() already produces for an uploaded pose, so every
+     downstream path handles it. Press ● Build to re-derive a real tree from
+     SMILES afterwards. Edits that touch neither list (element, formal charge,
+     and a bond order on a bond that was not rotatable) keep the tree intact.
+
+     PICKING. Plotly emits plotly_click on the ligand's marker trace, but ONLY
+     while that trace's hoverinfo is not 'skip' — 'skip' suppresses the event as
+     well as the label. stickTraces therefore switches to 'text' + customdata the
+     moment an atom carries `_i`, and _draw3D only sets `_i` while this panel is
+     open. Cost when it is closed: one `.some()` over the atom array.
+     ========================================================================== */
+
+  PG._bldr = {open:false, sel:[], elem:'C', undo:[], redo:[], base:null, menu:null,
+              view:null, hover:-1, ligIdx:null, baseCol:null, baseSize:null, dragging:false, pickDone:false,
+              lastSar:null,
+              /* --- scoring model -------------------------------------------
+                 `models` is the server's list (null until /pose/score_models
+                 answers); `model` is the chosen entry, an object shaped
+                 {id,label,engine,path,ok,why}.  Null means "the server's
+                 configured default", which is what every call did before this
+                 picker existed -- so a failed enumeration degrades to the old
+                 behaviour instead of blocking the button. */
+              models:null, model:null};
+
+  /* Read-only handle on the active ligand. `L` is module-private, which is right,
+     but every builder bug is "what does L look like now" — so expose the answer
+     rather than making people reconstruct it from the traces. Console + tests. */
+  PG._bldrL = function(){ return L; };
+
+  const _BLD_VAL = {H:1,B:3,C:4,N:3,O:2,F:1,Si:4,P:3,S:2,Cl:1,Se:2,Br:1,I:1};
+  const _BLD_XH  = {C:1.09,N:1.01,O:0.96,S:1.34,P:1.42,B:1.19,Si:1.48,Se:1.47};
+  const _BLD_ELEMS = ['C','N','O','S','P','F','Cl','Br','I','H'];
+
+  function _bldFormula(els){
+    var counts={}; els.forEach(function(e){counts[e]=(counts[e]||0)+1;});
+    var ORD=['C','H','N','O','S','P','F','Cl','Br','I'], f='';
+    ORD.forEach(function(e){ if(counts[e]) f+=e+(counts[e]>1?counts[e]:''); });
+    Object.keys(counts).sort().forEach(function(e){ if(ORD.indexOf(e)<0) f+=e+(counts[e]>1?counts[e]:''); });
+    return {formula:f, counts:counts};
+  }
+  function _bxc(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+
+  /* ---- panel chrome -------------------------------------------------------- */
+
+  PG.builderToggle = function(force){
+    var want = (force==null) ? !PG._bldr.open : !!force;
+    if(want && !L){ PG._miniLog('⛭ 3D Builder needs a ligand — build one from SMILES or pick a card first','#fbbf24'); return; }
+    PG._builderInject();
+    var p=$('poseBuilderPanel'); if(!p) return;
+    PG._bldr.open = want;
+    /* Enumerate once per panel-open, not once per process: a checkpoint dropped
+       into the directory while the tab is open should appear without a reload. */
+    if(want) PG._bldrLoadModels(false);
+    p.style.display = want ? 'block' : 'none';
+    /* "Revert" target, and the "before" half of the SAR comparison. The POSE is
+       captured alongside the structure: a structural edit collapses the torsion
+       tree, so PG.init.cur.tors is emptied and can no longer reproduce the
+       conformer the panel opened on. Without this the before-ligand would be
+       rebuilt at the wrong torsions and SAR would be comparing two things that
+       differ by more than the edit. */
+    if(want && !PG._bldr.base){
+      PG._bldr.base = PG._bldrSnap();
+      try{ PG._bldr.basePose = JSON.parse(JSON.stringify(PG.init.cur)); }catch(e){ PG._bldr.basePose = null; }
+    }
+    if(!want){ PG._bldr.sel.length=0; PG._bldr.hover=-1; PG._bldrMenu(null); }
+    PG._bldrIsolate(want);
+    PG._bldrBtnState();
+    PG._bldrSync();
+    try{ PG._redraw3D(); }catch(e){}                               // (re)tag the ligand trace for picking
+    PG._camForce = null;   // _draw3D consumes it; clear it here too so a no-op redraw (2D view, no protein) cannot leak it into a later one
+  };
+  PG.builderClose = function(){ PG.builderToggle(false); };
+
+  /* ---- isolate the ligand -------------------------------------------------
+     Opening the panel clears the scene down to the molecule being edited, and
+     closing it puts the view back exactly as it was found.
+
+     Only the three VIEW FLAGS are saved and restored here (protein / surface /
+     secondary structure), because they are the only isolation that is also a
+     user-facing toggle in the ☰ View menu — leave one of them flipped on close
+     and the menu would be lying about the scene. The docking box, the
+     interaction dashes and the pinned ligands are suppressed inside _draw3D
+     straight off PG._bldr.open instead: they have no flag of their own, so
+     there is nothing to save, and gating them on the live state means they come
+     back the moment the panel closes without any bookkeeping that could drift.
+
+     A note on what "restored" means: if you flip ☰ View › Protein atoms back on
+     WHILE the builder is open and then close it, the view returns to its
+     pre-open state, not to your mid-edit one. That is the behaviour asked for
+     ("restored to what it was") and it is also the only one that cannot leak an
+     isolation flag into a session where nothing looks isolated. */
+  /* The camera the isolated view re-frames to. Spelled out in full (up and center
+     as well as eye) because _camRestore relayouts to whatever PG._cam holds.
+
+     It is layout3D's default DIRECTION pulled back to |eye| ~ 1.9 instead of its
+     1.35, and the reason is worth recording. The eye is in NORMALISED scene units,
+     so its distance frames every molecule the same way regardless of SIZE — but
+     not regardless of SHAPE. aspectmode:'data' gives the scene box the data's own
+     proportions, and a long flat ligand seen down a 45-degree diagonal projects
+     wider than the fit: measured on a 15 x 9 x 9 A ligand, 1.05 and 1.35 both run
+     off the right edge, 1.75 just fits, 1.9 fits with margin. Anything tighter
+     looks better on a compact molecule and clips an extended one — and a reset
+     that hides part of the thing you are editing is worse than a roomy one. */
+  PG._BLD_CAM = {eye:{x:1.9,y:1.9,z:1.48}, up:{x:0,y:0,z:1}, center:{x:0,y:0,z:0}};
+  PG._bldrIsolate = function(on){
+    if(on){
+      if(PG._bldr.view) return;                                    // already isolated — never re-save
+      PG._bldr.view = {hideProtein:PG._hideProtein, showSurface:PG._showSurface, showSS:PG._showSS,
+                       cam:PG._camClone(PG._cam)};
+      PG._hideProtein = true; PG._showSurface = false; PG._showSS = false;
+      PG._camForce = PG._camClone(PG._BLD_CAM);                    // re-frame on the lone molecule
+    } else {
+      var v = PG._bldr.view; if(!v) return;
+      PG._hideProtein = v.hideProtein; PG._showSurface = v.showSurface; PG._showSS = v.showSS;
+      PG._camForce = v.cam || PG._camClone(PG._BLD_CAM);           // put the user's own view back
+      PG._bldr.view = null;
+    }
+    try{ PG._syncViewBtns(); }catch(e){}                           // the ☰ View menu reads these flags live
+    try{ var sn=$('poseSurfNote'); if(sn) sn.style.display=PG._showSurface?'block':'none';
+         var lg=$('poseSSLegend'); if(lg) lg.style.display=PG._showSS?'block':'none'; }catch(e){}
+  };
+
+  /* ---- hover highlight ----------------------------------------------------
+     Moves the halo trace pushed by _draw3D onto the atom under the cursor. This
+     is a 3-array Plotly.restyle on ONE trace, not a redraw: plotly_hover fires
+     on every mouse-move across the molecule, and rebuilding the scene at that
+     rate visibly stutters the orbit. Plotly's own hover label (the trace carries
+     `name` = element + number) supplies the text, so nothing here touches the
+     status line — that belongs to the selection. */
+  /* ======================================================================
+     NEVER MUTATE THE PLOT FROM INSIDE A PLOTLY EVENT HANDLER.
+     ----------------------------------------------------------------------
+     plotly_hover and plotly_click are emitted from within Plotly's own gl3d
+     pass. Calling Plotly.restyle / Plotly.react from the handler re-enters that
+     pass and tears the scene down while it is still iterating it; Plotly throws
+
+         TypeError: Cannot set properties of undefined (setting 'axes')
+
+     and the WebGL scene is dead from that point on — the molecule still shows,
+     but it will not rotate and nothing is clickable ever again. The first
+     version of this panel did exactly that in both handlers, which is why the
+     view froze the moment the cursor crossed an atom.
+
+     So every plot mutation the builder makes in response to a Plotly event goes
+     through this scheduler: out of the event via requestAnimationFrame, and
+     coalesced to at most one operation per frame (hover fires per mouse-move, so
+     an un-coalesced restyle would also fight the orbit even without the crash).
+     A queued redraw beats a queued hover, because a redraw repaints the halo on
+     its own.
+
+     Anything triggered by a PANEL BUTTON is a plain DOM event and does not need
+     this — those paths still call PG.stage()/_redraw3D() directly.
+     ====================================================================== */
+  PG._bldrQ = {hover:undefined, sel:false, redraw:false, raf:null};
+  PG._bldrSchedule = function(){
+    if(PG._bldrQ.raf) return;
+    var raf = window.requestAnimationFrame || function(f){ return setTimeout(f, 16); };
+    PG._bldrQ.raf = raf(function(){
+      PG._bldrQ.raf = null;
+      var q = PG._bldrQ;
+      var wantRedraw = q.redraw, wantSel = q.sel, hover = q.hover;
+      q.redraw = false; q.sel = false; q.hover = undefined;
+      try{
+        if(wantRedraw){ PG._redraw3D(); return; }        // a redraw restyles the markers itself
+        if(wantSel || hover !== undefined) PG._bldrMarkPaint();   // one restyle covers both states
+      }catch(e){ PG._log('builder deferred op failed:', e && e.message); }
+    });
+  };
+  /* Selected / hovered marker colours and sizes for the ligand trace, built from
+     the untouched base arrays stashed at draw time. Returns null when there is
+     nothing to style against. */
+  PG._BLD_SEL_COL = '#22d3ee';                       // picked  — cyan, matches the panel accent
+  PG._BLD_HOV_COL = '#f8fafc';                       // under the cursor — near-white, unmistakably different
+  PG._bldrMarkStyle = function(){
+    var base = PG._bldr.baseCol, bsz = PG._bldr.baseSize;
+    if(!base || !bsz) return null;
+    var gd = $('poseBox3D');
+    var t = (gd && gd.data && PG._bldr.ligIdx != null) ? gd.data[PG._bldr.ligIdx] : null;
+    var cd = (t && t.customdata) || null;             // drawn index -> atom index (H-strip aware)
+    var col = base.slice(), sz = bsz.slice();
+    var at = function(a){
+      if(cd) return cd.indexOf(a);
+      return (a >= 0 && a < col.length) ? a : -1;     // no H hidden -> drawn order is atom order
+    };
+    PG._bldr.sel.forEach(function(a){ var k = at(a); if(k >= 0){ col[k] = PG._BLD_SEL_COL; sz[k] = bsz[k] * 1.75; } });
+    var h = PG._bldr.hover;
+    if(h >= 0){ var k = at(h); if(k >= 0){ col[k] = PG._BLD_HOV_COL; sz[k] = bsz[k] * 1.95; } }
+    return {color: col, size: sz};
+  };
+  /* Repaint selection + hover without rebuilding the scene — see the note in
+     _draw3D on why a full react here breaks the NEXT click. */
+  PG._bldrMarkPaint = function(){
+    var gd = $('poseBox3D'), idx = PG._bldr.ligIdx;
+    if(!gd || !window.Plotly || idx == null || !gd.data || !gd.data[idx]) return;
+    if(!PG._plotReady()) return;
+    var st = PG._bldrMarkStyle(); if(!st) return;
+    var live = PG._camGet();
+    if(live) PG._cam = live;                          // carry the live camera or the view snaps back
+    try{ PG._safe(Plotly.update(gd, {'marker.color':[st.color], 'marker.size':[st.size]},
+      live ? {'scene.camera': PG._camClone(live)} : {}, [idx]), 'bldr-mark'); }
+    catch(e){ PG._log('marker update failed:', e && e.message); }
+  };
+
+  /* Record the hovered atom now (cheap, DOM only); paint it next frame.
+
+     THE CLEAR IS DELAYED ON PURPOSE. Plotly fires unhover → hover again for the
+     smallest cursor movement across a marker's edge, and honouring each one
+     makes the halo strobe as you nudge the mouse. Holding the clear for ~120 ms
+     and cancelling it when a new atom arrives means the highlight only vanishes
+     once the cursor has genuinely left the molecule. It also keeps PG._bldr.hover
+     — which the mouseup picker reads — alive across that same churn. */
+  PG._bldrHoverClear = function(){
+    if(PG._bldr.clearT){ clearTimeout(PG._bldr.clearT); PG._bldr.clearT = null; }
+  };
+  PG._bldrHover = function(i){
+    if(i >= 0){
+      PG._bldrHoverClear();
+      if(PG._bldr.hover === i) return;                             // same atom → nothing to do
+      PG._bldr.hover = i;
+      if(PG._bldr.dragging) return;                                // mid-orbit: don't touch the plot at all
+      PG._bldrQ.hover = i; PG._bldrSchedule();
+      return;
+    }
+    if(PG._bldr.hover < 0 || PG._bldr.clearT) return;              // already clear, or a clear is pending
+    PG._bldr.clearT = setTimeout(function(){
+      PG._bldr.clearT = null;
+      if(PG._bldr.hover < 0) return;
+      PG._bldr.hover = -1;
+      if(PG._bldr.dragging) return;
+      PG._bldrQ.hover = -1; PG._bldrSchedule();
+    }, 120);
+  };
+  PG._bldrBtnState = function(){
+    var b=$('poseBldrBtn'); if(!b) return;
+    var on=PG._bldr.open;
+    b.style.borderColor = on ? '#22d3ee' : '#2a2f3a';
+    b.style.background  = on ? 'rgba(34,211,238,.12)' : '#161a22';
+    b.style.boxShadow   = on ? '0 0 0 1px rgba(34,211,238,.25)' : 'none';
+  };
+
+  PG._builderInject = function(){
+    if($('poseBuilderPanel')) return;
+    var b3=$('poseBox3D'), pane=b3&&b3.parentElement; if(!pane) return;
+
+    /* button faces, matching the reference: flat dark cell, 1px hairline, the
+       icon carrying the colour rather than the chrome. */
+    var cell='display:flex;align-items:center;justify-content:center;gap:4px;height:30px;padding:0 6px;'
+            +'border-radius:6px;border:1px solid #2b313d;background:#1a1f28;color:#c7d2e0;'
+            +'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;'
+            +'cursor:pointer;line-height:1;white-space:nowrap;';
+    var wide=cell+'flex:1;justify-content:space-between;padding:0 8px;';
+    var sep ='width:1px;align-self:stretch;background:#2b313d;margin:0 3px;';
+    var chev='<span style="color:#7b8798;font-size:8px;margin-left:3px;">&#9660;</span>';
+    var T=function(id,style,title,inner,fn){
+      return '<button id="'+(id||'')+'" title="'+title+'" onclick="'+fn+'" style="'+style+'"'
+        +' onmouseover="this.style.background=\'#232a35\'" onmouseout="PoseGen._bldrRestore(this)">'+inner+'</button>';
+    };
+    /* tiny inline glyphs — drawn rather than fonted so they render identically
+       everywhere and keep their colour on a dark panel */
+    var g=function(inner,w){ return '<svg viewBox="0 0 16 16" width="'+(w||15)+'" height="'+(w||15)+'" style="display:block;">'+inner+'</svg>'; };
+    var G={
+      newmol : g('<rect x="2.5" y="1.5" width="8" height="11" rx="1.4" fill="none" stroke="#8fa3bb" stroke-width="1.2"/><path d="M11.4 9.2v4.4M9.2 11.4h4.4" stroke="#22c55e" stroke-width="1.9" stroke-linecap="round"/>'),
+      dup    : g('<rect x="4.4" y="1.6" width="8" height="10" rx="1.3" fill="none" stroke="#8fa3bb" stroke-width="1.2"/>'
+                +'<rect x="1.6" y="4.4" width="8" height="10" rx="1.3" fill="#1a1f28" stroke="#5b6b86" stroke-width="1.2"/>'),
+      undo   : g('<path d="M3.2 7.4a5 5 0 1 1 .6 4.2" fill="none" stroke="#9fb0c4" stroke-width="1.5" stroke-linecap="round"/><path d="M1.6 3.6v4h4" fill="none" stroke="#9fb0c4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'),
+      redo   : g('<path d="M12.8 7.4a5 5 0 1 0-.6 4.2" fill="none" stroke="#9fb0c4" stroke-width="1.5" stroke-linecap="round"/><path d="M14.4 3.6v4h-4" fill="none" stroke="#9fb0c4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'),
+      del    : g('<path d="M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2" stroke="#ef4444" stroke-width="2.1" stroke-linecap="round"/>'),
+      boltUp : g('<circle cx="8" cy="8" r="6.4" fill="none" stroke="#2f7d4e" stroke-width="1.2"/><path d="M8.8 3.4L5.2 8.6h2.4l-.6 4 3.8-5.2H8.3z" fill="#22c55e"/>'),
+      boltDn : g('<circle cx="8" cy="8" r="6.4" fill="none" stroke="#7f3030" stroke-width="1.2"/><path d="M8.8 3.4L5.2 8.6h2.4l-.6 4 3.8-5.2H8.3z" fill="#ef4444"/>'),
+      unbond : g('<path d="M2.2 11.6L6 7.8M10 5.8l3.8-3.8" stroke="#8fa3bb" stroke-width="1.8" stroke-linecap="round"/><path d="M9.4 9.4l4 4M13.4 9.4l-4 4" stroke="#ef4444" stroke-width="1.7" stroke-linecap="round"/>'),
+      bond   : g('<path d="M2.6 12.4L12.4 2.6" stroke="#8fa3bb" stroke-width="1.8" stroke-linecap="round"/><circle cx="2.6" cy="12.4" r="2" fill="#3b6cf6"/><circle cx="12.4" cy="2.6" r="2" fill="#22d3ee"/>'),
+      plus   : g('<circle cx="8" cy="8" r="6.4" fill="none" stroke="#2f7d4e" stroke-width="1.2"/><path d="M8 4.6v6.8M4.6 8h6.8" stroke="#22c55e" stroke-width="1.9" stroke-linecap="round"/>'),
+      minus  : g('<circle cx="8" cy="8" r="6.4" fill="none" stroke="#7f3030" stroke-width="1.2"/><path d="M4.6 8h6.8" stroke="#ef4444" stroke-width="1.9" stroke-linecap="round"/>'),
+      down   : g('<path d="M8 2.4v9.2M4.4 8.4L8 12l3.6-3.6" fill="none" stroke="#9fb0c4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
+      move   : g('<path d="M8 1.6v12.8M1.6 8h12.8" stroke="#f59e0b" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1.6L6.2 3.9h3.6zM8 14.4l-1.8-2.3h3.6zM1.6 8l2.3-1.8v3.6zM14.4 8l-2.3-1.8v3.6z" fill="#f59e0b"/>'),
+      pencil : g('<path d="M2.4 13.6l.7-2.8L10.4 3.5l2.1 2.1-7.3 7.3z" fill="#f59e0b"/><path d="M11 2.9l1.4-1.4 2.1 2.1-1.4 1.4z" fill="#c2822a"/>'),
+      frag   : g('<path d="M8 2.6l4.4 2.6v5.6L8 13.4 3.6 10.8V5.2z" fill="none" stroke="#67e8f9" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 2.6v10.8M3.6 5.2L12.4 10.8M12.4 5.2L3.6 10.8" stroke="#2a6f80" stroke-width="0.9"/>'),
+      place  : g('<rect x="2.5" y="1.5" width="8" height="11" rx="1.4" fill="none" stroke="#8fa3bb" stroke-width="1.2"/><path d="M9.6 11.4h4.6M12.2 9.2l2.2 2.2-2.2 2.2" fill="none" stroke="#22c55e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>')
+    };
+
+    var html =
+      '<div id="poseBuilderPanel" style="display:none;position:absolute;top:126px;left:10px;z-index:9;pointer-events:auto;'
+        +'width:292px;background:#12161e;border:1px solid #2b313d;border-radius:9px;'
+        +'box-shadow:0 14px 38px rgba(0,0,0,.66);font-family:\'Inter\',system-ui,sans-serif;user-select:none;">'
+
+        /* title bar — the drag handle */
+        + '<div id="poseBuilderBar" onmousedown="PoseGen._bldrDragStart(event)" '
+          + 'style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 11px;'
+          + 'background:#1b212b;border-bottom:1px solid #2b313d;border-radius:8px 8px 0 0;cursor:move;">'
+          + '<span style="font-size:11.5px;font-weight:600;color:#dbe3ee;letter-spacing:.01em;">3D Builder</span>'
+          + '<button onclick="PoseGen.builderClose()" title="close" style="width:18px;height:18px;display:flex;align-items:center;'
+            + 'justify-content:center;border:1px solid #333b48;border-radius:4px;background:#232a35;color:#93a1b3;'
+            + 'font-size:12px;line-height:1;cursor:pointer;">&times;</button>'
+        + '</div>'
+
+        + '<div style="padding:8px;display:flex;flex-direction:column;gap:5px;">'
+
+          /* ---- row 1: structure + history ---- */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + T('', cell+'width:34px;padding:0;', 'Revert every builder edit back to the ligand as it was when the panel opened', G.newmol, 'PoseGen.builderRevert()')
+            + T('', cell+'width:34px;padding:0;opacity:.5;', 'Duplicate structure — not wired to the pose model yet', G.dup, 'PoseGen._bldrTodo(\'Duplicate structure\')')
+            + T('', cell+'width:34px;padding:0;opacity:.5;', 'Copy to a new entry — not wired to the pose model yet', G.frag, 'PoseGen._bldrTodo(\'Copy to new entry\')')
+            + T('', cell+'width:34px;padding:0;opacity:.5;', 'Place the edited structure into the workspace — not wired yet', G.place, 'PoseGen._bldrTodo(\'Place structure\')')
+            + '<div style="'+sep+'"></div>'
+            + T('poseBldUndo', cell+'width:34px;padding:0;', 'Undo the last edit', G.undo, 'PoseGen.builderUndo()')
+            + T('poseBldRedo', cell+'width:34px;padding:0;', 'Redo', G.redo, 'PoseGen.builderRedo()')
+          + '</div>'
+
+          /* ---- row 2: delete / element / bond order / other ---- */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + T('poseBldDel', cell+'width:34px;padding:0;', 'Delete the selected atom(s) and every bond that touched them', G.del, 'PoseGen.builderDelete()')
+            + T('poseBldElem', cell+'width:52px;padding:0 5px;', 'Change the selected atom(s) to this element — click the arrow to pick another',
+                '<span id="poseBldElemLbl" style="color:#e2e8f0;font-size:12px;">C</span>'+chev, 'PoseGen._bldrMenu(\'elem\',event)')
+            + T('poseBldUp', cell+'width:34px;padding:0;', 'Raise the selected bond one order (single → double → triple)', G.boltUp, 'PoseGen.builderBondOrder(1)')
+            + T('poseBldDn', cell+'width:34px;padding:0;', 'Lower the selected bond one order', G.boltDn, 'PoseGen.builderBondOrder(-1)')
+            + T('', wide, 'Hydrogens, charges and the rest', '<span>Other Edits</span>'+chev, 'PoseGen._bldrMenu(\'other\',event)')
+          + '</div>'
+
+          /* ---- row 3: bonds / charge / H ---- */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + T('poseBldBreak', cell+'width:34px;padding:0;', 'Break the bond between the two selected atoms', G.unbond, 'PoseGen.builderBreakBond()')
+            + T('poseBldMake',  cell+'width:34px;padding:0;', 'Bond the two selected atoms', G.bond, 'PoseGen.builderMakeBond()')
+            + T('', cell+'width:34px;padding:0;', 'Formal charge +1 on the selected atom(s)', G.plus,  'PoseGen.builderCharge(1)')
+            + T('', cell+'width:34px;padding:0;', 'Formal charge −1 on the selected atom(s)', G.minus, 'PoseGen.builderCharge(-1)')
+            + T('', cell+'width:34px;padding:0;color:#e2e8f0;font-size:12.5px;', 'Add hydrogens to fill every open valence', 'H', 'PoseGen.builderAddH()')
+            + T('', cell+'width:34px;padding:0;opacity:.5;', 'Clean up geometry — needs a force field, not wired', G.down, 'PoseGen._bldrTodo(\'Clean up geometry\')')
+          + '</div>'
+
+          /* ---- row 4: modes ---- */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + T('', wide+'opacity:.5;', 'Translate / rotate a fragment — not wired', G.move+'<span style="margin-left:5px;">Move</span>'+chev, 'PoseGen._bldrTodo(\'Move\')')
+            + T('', wide+'opacity:.5;', 'Fragment library — not wired', '<span>Add Fragments</span>'+chev, 'PoseGen._bldrTodo(\'Add Fragments\')')
+            + T('', cell+'opacity:.5;', 'Draw new atoms and bonds by clicking — not wired', G.pencil+'<span style="margin-left:4px;">Draw</span>', 'PoseGen._bldrTodo(\'Draw\')')
+          + '</div>'
+
+          /* ---- row 4b: which trained model scores the ligand ------------------
+             Full width, because the label is a checkpoint name and truncating it
+             to a 34px cell would make two checkpoints from the same sweep
+             indistinguishable. Not dimmed: unlike the row above it, this one is
+             wired. */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + T('poseBldModel', wide,
+                'Which trained model scores this ligand: GIGN, GatorAffinity, or a retrained DeepAtom checkpoint',
+                '<span id="poseBldModelLbl" style="overflow:hidden;text-overflow:ellipsis;max-width:210px;">Model — loading…</span>'+chev,
+                'PoseGen._bldrMenu(\'model\',event)')
+          + '</div>'
+
+          /* ---- row 5: SAR ----------------------------------------------------
+             Violet rather than slate, because this is the one button in the panel
+             that does not edit the molecule — it asks the server what the edit
+             was worth. Same colour family as the ⚛ Score (GIGN) button it calls,
+             so the two read as the same kind of action. data-bg keeps that colour
+             through _bldrRestore. */
+          + '<div style="display:flex;gap:5px;align-items:center;">'
+            + '<button id="poseBldSar" onclick="PoseGen.builderSAR()" data-bg="rgba(124,58,237,.16)" '
+              + 'title="Structure-activity: score this ligand with GIGN twice — as the panel found it and as it is now — and report the change in predicted affinity. Needs a loaded receptor and at least one edit." '
+              + 'style="' + cell + 'flex:1;justify-content:center;border-color:#6d28d9;background:rgba(124,58,237,.16);color:#c4b5fd;" '
+              + 'onmouseover="this.style.background=\'rgba(124,58,237,.30)\'" onmouseout="PoseGen._bldrRestore(this)">'
+              + '<span>&#9883; SAR</span>'
+              + '<span id="poseBldSarWhat" style="color:#8b5cf6;font-size:9px;font-weight:600;margin-left:7px;">before &#8594; after</span>'
+            + '</button>'
+          + '</div>'
+
+          /* ---- selection readout ---- */
+          + '<div id="poseBldStatus" style="margin-top:2px;padding:5px 7px;border-radius:6px;background:#0b1017;'
+            + 'border:1px solid #232a35;font-family:ui-monospace,monospace;font-size:9.5px;color:#7c8a9c;line-height:1.5;min-height:26px;">'
+            + 'click atoms in the 3D view to select them &#183; clicks add up' + '</div>'
+
+          /* ---- download the edited ligand ----------------------------------
+             Directly under the status line, because that is where the SAR
+             verdict lands and "that edit scored better — now give me the file"
+             is the move that follows it. Green: the only button in this panel
+             that hands you something to take away. */
+          + '<div style="display:flex;gap:5px;align-items:center;margin-top:1px;">'
+            + '<button id="poseBldDl" onclick="PoseGen.builderDownload()" data-bg="rgba(16,185,129,.13)" '
+              + 'title="Download the edited ligand as a .pdb at its current pose, with CONECT records so the bond orders survive the round trip" '
+              + 'style="' + cell + 'flex:1;justify-content:center;border-color:#146c52;background:rgba(16,185,129,.13);color:#6ee7b7;" '
+              + 'onmouseover="this.style.background=\'rgba(16,185,129,.26)\'" onmouseout="PoseGen._bldrRestore(this)">'
+              + '<span>&#11015; Download ligand</span>'
+              + '<span style="color:#34d399;font-size:9px;font-weight:600;margin-left:7px;">.pdb</span>'
+            + '</button>'
+          + '</div>'
+        + '</div>'
+
+        /* ---- dropdown, reused by both menus (hidden, never removed — G52) ---- */
+        + '<div id="poseBldMenu" style="display:none;position:absolute;z-index:11;min-width:150px;background:#161c25;'
+          + 'border:1px solid #333b48;border-radius:7px;padding:4px;box-shadow:0 10px 26px rgba(0,0,0,.6);"></div>'
+      + '</div>';
+
+    var wrap=document.createElement('div');
+    wrap.innerHTML=html;
+    while(wrap.firstChild) pane.appendChild(wrap.firstChild);
+  };
+
+  /* Restore a tool button's resting background on mouseout. Reads data-bg so a
+     button that is not the default slate (SAR is violet, to read as "scoring"
+     rather than "editing") does not get repainted grey the first time the cursor
+     leaves it. */
+  PG._bldrRestore=function(el){ el.style.background=(el.getAttribute('data-bg')||'#1a1f28'); };
+
+  /* ---- drag ---------------------------------------------------------------
+     Listeners are added on mousedown and removed on mouseup, and the panel node
+     is hidden rather than removed, so neither can accumulate (G52). */
+  PG._bldrDragStart=function(ev){
+    if(ev.target && ev.target.tagName==='BUTTON') return;
+    var p=$('poseBuilderPanel'); if(!p) return;
+    var r=p.getBoundingClientRect(), pr=p.parentElement.getBoundingClientRect();
+    var dx=ev.clientX-r.left, dy=ev.clientY-r.top;
+    var move=function(e){
+      var x=e.clientX-pr.left-dx, y=e.clientY-pr.top-dy;
+      x=Math.max(0,Math.min(x, pr.width-r.width)); y=Math.max(0,Math.min(y, pr.height-r.height));
+      p.style.left=x+'px'; p.style.top=y+'px'; p.style.right='auto'; p.style.bottom='auto';
+    };
+    var up=function(){ document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); };
+    document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+    ev.preventDefault();
+  };
+
+  /* ---- dropdown menus ------------------------------------------------------ */
+  PG._bldrMenu=function(kind,ev){
+    var m=$('poseBldMenu'); if(!m) return;
+    if(!kind || PG._bldr.menu===kind){ m.style.display='none'; PG._bldr.menu=null; return; }
+    PG._bldr.menu=kind;
+    var item=function(label,fn,note){
+      return '<button onclick="PoseGen._bldrMenu(null);'+fn+'" style="display:flex;width:100%;box-sizing:border-box;'
+        +'align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:5px 8px;border:none;border-radius:5px;'
+        +'background:none;color:#cbd5e1;font-family:ui-monospace,monospace;font-size:10.5px;cursor:pointer;"'
+        +' onmouseover="this.style.background=\'#232a35\'" onmouseout="this.style.background=\'none\'">'
+        +'<span>'+label+'</span>'+(note?'<span style="color:#5c6a7d;font-size:9px;">'+note+'</span>':'')+'</button>';
+    };
+    if(kind==='model'){
+      /* One row per checkpoint the server is willing to run. An entry the server
+         marked not-ok is still LISTED, greyed, with its reason -- a checkpoint
+         that silently vanishes from this menu is indistinguishable from one that
+         was never dropped in the directory. */
+      var ms = PG._bldr.models;
+      if(ms === null){
+        m.innerHTML = '<div style="padding:6px 8px;color:#7b8798;font-family:ui-monospace,monospace;'
+          + 'font-size:10px;">loading checkpoints…</div>';
+        PG._bldrLoadModels(true);
+      } else if(!ms.length){
+        m.innerHTML = '<div style="padding:6px 8px;color:#fbbf24;font-family:ui-monospace,monospace;'
+          + 'font-size:10px;line-height:1.5;">no checkpoints found.<br>Set pose.gign_model and '
+          + 'pose.deepatom_ckpt_dir in config/input_routes.yml.</div>';
+      } else {
+        var cur = PG._bldr.model, eng = null, out = [];
+        ms.forEach(function(x){
+          if(x.engine !== eng){
+            eng = x.engine;
+            out.push('<div style="padding:5px 8px 3px;color:#5c6a7d;font-family:ui-monospace,monospace;'
+              + 'font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">'
+              + ({gign:'GIGN', gatoraffinity:'GatorAffinity', deepatom:'DeepAtom'}[eng] || eng)
+              + '</div>');
+          }
+          var on = !!(cur && cur.id === x.id);
+          out.push('<button onclick="PoseGen._bldrMenu(null);PoseGen._bldrSetModel(\''
+            + x.id.replace(/'/g, "\\'") + '\')" title="' + (x.ok ? x.path : (x.why || 'unavailable'))
+            + '" style="display:flex;width:100%;box-sizing:border-box;align-items:center;'
+            + 'justify-content:space-between;gap:10px;text-align:left;padding:5px 8px;border:none;'
+            + 'border-radius:5px;background:' + (on ? 'rgba(34,211,238,.12)' : 'none')
+            + ';color:' + (x.ok ? (on ? '#67e8f9' : '#cbd5e1') : '#6b7280')
+            + ';font-family:ui-monospace,monospace;font-size:10.5px;cursor:pointer;"'
+            + ' onmouseover="this.style.background=\'#232a35\'"'
+            + ' onmouseout="this.style.background=\'' + (on ? 'rgba(34,211,238,.12)' : 'none') + '\'">'
+            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+            + (on ? '&#10003; ' : '') + x.label + '</span>'
+            + '<span style="color:#5c6a7d;font-size:9px;white-space:nowrap;">'
+            + (x.ok ? (x.note || '') : 'unavailable') + '</span></button>');
+        });
+        m.innerHTML = out.join('');
+      }
+    } else if(kind==='elem'){
+      m.innerHTML='<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px;">'
+        + _BLD_ELEMS.map(function(e){
+            var on=(PG._bldr.elem===e);
+            return '<button onclick="PoseGen._bldrMenu(null);PoseGen.builderSetElem(\''+e+'\')" title="set the selected atom(s) to '+e+'" '
+              +'style="padding:5px 0;border-radius:5px;border:1px solid '+(on?'#0e7490':'#2b313d')+';background:'+(on?'rgba(34,211,238,.14)':'#1a1f28')
+              +';color:'+(on?'#67e8f9':'#cbd5e1')+';font-family:ui-monospace,monospace;font-size:11px;font-weight:700;cursor:pointer;">'+e+'</button>';
+          }).join('')
+        + '</div>';
+    } else {
+      m.innerHTML =
+          item('Add hydrogens','PoseGen.builderAddH()','fill valence')
+        + item('Remove hydrogens','PoseGen.builderRemoveH()','all H')
+        + item('Formal charge +1','PoseGen.builderCharge(1)')
+        + item('Formal charge −1','PoseGen.builderCharge(-1)')
+        + item('Clear formal charges','PoseGen.builderClearCharge()')
+        + '<div style="height:1px;background:#2b313d;margin:4px 2px;"></div>'
+        + item('Select all atoms','PoseGen.builderSelectAll()')
+        + item('Clear selection','PoseGen.builderClearSel()')
+        + '<div style="height:1px;background:#2b313d;margin:4px 2px;"></div>'
+        + item('Revert all edits','PoseGen.builderRevert()','since open');
+    }
+    var host=ev&&ev.currentTarget, p=$('poseBuilderPanel');
+    if(host&&p){ var hr=host.getBoundingClientRect(), pr=p.getBoundingClientRect();
+      m.style.left=Math.max(2,Math.min(hr.left-pr.left, pr.width-158))+'px';
+      m.style.top=(hr.bottom-pr.top+4)+'px'; }
+    m.style.display='block';
+  };
+
+  /* ---- scoring model -------------------------------------------------------
+     The picker chooses BOTH the engine and the checkpoint, because they are not
+     independent: GPLA.pt is a GIGN graph network and a DeepAtom .pth.tar is a
+     24-channel voxel CNN, so each only runs under its own scorer. The server
+     enumerates what it is actually willing to run; this side never invents a
+     path. */
+  PG._bldrLoadModels = function(reopen){
+    return fetch('/pose/score_models')
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(res){
+        var ms = (res && res.models) || [];
+        PG._bldr.models = ms;
+        /* Keep an explicit choice across reloads; otherwise take the server's
+           default, which is the first runnable entry. */
+        var keep = PG._bldr.model && ms.filter(function(x){ return x.id === PG._bldr.model.id; })[0];
+        PG._bldr.model = keep || ms.filter(function(x){ return x.ok; })[0] || null;
+        PG._bldrModelLabel();
+        if(reopen && PG._bldr.menu === 'model'){ PG._bldr.menu = null; PG._bldrMenu('model', null); }
+        return ms;
+      })
+      .catch(function(){
+        PG._bldr.models = [];
+        PG._bldrModelLabel();
+        return [];
+      });
+  };
+
+  PG._bldrSetModel = function(id){
+    var x = (PG._bldr.models || []).filter(function(e){ return e.id === id; })[0];
+    if(!x) return;
+    if(!x.ok){ PG._bldrSay(x.why || (x.label + ' is not runnable on this server'), '#fbbf24'); return; }
+    PG._bldr.model = x;
+    PG._bldrModelLabel();
+    PG._bldrSay('scoring model: ' + x.label, '#67e8f9');
+    PG._miniLog('\u269b scoring model \u2192 ' + x.label + '  [' + x.engine + ']  ' + x.path, '#67e8f9');
+  };
+
+  PG._bldrModelName = function(){
+    var x = PG._bldr.model;
+    return x ? x.label : 'the server default';
+  };
+
+  PG._bldrModelLabel = function(){
+    var el = $('poseBldModelLbl'); if(!el) return;
+    var x = PG._bldr.model;
+    el.textContent = x ? x.label : ((PG._bldr.models && !PG._bldr.models.length)
+                                    ? 'Model — none found' : 'Model — server default');
+    el.title = x ? x.path : '';
+    var sar = $('poseBldSar');
+    /* The sub-label names the machinery, because for DeepAtom the two SAR passes
+       go through /pose/deepatom_score -- the same endpoint, script and pipeline
+       the "Score best pose" button uses -- while GIGN goes through
+       /pose/gign_score. Same before/after comparison either way. */
+    var what = $('poseBldSarWhat');
+    if(what) what.textContent = (x && (x.engine === 'deepatom' || x.engine === 'gatoraffinity'))
+      ? 'score \u00d7 2' : 'before \u2192 after';
+    if(sar) sar.title = 'Structure-activity: score this ligand with ' + PG._bldrModelName()
+      + ' twice \u2014 as the panel found it and as it is now \u2014 and report the change in '
+      + 'predicted affinity. Needs a loaded receptor and at least one edit.';
+  };
+
+  /* ---- history ------------------------------------------------------------- */
+  PG._bldrSnap=function(){ try{ return JSON.stringify(L); }catch(e){ return null; } };
+  PG._bldrPush=function(){
+    var s=PG._bldrSnap(); if(s==null) return;
+    PG._bldr.undo.push(s); if(PG._bldr.undo.length>40) PG._bldr.undo.shift();
+    PG._bldr.redo.length=0;
+  };
+  PG._bldrLoad=function(json){
+    if(json==null) return false;
+    var o; try{ o=JSON.parse(json); }catch(e){ return false; }
+    L=o; PG._bldr.sel=PG._bldr.sel.filter(function(i){ return i<L.atoms.length; });
+    /* The pose has to stay dimensionally consistent with the restored torsion
+       tree. A structural edit empties both L.TORS and PG.init.cur.tors; undoing
+       it brings the tree back, and computePose would then read tors[i] as
+       undefined for every restored torsion and emit NaN coordinates. Put the
+       open-time torsions back when they fit, zeros otherwise. */
+    if(PG.init.cur){
+      var n=(L.TORS||[]).length, t=PG.init.cur.tors||[];
+      if(t.length!==n){
+        var bp=PG._bldr.basePose;
+        PG.init.cur.tors = (bp && bp.tors && bp.tors.length===n) ? bp.tors.slice() : new Array(n).fill(0);
+      }
+    }
+    return true;
+  };
+  PG.builderUndo=function(){
+    if(!PG._bldr.undo.length){ PG._bldrSay('nothing to undo','#fbbf24'); return; }
+    var cur=PG._bldrSnap();
+    if(PG._bldrLoad(PG._bldr.undo.pop())){ PG._bldr.redo.push(cur); PG._bldrApply('undo'); }
+  };
+  PG.builderRedo=function(){
+    if(!PG._bldr.redo.length){ PG._bldrSay('nothing to redo','#fbbf24'); return; }
+    var cur=PG._bldrSnap();
+    if(PG._bldrLoad(PG._bldr.redo.pop())){ PG._bldr.undo.push(cur); PG._bldrApply('redo'); }
+  };
+  PG.builderRevert=function(){
+    if(!PG._bldr.base){ PG._bldrSay('nothing to revert to','#fbbf24'); return; }
+    PG._bldrPush();
+    if(PG._bldrLoad(PG._bldr.base)) PG._bldrApply('reverted to the ligand as opened');
+  };
+
+  /* ---- shared plumbing ----------------------------------------------------- */
+  PG._bldrTrim=function(){                       // keep the parallel arrays the same length as atoms
+    var n=L.atoms.length;
+    if(!L.arom) L.arom=[];
+    if(!L.CHG)  L.CHG=[];
+    while(L.arom.length<n) L.arom.push(false);
+    while(L.CHG.length<n)  L.CHG.push(0);
+    L.arom.length=n; L.CHG.length=n;
+  };
+  /* Structural edit → the index-based torsion tree is no longer valid. See the
+     header: rebuilding one needs the server's rotatable-bond perception, so make
+     the ligand honestly rigid instead of shipping a tree that moves wrong atoms. */
+  PG._bldrGoRigid=function(){
+    L.ROOT=L.atoms.map(function(_,i){ return i; });
+    L.TORS=[]; L.TINFO=[]; L.N=0; L.source='builder';
+    if(PG.init.cur) PG.init.cur.tors=[];
+  };
+  PG._bldrApply=function(msg,quiet){
+    PG._bldr.hover=-1;                       // the atom list may have just changed under the cursor
+    /* Any edit invalidates the last SAR numbers — they describe a molecule that
+       no longer exists. Dropping them here keeps a stale score out of the
+       downloaded file's REMARK block. */
+    PG._bldr.lastSar=null;
+    PG._bldrTrim();
+    var f=_bldFormula(L.atoms); L.formula=f.formula; L.counts=f.counts;
+    PG._derived(); PG._invalidate(); PG._syncBoxInputs(); PG.stage(PG._stage);
+    PG._bldrSync();
+    if(msg&&!quiet) PG._miniLog('⛭ '+msg+' · '+L.formula+' · '+L.atoms.length+' atoms'
+      +(L.N?(' · '+L.N+' rotatable'):' · rigid (press ● Build to re-derive torsions)'),'#67e8f9');
+  };
+  PG._bldrSay=function(msg,col){
+    var s=$('poseBldStatus'); if(s){ s.textContent=msg; s.style.color=col||'#7c8a9c'; }
+  };
+  PG._bldrSync=function(){
+    var el=$('poseBldElemLbl'); if(el) el.textContent=PG._bldr.elem;
+    var u=$('poseBldUndo'); if(u) u.style.opacity=PG._bldr.undo.length?'1':'.45';
+    var r=$('poseBldRedo'); if(r) r.style.opacity=PG._bldr.redo.length?'1':'.45';
+    if(!PG._bldr.open||!L) return;
+    var s=PG._bldr.sel;
+    /* The gesture is spelled out at EVERY selection size, not just at zero. The
+       bond tools need two atoms, and a hint that disappears the moment you pick
+       the first one is a hint that is missing exactly when it is needed. */
+    var HINT='  ·  click another to add it, click a selected one to drop it';
+    if(!s.length){ PG._bldrSay('click atoms in the 3D view to select them  ·  clicks add up'); return; }
+    var tag=function(i){ return L.atoms[i]+(i+1)+(((L.CHG||[])[i])?((L.CHG[i]>0?'+':'')+L.CHG[i]):''); };
+    if(s.length===1){
+      var deg=0,val=0;
+      L.BONDS.forEach(function(b){ if(b.a===s[0]||b.b===s[0]){ deg++; val+=(b.order||1); } });
+      PG._bldrSay('selected '+tag(s[0])+' · '+deg+' bond'+(deg===1?'':'s')+' · valence '+val+HINT,'#9fb0c4');
+      return;
+    }
+    if(s.length===2){
+      var bi=PG._bldrBondIdx();
+      PG._bldrSay('selected '+tag(s[0])+' + '+tag(s[1])
+        +(bi>=0 ? (' · bonded, order '+(L.BONDS[bi].order||1)) : ' · not bonded'),'#9fb0c4');
+      return;
+    }
+    PG._bldrSay(s.length+' atoms selected · '+s.slice(0,6).map(tag).join(' ')+(s.length>6?' …':'')
+      +'  ·  Other Edits › Clear selection to start over','#9fb0c4');
+  };
+  PG._bldrBondIdx=function(){                    // the bond between exactly-two-selected atoms, else -1
+    var s=PG._bldr.sel; if(s.length!==2||!L) return -1;
+    for(var k=0;k<L.BONDS.length;k++){
+      var b=L.BONDS[k];
+      if((b.a===s[0]&&b.b===s[1])||(b.a===s[1]&&b.b===s[0])) return k;
+    }
+    return -1;
+  };
+  /* ==========================================================================
+     ⚛ SAR — what did that edit do to the predicted affinity?
+     --------------------------------------------------------------------------
+     Runs the SAME server scorer as "⚛ Score (GIGN)" (POST /pose/gign_score)
+     TWICE: once on the ligand as the panel found it, once on the ligand as it is
+     now, and reports the difference. That is the whole point — a single number
+     for an edited molecule says nothing without the number it replaced.
+
+     Two things make the comparison honest:
+
+       · Both ligands are posed through ONE code path (_bldrWorld) against the
+         same receptor, so the only thing that differs between the two requests
+         is the chemistry the user changed.
+       · The "before" ligand is rebuilt from the open-time snapshot AND its
+         open-time pose. Reusing the current pose would silently re-pose it at
+         collapsed torsions after any structural edit.
+
+     The calls are sequential, not parallel: the endpoint runs a model on the
+     server and PG.mc._gignBusy is a single flag, so two in flight would race
+     each other and the button state.
+     ========================================================================== */
+  PG._bldrWorld = function(lig, st){
+    if(!lig || !lig.REF || !st) return null;
+    var n = (lig.TORS || []).length;
+    var tors = (st.tors && st.tors.length === n) ? st.tors : new Array(n).fill(0);
+    var base = PE.computePose(lig, st.quat || [1,0,0,0], [0,0,0], tors);
+    var lc = PG.init.ligCenter(st);
+    return base.map(function(p){ return [p[0]+lc[0], p[1]+lc[1], p[2]+lc[2]]; });
+  };
+  PG._bldrGign = function(els, world, smiles, tag, bonds){
+    var pdb = PG.mc._ligandPdb(world, els, bonds);
+    var od = $('poseGignOutDir') || $('poseDaOutDir');
+    /* The endpoint follows the ENGINE, not the button: a DeepAtom checkpoint
+       handed to /pose/gign_score would be loaded by yupu_GIGN_pose.py and fail
+       on a state-dict mismatch, which reads as a corrupt file rather than as the
+       wrong scorer. `model` is a server-issued id, never a path from here. */
+    var mdl = PG._bldr.model;
+    var URL_FOR = {deepatom:'/pose/deepatom_score',
+                   gatoraffinity:'/pose/gatoraffinity_score',
+                   gign:'/pose/gign_score'};
+    var url = (mdl && URL_FOR[mdl.engine]) || '/pose/gign_score';
+    return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ligand_pdb:pdb, receptor_pdb:protein.raw, name:PG.mc._ts()+'_'+tag,
+                            smiles:(smiles||''), out_dir:(od?od.value.trim():''),
+                            model:(mdl?mdl.id:'')})})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(res){
+        if(res&&res.cmd) PG._miniLog('▶ '+tag+':  '+res.cmd,'#7dd3fc',true);
+        if(res&&res.log) PG._miniLog('📝 '+tag+' debug log → '+res.log,'#a78bfa',true);
+        if(!res||!res.ok){
+          if(res&&res.stdout) PG._miniLog('── '+tag+' output ──\n'+res.stdout,'#94a3b8',true);
+          throw new Error((res&&res.err)||'GIGN unavailable on server');
+        }
+        var pk = (res.pred_pk!=null ? res.pred_pk : null);
+        return {pk:pk, dg:(res.deltaG!=null ? res.deltaG : (pk!=null ? -pk*1.36 : null)), elapsed:res.elapsed};
+      });
+  };
+  PG.builderSAR = function(){
+    var f = function(v){ return (v==null||!isFinite(v)) ? '—' : (+v).toFixed(2); };
+    if(!L){ PG._bldrSay('build or pick a ligand first','#fbbf24'); return; }
+    if(!protein||!protein.raw){ PG._bldrSay('load a target protein (.pdb) first — ' + PG._bldrModelName() + ' scores a complex','#fbbf24'); return; }
+    if(!PG._bldr.base||!PG._bldr.basePose){ PG._bldrSay('nothing captured to compare against','#fbbf24'); return; }
+    if(PG._bldr.sarBusy||PG.mc._gignBusy){ PG._bldrSay('a score is already running','#fbbf24'); return; }
+    if(PG._bldrSnap() === PG._bldr.base){
+      PG._bldrSay('no edits yet — SAR compares the ligand before and after your changes','#fbbf24'); return;
+    }
+    var baseLig, before, after;
+    try{
+      baseLig = JSON.parse(PG._bldr.base);
+      before  = PG._bldrWorld(baseLig, PG._bldr.basePose);
+      after   = PG._bldrWorld(L, PG.init.cur);
+    }catch(e){ PG._bldrSay('could not rebuild the pre-edit ligand: '+(e&&e.message),'#fb7185'); return; }
+    if(!before||!after){ PG._bldrSay('could not pose one of the two ligands','#fb7185'); return; }
+
+    var btn = $('poseBldSar'), label = btn ? btn.innerHTML : null;
+    var done = function(){
+      PG._bldr.sarBusy = false; PG.mc._gignBusy = false;
+      if(btn && label != null) btn.innerHTML = label;
+    };
+    PG._bldr.sarBusy = true; PG.mc._gignBusy = true;
+    if(btn) btn.innerHTML = '<span>&#8987; 1/2…</span>';
+    PG._bldrSay(PG._bldrModelName() + ' 1 of 2 — scoring the ligand as the panel found it…','#c4b5fd');
+    PG._miniLog('⚛ SAR: '+baseLig.formula+' ('+baseLig.atoms.length+' atoms) → '
+      +L.formula+' ('+L.atoms.length+' atoms) · scoring both against '+(protein.id||'the loaded receptor'),'#c4b5fd');
+
+    PG._bldrGign(baseLig.atoms, before, baseLig.smiles||baseLig._smiles||'', 'before', baseLig.BONDS)
+      .then(function(b){
+        if(btn) btn.innerHTML = '<span>&#8987; 2/2…</span>';
+        PG._bldrSay(PG._bldrModelName() + ' 2 of 2 — scoring the edited ligand…','#c4b5fd');
+        return PG._bldrGign(L.atoms, after, L.smiles||L._smiles||'', 'after', L.BONDS)
+          .then(function(a){ return [b, a]; });
+      })
+      .then(function(r){
+        var b = r[0], a = r[1];
+        var ddg = (a.dg!=null && b.dg!=null) ? (a.dg - b.dg) : null;
+        var dpk = (a.pk!=null && b.pk!=null) ? (a.pk - b.pk) : null;
+        /* Reported in kcal/mol. ΔG is the binding free energy, so it runs the
+           OPPOSITE way to pK (ΔG = -1.36·pK): more negative is tighter binding,
+           and a NEGATIVE delta is the improvement. That sign flip is exactly the
+           kind of thing a bare number gets read backwards, so the direction is
+           spelled out in words next to it. */
+        var verdict = (ddg==null) ? '' : (ddg < -0.005 ? ' — predicted STRONGER'
+                                       : (ddg > 0.005 ? ' — predicted WEAKER' : ' — no predicted change'));
+        PG._bldrSay('SAR · ΔG ' + f(b.dg) + ' → ' + f(a.dg) + ' kcal/mol'
+          + (ddg!=null ? ('  Δ ' + (ddg>=0?'+':'') + ddg.toFixed(2)) : '') + verdict,
+          ddg==null ? '#9fb0c4' : (ddg<0 ? '#34d399' : (ddg>0 ? '#fb7185' : '#9fb0c4')));
+        PG._miniLog(
+          '⚛ SAR (' + PG._bldrModelName() + ') — ΔG in kcal/mol, lower = tighter\n'
+          + '  before   ' + String(baseLig.formula).padEnd(16) + ' ΔG ' + f(b.dg) + '   (pK ' + f(b.pk) + ')'
+          + (b.elapsed ? ('   ' + b.elapsed) : '') + '\n'
+          + '  after    ' + String(L.formula).padEnd(16) + ' ΔG ' + f(a.dg) + '   (pK ' + f(a.pk) + ')'
+          + (a.elapsed ? ('   ' + a.elapsed) : '') + '\n'
+          + '  delta    ' + ''.padEnd(16) + ' ΔG ' + (ddg!=null ? ((ddg>=0?'+':'')+ddg.toFixed(2)) : '—')
+          + '   (pK ' + (dpk!=null ? ((dpk>=0?'+':'')+dpk.toFixed(2)) : '—') + ')' + verdict,
+          ddg==null ? '#94a3b8' : (ddg<0 ? '#34d399' : '#fb7185'), true);
+        PG._bldr.lastSar = {before:b, after:a, ddg:ddg, formulaBefore:baseLig.formula};   // carried into the download's REMARKs
+        /* The GIGN card shows the CURRENT molecule, so leave it on the after
+           value — silently, since the mini-chat already carries the comparison. */
+        try{ PG.mc._gignSet(null, a.pk, a.dg); }catch(e){}
+        done();
+      })
+      .catch(function(e){
+        /* The panel status box is four lines tall; the server's failure text is a
+           paragraph. Keep the box to one legible line and put the whole thing —
+           plus the ▶ command and 📂 cwd the route already returned above — in the
+           mini-chat, which scrolls. */
+        var msg = (e && e.message) ? e.message : 'request failed';
+        PG._bldrSay('SAR failed — see the activity log for the server output', '#fb7185');
+        PG._miniLog('⚛ SAR failed: ' + msg, '#fb7185');
+        PG._miniLog('This is the SERVER-side scorer failing, not the SAR wiring — '
+          + 'the ⚛ Score (GIGN) button runs the identical script and will fail the same way. '
+          + 'Re-run the ▶ command logged above in the 📂 cwd logged above to see the real traceback.', '#7c6bae');
+        done();
+      });
+  };
+
+  /* ⬇ Download the edited ligand.
+
+     Writes the molecule EXACTLY as the panel is showing it: current elements,
+     current bonds (as CONECT, so orders survive), current formal charges, at the
+     pose it is drawn at. Straight to the browser rather than through
+     /pose/save_pdb, because "download" should not be able to fail on a server
+     path — mc.exportPosePdb already covers the save-on-the-server case.
+
+     The REMARK block is provenance, not decoration: an edited ligand that leaves
+     this panel as bare coordinates is indistinguishable from the one it came
+     from, and if a SAR run has happened the two numbers that justify keeping the
+     file are worth carrying with it. */
+  PG.builderDownload = function(){
+    if(!L){ PG._bldrSay('build or pick a ligand first','#fbbf24'); return; }
+    var world;
+    try{ world = PG._bldrWorld(L, PG.init.cur); }catch(e){ world = null; }
+    if(!world || !world.length){ PG._bldrSay('could not pose the ligand for export','#fb7185'); return; }
+    if(!world.every(function(p){ return p.every(function(v){ return isFinite(v); }); })){
+      PG._bldrSay('refusing to export: the pose contains non-finite coordinates','#fb7185'); return;
+    }
+    var edited = !!(PG._bldr.base && PG._bldrSnap() !== PG._bldr.base);
+    var baseF = null;
+    try{ if(PG._bldr.base) baseF = JSON.parse(PG._bldr.base).formula; }catch(e){}
+
+    var R = [];
+    R.push('REMARK   1 ligand exported from the Elion 3D Builder');
+    R.push('REMARK   1 formula   ' + L.formula + '   atoms ' + L.atoms.length + '   bonds ' + L.BONDS.length);
+    R.push('REMARK   1 state     ' + (edited ? ('edited in the builder' + (baseF ? ('  (was ' + baseF + ')') : ''))
+                                             : 'unedited — as loaded'));
+    if(L._label) R.push('REMARK   1 source    ' + String(L._label).slice(0, 60));
+    if(protein && protein.id) R.push('REMARK   1 receptor  ' + String(protein.id).slice(0, 60));
+    R.push('REMARK   1 torsions  ' + (L.N ? (L.N + ' rotatable') : 'rigid (rebuild from SMILES with the Build button)'));
+    var s = PG._bldr.lastSar;
+    if(s && s.after){
+      var f2 = function(v){ return (v==null||!isFinite(v)) ? '—' : (+v).toFixed(2); };
+      R.push('REMARK   1 GIGN      dG ' + f2(s.before && s.before.dg) + ' -> ' + f2(s.after.dg) + ' kcal/mol'
+             + (s.ddg!=null ? ('   delta ' + (s.ddg>=0?'+':'') + s.ddg.toFixed(2)) : ''));
+    }
+    var pdb = R.join('\n') + '\n' + PG.mc._ligandPdb(world, L.atoms, L.BONDS);
+
+    var stem = String(L._label || 'ligand').replace(/\.(pdb|ent|pdbqt|sdf|mol2)$/i,'')
+                                            .replace(/[^A-Za-z0-9_.-]+/g,'_').slice(0,40) || 'ligand';
+    var fn = stem + (edited ? '_edited_' : '_') + PG.mc._ts() + '.pdb';
+    PG.mc._downloadPdb(pdb, fn);
+    PG._bldrSay('⬇ downloaded ' + fn, '#6ee7b7');
+    PG._miniLog('⬇ ligand downloaded → ' + fn + ' · ' + L.formula + ' · ' + L.atoms.length + ' atoms'
+      + (edited ? '' : ' (unedited)'), '#34d399');
+  };
+
+  PG._bldrTodo=function(name){
+    PG._bldrSay(name+' is not wired to the pose model yet','#fbbf24');
+    PG._miniLog('⛭ '+name+' — panel button present, no edit behind it yet','#7c6bae');
+  };
+
+  /* ---- picking ------------------------------------------------------------- */
+  PG._bldrBind=function(){
+    var gd=$('poseBox3D');
+    if(!gd||typeof gd.on!=='function'||gd._pgBldrBound) return;
+    gd._pgBldrBound=true;                                    // once per element, like _camBind
+    /* TWO ROUTES INTO ONE PICK.
+       gl3d emits plotly_click with the point's customdata, but only when the
+       pointer has a LIVE hover at click time — park the cursor on an atom, let
+       the hover lapse, and click, and Plotly emits nothing at all (measured).
+       So plotly_click is the primary route and a plain DOM mouseup is the
+       fallback, resolving the atom from the last hover instead.
+       _bldrPickOnce keeps them from both firing for the same press: the flag is
+       cleared on mousedown, so exactly one pick lands however it arrives. */
+    gd.on('plotly_click',function(ev){
+      if(!PG._bldr.open||!L) return;
+      var pt=ev&&ev.points&&ev.points[0]; if(!pt) return;
+      var i=pt.customdata; if(i==null) return;               // only the ligand marker trace carries one
+      var e=ev.event||{}, dbl=(e.detail>=2);
+      PG._bldrPickOnce(+i, dbl||!!(e.shiftKey||e.ctrlKey||e.metaKey), dbl);
+    });
+    gd.on('plotly_hover',function(ev){
+      if(!PG._bldr.open||!L) return;
+      var pt=ev&&ev.points&&ev.points[0];
+      PG._bldrHover((pt&&pt.customdata!=null)?+pt.customdata:-1);
+    });
+    gd.on('plotly_unhover',function(){ if(PG._bldr.open) PG._bldrHover(-1); });
+    /* Pick + orbit guard, on plain DOM events.
+         mousedown  remember where, and stop the highlight repainting mid-orbit
+                    (touching the plot during a drag is pointless and invites
+                    exactly the re-entrancy this file just got bitten by)
+         mouseup    moved more than a few px => that was an orbit, not a pick.
+                    Otherwise select whatever plotly_hover last reported.
+       Listeners are stored on the element and removed before re-adding, so a
+       re-bind after Plotly.purge cannot stack a second set (G52). */
+    if(gd._pgBldrDown){
+      gd.removeEventListener('mousedown',gd._pgBldrDown);
+      gd.removeEventListener('mouseup',gd._pgBldrUp);
+      window.removeEventListener('mouseup',gd._pgBldrEnd);
+    }
+    var PICK_SLOP=4;                                          // px of travel still counted as a click
+    gd._pgBldrDown=function(ev){
+      PG._bldr.dragging=true; PG._bldr.downAt=[ev.clientX,ev.clientY];
+      PG._bldr.pickDone=false;                                // a new press may produce exactly one pick
+      PG._bldrHoverClear();                                   // a pending hover-clear must not blank the pick target
+    };
+    gd._pgBldrUp=function(ev){
+      var d=PG._bldr.downAt;
+      PG._bldr.dragging=false; PG._bldr.downAt=null;
+      if(!d||!PG._bldr.open||!L) return;
+      if(Math.abs(ev.clientX-d[0])>PICK_SLOP||Math.abs(ev.clientY-d[1])>PICK_SLOP) return;   // that was an orbit
+      var i=PG._bldr.hover;
+      if(i==null||i<0) return;                                // released over empty space
+      /* ev.detail is the native click count: 2 on the second press of a
+         double-click. Treated as "add", because double-click is what people
+         reach for to build a multi-atom selection in a 3D viewer — and because
+         WITHOUT this it was the worst possible gesture here: press 1 selected
+         the atom, press 2 toggled it straight back off, so two atoms could never
+         be selected that way and the panel looked broken. */
+      var dbl=(ev.detail>=2);
+      PG._bldrPickOnce(i, dbl||!!(ev.shiftKey||ev.ctrlKey||ev.metaKey), dbl);
+    };
+    gd._pgBldrEnd=function(){ PG._bldr.dragging=false; PG._bldr.downAt=null; };   // drag released off-canvas
+    gd.addEventListener('mousedown',gd._pgBldrDown);
+    gd.addEventListener('mouseup',gd._pgBldrUp);
+    window.addEventListener('mouseup',gd._pgBldrEnd);
+  };
+  /* One pick per mouse press, whichever of the two routes gets there first.
+     The flag is cleared on mousedown (see _bldrBind), so this is exact rather
+     than a time window — a deliberate second click on the same atom, which is
+     how you deselect it, still goes through. */
+  PG._bldrPickOnce=function(i,add,keep){
+    if(PG._bldr.pickDone) return;
+    PG._bldr.pickDone=true;
+    PG._builderPick(i,add,keep);
+  };
+  /* SINGLE CLICK ACCUMULATES. One click adds an atom, clicking the same atom
+     again removes it. No modifier, no double-click, no mode — which is what the
+     bond tools need, since "select exactly two atoms" is the common case here.
+
+     The earlier replace-on-click behaviour meant the only way to reach two atoms
+     was shift-click, and a gesture nobody is told about is a gesture nobody uses:
+     clicking a second atom silently dropped the first and the panel just kept
+     saying "select exactly two atoms to bond".
+
+     `keep` marks the SECOND press of a double-click. A double-click delivers two
+     full presses, so under accumulate semantics it would add the atom and then
+     immediately remove it again — net nothing. `keep` makes that second press
+     idempotent, so double-clicking behaves like clicking once instead of like
+     not clicking at all. `add` is accepted for callers but no longer changes
+     anything: every click adds. Start over with Other Edits › Clear selection. */
+  PG._builderPick=function(i,add,keep){
+    if(!L||!(i>=0&&i<L.atoms.length)) return;
+    var s=PG._bldr.sel, at=s.indexOf(i);
+    if(keep){ if(at<0) s.push(i); }               // 2nd press of a double-click: don't undo the 1st
+    else if(at>=0) s.splice(at,1);                // clicking a selected atom removes it
+    else s.push(i);                               // every other click adds
+    PG._bldrSync();                                          // DOM only — safe inside the event
+    /* DEFERRED, and a halo update rather than a redraw: this runs from
+       plotly_click, where a synchronous Plotly call re-enters Plotly's own pass
+       and kills the gl3d scene, and where a full react would reset the pick state
+       so the next click would miss. Both traps are covered by going through the
+       scheduler and touching only the selection trace. */
+    PG._bldrQ.sel = true; PG._bldrSchedule();
+  };
+  PG.builderSelectAll=function(){ if(!L)return; PG._bldr.sel=L.atoms.map(function(_,i){return i;}); PG._bldrSync(); PG._bldrQ.sel=true; PG._bldrSchedule(); };
+  PG.builderClearSel=function(){ PG._bldr.sel.length=0; PG._bldrSync(); PG._bldrQ.sel=true; PG._bldrSchedule(); };
+
+  /* ---- edits: non-structural (torsion tree survives) ----------------------- */
+  PG.builderSetElem=function(el){
+    PG._bldr.elem=el;
+    var s=PG._bldr.sel;
+    if(!L||!s.length){ PG._bldrSync(); PG._bldrSay('element set to '+el+' — now pick the atom(s) to change','#fbbf24'); return; }
+    PG._bldrPush();
+    s.forEach(function(i){ L.atoms[i]=el; });
+    PG._bldrApply(s.length+' atom'+(s.length===1?'':'s')+' → '+el);
+  };
+  PG.builderCharge=function(d){
+    var s=PG._bldr.sel;
+    if(!L||!s.length){ PG._bldrSay('pick the atom(s) to charge first','#fbbf24'); return; }
+    PG._bldrPush(); PG._bldrTrim();
+    s.forEach(function(i){ L.CHG[i]=Math.max(-4,Math.min(4,(L.CHG[i]||0)+d)); });
+    PG._bldrApply('formal charge '+(d>0?'+1':'−1')+' on '+s.length+' atom'+(s.length===1?'':'s'));
+  };
+  PG.builderClearCharge=function(){
+    if(!L) return; PG._bldrPush(); PG._bldrTrim();
+    L.CHG=L.atoms.map(function(){ return 0; });
+    PG._bldrApply('formal charges cleared');
+  };
+  PG.builderBondOrder=function(d){
+    var k=PG._bldrBondIdx();
+    if(k<0){ PG._bldrSay('select the two atoms of one bond first (click, then shift-click)','#fbbf24'); return; }
+    var b=L.BONDS[k], o=Math.max(1,Math.min(3,(b.order||1)+d));
+    if(o===(b.order||1)){ PG._bldrSay('bond is already '+['','single','double','triple'][o],'#fbbf24'); return; }
+    /* Only a bond the torsion tree calls ROTATABLE forces a rebuild: raising its
+       order would leave a double bond that the UI still lets you twist. */
+    var rot=(L.TORS||[]).some(function(t){ return (t.from===b.a&&t.to===b.b)||(t.from===b.b&&t.to===b.a); });
+    PG._bldrPush();
+    L.BONDS[k].order=o;
+    if(o>1&&rot) PG._bldrGoRigid();
+    PG._bldrApply('bond '+L.atoms[b.a]+(b.a+1)+'–'+L.atoms[b.b]+(b.b+1)+' → '+['','single','double','triple'][o]);
+  };
+
+  /* ---- edits: structural (torsion tree collapses) -------------------------- */
+  PG.builderDelete=function(){
+    var s=PG._bldr.sel;
+    if(!L||!s.length){ PG._bldrSay('pick the atom(s) to delete first','#fbbf24'); return; }
+    if(s.length>=L.atoms.length){ PG._bldrSay('refusing to delete every atom — the pose path needs at least one','#fb7185'); return; }
+    PG._bldrPush();
+    var n=s.length;
+    PG._bldrRemove(s.slice());
+    PG._bldr.sel.length=0;
+    PG._bldrGoRigid();
+    PG._bldrApply('deleted '+n+' atom'+(n===1?'':'s'));
+  };
+  PG._bldrRemove=function(idx){
+    PG._bldrTrim();
+    var kill={}; idx.forEach(function(i){ kill[i]=1; });
+    var map=new Array(L.atoms.length).fill(-1), keep=[];
+    for(var i=0;i<L.atoms.length;i++){ if(!kill[i]){ map[i]=keep.length; keep.push(i); } }
+    var nb=[];
+    L.BONDS.forEach(function(b){
+      var a=map[b.a], c=map[b.b]; if(a<0||c<0) return;       // touched a deleted atom → drop the bond
+      nb.push({a:a,b:c,order:b.order||1,type:b.type||'ring',ti:-1});
+    });
+    L.atoms=keep.map(function(i){ return L.atoms[i]; });
+    L.arom =keep.map(function(i){ return !!L.arom[i]; });
+    L.CHG  =keep.map(function(i){ return L.CHG[i]||0; });
+    L.REF  =keep.map(function(i){ return L.REF[i]; });
+    L.BONDS=nb;
+  };
+  PG.builderMakeBond=function(){
+    var s=PG._bldr.sel;
+    if(!L||s.length!==2){ PG._bldrSay('select exactly two atoms to bond','#fbbf24'); return; }
+    if(PG._bldrBondIdx()>=0){ PG._bldrSay('those two are already bonded','#fbbf24'); return; }
+    PG._bldrPush();
+    L.BONDS.push({a:s[0],b:s[1],order:1,type:'ring',ti:-1});
+    PG._bldrGoRigid();
+    PG._bldrApply('bonded '+L.atoms[s[0]]+(s[0]+1)+'–'+L.atoms[s[1]]+(s[1]+1));
+  };
+  PG.builderBreakBond=function(){
+    var k=PG._bldrBondIdx();
+    if(k<0){ PG._bldrSay('select the two atoms of one bond first','#fbbf24'); return; }
+    PG._bldrPush();
+    var b=L.BONDS[k], nm=L.atoms[b.a]+(b.a+1)+'–'+L.atoms[b.b]+(b.b+1);
+    L.BONDS.splice(k,1);
+    PG._bldrGoRigid();
+    PG._bldrApply('broke '+nm);
+  };
+  PG.builderRemoveH=function(){
+    if(!L) return;
+    var h=[]; L.atoms.forEach(function(e,i){ if(e==='H') h.push(i); });
+    if(!h.length){ PG._bldrSay('no hydrogens to remove','#fbbf24'); return; }
+    PG._bldrPush();
+    PG._bldrRemove(h);
+    PG._bldr.sel.length=0;
+    PG._bldrGoRigid();
+    PG._bldrApply('removed '+h.length+' hydrogen'+(h.length===1?'':'s'));
+  };
+  /* Fill every open valence with an H.
+
+     Directions come from a Thomson-style relaxation on the unit sphere: the
+     existing neighbours are fixed point charges, the new hydrogens are free, and
+     60 short repulsion steps push them into the gaps. That gets tetrahedral,
+     trigonal and linear cases right without a VSEPR table and without caring how
+     many neighbours the atom already has. It is a DRAWING geometry, not a
+     minimised one — good enough to see, and honestly labelled as such. */
+  PG.builderAddH=function(){
+    if(!L) return;
+    PG._bldrTrim();
+    var n=L.atoms.length, adj=[], val=new Array(n).fill(0), i;
+    for(i=0;i<n;i++) adj.push([]);
+    L.BONDS.forEach(function(b){
+      adj[b.a].push(b.b); adj[b.b].push(b.a);
+      val[b.a]+=(b.order||1); val[b.b]+=(b.order||1);
+    });
+    var plan=[];
+    for(i=0;i<n;i++){
+      var el=L.atoms[i]; if(el==='H') continue;
+      var v=_BLD_VAL[el]; if(v==null) continue;
+      var q=L.CHG[i]||0;
+      if(el==='N'&&q>0) v=4; else if(el==='N'&&q<0) v=2;
+      else if(el==='O'&&q<0) v=1; else if(el==='O'&&q>0) v=3;
+      if(el==='S'&&adj[i].length>=3) v=6;
+      if(el==='P'&&adj[i].length>=4) v=5;
+      var need=v-val[i];
+      if(need>0) plan.push([i,need]);
+    }
+    if(!plan.length){ PG._bldrSay('every valence is already filled','#fbbf24'); return; }
+    PG._bldrPush();
+    var added=0;
+    plan.forEach(function(pl){
+      var i=pl[0], k=pl[1], p=L.REF[i], d0=_BLD_XH[L.atoms[i]]||1.09;
+      PG._bldrHDirs(i,adj,k).forEach(function(u){
+        L.REF.push([p[0]+u[0]*d0, p[1]+u[1]*d0, p[2]+u[2]*d0]);
+        L.atoms.push('H'); L.arom.push(false); L.CHG.push(0);
+        L.BONDS.push({a:i,b:L.atoms.length-1,order:1,type:'ring',ti:-1});
+        added++;
+      });
+    });
+    PG._bldrGoRigid();
+    PG._bldrApply('added '+added+' hydrogen'+(added===1?'':'s')+' (drawing geometry, not minimised)');
+  };
+  PG._bldrHDirs=function(i,adj,k){
+    var p=L.REF[i], fixed=[];
+    adj[i].forEach(function(j){
+      var q=L.REF[j], v=[q[0]-p[0],q[1]-p[1],q[2]-p[2]], m=Math.hypot(v[0],v[1],v[2]);
+      if(m>1e-6) fixed.push([v[0]/m,v[1]/m,v[2]/m]);
+    });
+    var s=[0,0,0];
+    fixed.forEach(function(v){ s[0]+=v[0]; s[1]+=v[1]; s[2]+=v[2]; });
+    var sm=Math.hypot(s[0],s[1],s[2]);
+    var seed = sm>1e-6 ? [-s[0]/sm,-s[1]/sm,-s[2]/sm] : [0,0,1];
+    var aux = Math.abs(seed[2])<0.9 ? [0,0,1] : [1,0,0];
+    var e1=_bxc(seed,aux), m1=Math.hypot(e1[0],e1[1],e1[2])||1; e1=[e1[0]/m1,e1[1]/m1,e1[2]/m1];
+    var e2=_bxc(seed,e1);
+    var out=[], t, ang=(k===1?0:0.62), ph;
+    for(t=0;t<k;t++){
+      ph=2*Math.PI*t/k;
+      var u=[Math.cos(ang)*seed[0]+Math.sin(ang)*(Math.cos(ph)*e1[0]+Math.sin(ph)*e2[0]),
+             Math.cos(ang)*seed[1]+Math.sin(ang)*(Math.cos(ph)*e1[1]+Math.sin(ph)*e2[1]),
+             Math.cos(ang)*seed[2]+Math.sin(ang)*(Math.cos(ph)*e1[2]+Math.sin(ph)*e2[2])];
+      var mu=Math.hypot(u[0],u[1],u[2])||1;
+      out.push([u[0]/mu,u[1]/mu,u[2]/mu]);
+    }
+    for(var it=0;it<60;it++){
+      for(var a=0;a<out.length;a++){
+        var f=[0,0,0], push=function(v){
+          var d=[out[a][0]-v[0], out[a][1]-v[1], out[a][2]-v[2]];
+          var dd=d[0]*d[0]+d[1]*d[1]+d[2]*d[2]+0.05;
+          f[0]+=d[0]/dd; f[1]+=d[1]/dd; f[2]+=d[2]/dd;
+        };
+        fixed.forEach(push);
+        for(var b=0;b<out.length;b++) if(b!==a) push(out[b]);
+        var w=[out[a][0]+0.08*f[0], out[a][1]+0.08*f[1], out[a][2]+0.08*f[2]];
+        var mw=Math.hypot(w[0],w[1],w[2])||1;
+        out[a]=[w[0]/mw,w[1]/mw,w[2]/mw];
+      }
+    }
+    return out;
   };
 
   window.PoseGen=PG;
